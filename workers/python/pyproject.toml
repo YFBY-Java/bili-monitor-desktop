@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bmd-workers"
+version = "0.1.0"
+description = "Local Python workers for BiliMonitor Desktop crawling, data and agents"
+requires-python = ">=3.11,<3.14"
+
+[project.scripts]
+bmd-python-worker = "bmd_workers.runtime:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+bmd_workers = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["bmd_workers"]
+mypy_path = "src"

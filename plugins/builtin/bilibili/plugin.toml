@@ -1,0 +1,8 @@
+id = "builtin.bilibili"
+name = "Bilibili Connector"
+version = "0.1.0"
+api_version = "1"
+type = "platform.connector"
+entrypoint = "bmd_bilibili:create_plugin"
+capabilities = ["account.profile", "live.status"]
+config_schema = "config.schema.json"

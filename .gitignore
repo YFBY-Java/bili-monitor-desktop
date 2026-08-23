@@ -1,0 +1,46 @@
+# Local configuration and secrets
+.env.local
+.env.*.local
+config/*.local.*
+secrets/
+
+# JavaScript
+node_modules/
+dist/
+out/
+release/
+*.tsbuildinfo
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Local runtime data
+.tools/
+.dev-data/
+.local-data/
+.tmp/
+.cache/
+data/
+logs/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Browser credentials and profiles
+playwright/.auth/
+browser-profiles/
+storage-state*.json
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

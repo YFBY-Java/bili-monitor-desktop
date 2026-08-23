@@ -1,0 +1,29 @@
+# Runtime contracts and observability
+pydantic
+jsonschema
+structlog
+tenacity
+opentelemetry-api
+opentelemetry-sdk
+
+# AI and Agent execution
+pydantic-ai
+pydantic-evals
+langgraph
+langgraph-checkpoint-sqlite
+mcp
+httpx
+
+# HTTP crawling and local analytics
+scrapy
+duckdb
+pyarrow
+
+# Development and verification
+black
+isort
+mypy
+pip-tools
+pytest
+pytest-asyncio
+hypothesis

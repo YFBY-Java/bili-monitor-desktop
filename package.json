@@ -1,0 +1,24 @@
+{
+  "name": "bili-monitor-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first desktop crawler and agent workbench inspired by BiliMonitor.",
+  "packageManager": "pnpm@11.22.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "bootstrap": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1",
+    "check": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1",
+    "dev": "pnpm --filter @bmd/desktop dev",
+    "build": "pnpm --filter @bmd/desktop build",
+    "package:win": "pnpm --filter @bmd/desktop package:win",
+    "typecheck": "pnpm --recursive --if-present typecheck",
+    "test": "pnpm --recursive --if-present test"
+  },
+  "engines": {
+    "node": ">=24.16.0 <25",
+    "pnpm": ">=11.22.0 <12"
+  }
+}
