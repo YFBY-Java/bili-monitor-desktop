@@ -19,6 +19,9 @@ importers:
       '@bmd/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@tanstack/react-query':
+        specifier: 5.102.0
+        version: 5.102.0(react@19.2.8)
       lucide-react:
         specifier: 1.33.0
         version: 1.33.0(react@19.2.8)
@@ -1001,6 +1004,14 @@ packages:
   '@szmarczak/http-timer@4.0.6':
     resolution: {integrity: sha512-4BAffykYOgO+5nzBWYwE3W90sBgLJoUPRWWcL8wlyiM8IB8ipJz3UMJ9KXQd1RKQXpKp8Tutn80HZtWsu2u76w==}
     engines: {node: '>=10'}
+
+  '@tanstack/query-core@5.102.0':
+    resolution: {integrity: sha512-tvBzr11Q7StuMCEsIJdqX8TAWt6WZIzfw/yrSAjObZDerwTTPeCxeLXN2R8ZSn4ZxFpQV819Xn8QmoO+vtnDvw==}
+
+  '@tanstack/react-query@5.102.0':
+    resolution: {integrity: sha512-0GyVyEcGt9M7jHPCua16hNVtstUXE2R4HsnNubFYcDs7DJaLzh1dSiXsADDU/cNn/SqrLfa0vRKyjUmbx4rZLA==}
+    peerDependencies:
+      react: ^18 || ^19
 
   '@tokenizer/inflate@0.4.1':
     resolution: {integrity: sha512-2mAv+8pkG6GIZiF1kNg1jAjh27IDxEPKwdGul3snfztFerfPGI1LjDezZp3i7BElXompqEtPmoPx6c2wgtWsOA==}
@@ -3076,18 +3087,6 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
-  ws@8.18.3:
-    resolution: {integrity: sha512-PEIGCY5tSlUt50cqyMXfCzX+oOPqN0vuGqWzbcJ2xvnkzkq46oOpz7dQaTDBdfICb4N14+GARUDw2XV2N4tvzg==}
-    engines: {node: '>=10.0.0'}
-    peerDependencies:
-      bufferutil: ^4.0.1
-      utf-8-validate: '>=5.0.2'
-    peerDependenciesMeta:
-      bufferutil:
-        optional: true
-      utf-8-validate:
-        optional: true
-
   ws@8.21.3:
     resolution: {integrity: sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==}
     engines: {node: '>=10.0.0'}
@@ -3990,6 +3989,13 @@ snapshots:
   '@szmarczak/http-timer@4.0.6':
     dependencies:
       defer-to-connect: 2.0.1
+
+  '@tanstack/query-core@5.102.0': {}
+
+  '@tanstack/react-query@5.102.0(react@19.2.8)':
+    dependencies:
+      '@tanstack/query-core': 5.102.0
+      react: 19.2.8
 
   '@tokenizer/inflate@0.4.1(supports-color@7.2.0)':
     dependencies:
@@ -5325,7 +5331,7 @@ snapshots:
       whatwg-encoding: 3.1.1
       whatwg-mimetype: 4.0.0
       whatwg-url: 14.2.0
-      ws: 8.18.3
+      ws: 8.21.3
       xml-name-validator: 5.0.0
     transitivePeerDependencies:
       - bufferutil
@@ -6202,8 +6208,6 @@ snapshots:
       strip-ansi: 6.0.1
 
   wrappy@1.0.2: {}
-
-  ws@8.18.3: {}
 
   ws@8.21.3: {}
 

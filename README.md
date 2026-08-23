@@ -2,7 +2,7 @@
 
 BiliMonitor Desktop 是从 BiliMonitor 领域经验出发重新设计的本地优先桌面应用，面向社交平台采集、数据整理、AI 分析和 Agent 工作流。它不依赖远程业务后端，也不要求本机维护数据库服务、消息队列、容器或 WSL。
 
-当前是 Slice 0 框架：已保留现有樱花雾白工作台 UI，并搭好真实 Local Core、SQLite WAL、任务状态机、Python/Node Worker 与 D 盘工具环境；业务指标仍以演示 ViewModel 为主，尚不包含生产可用的 Bilibili 登录和采集。
+当前已从 Slice 0 框架进入 Slice 1：樱花雾白工作台中的“平台与账号”和“监控对象”已接通真实 Local Core、SQLite v2 与类型化 IPC，可在本地创建、查询账号和对象，并原子写入绑定、粉丝监控策略与 Outbox。其他业务页面仍以演示 ViewModel 为主，尚不包含生产可用的 Bilibili 登录和在线采集。
 
 ## 当前技术栈
 
@@ -64,9 +64,9 @@ build.cmd
 
 ## 当前边界
 
-Slice 0 已实现：D 盘环境隔离、Local Core utility process、真实 Bootstrap、SQLite schema v1、Task/Approval/Outbox 表、跨语言协议、Python/Browser/Realtime Worker 骨架及质量门禁。
+已实现：D 盘环境隔离、Local Core utility process、真实 Bootstrap、SQLite schema v2、Task/Approval/Outbox 表、跨语言协议、Python/Browser/Realtime Worker 骨架，以及平台账号/监控对象的真实 UI Projection。Renderer 仅通过 5 个窄化业务方法访问 Core；Cookie、Token 和二维码登录材料不会进入业务 DTO 或控制数据库。
 
-下一阶段：Object CAS、Windows Secret、平台账号、监控对象、Bilibili HTTP Connector、粉丝快照和真实 UI Projection。
+当前 Slice 1 增量的实现与验收范围见 [账号与监控对象纵切](docs/implementation/slice-1-account-subject.md)。下一增量是 Windows Secret Vault、B站扫码、Bilibili HTTP Connector、Object CAS、粉丝快照和趋势投影。
 
 ## 文档
 

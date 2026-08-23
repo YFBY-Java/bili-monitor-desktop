@@ -33,5 +33,5 @@ export default function App(): JSX.Element {
     }
   }, [])
 
-  return <DesktopWorkspace initialPageId={initialPageId} runtime={runtime} />
+  return <DesktopWorkspace initialPageId={initialPageId} runtime={runtime} bridge={window.bmd} />
 }

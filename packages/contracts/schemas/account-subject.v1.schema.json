@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bilimonitor.local/schemas/account-subject.v1.schema.json",
+  "title": "BiliMonitor account and subject boundary contracts v1",
+  "$defs": {
+    "PlatformCode": {
+      "enum": ["bilibili", "douyin"]
+    },
+    "PlatformAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "platform", "externalId", "displayName", "authState", "createdAt", "updatedAt", "version"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "platform": { "$ref": "#/$defs/PlatformCode" },
+        "externalId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "profileUrl": { "type": "string", "format": "uri" },
+        "avatarUrl": { "type": "string", "format": "uri" },
+        "authState": { "enum": ["not_connected", "active", "expired", "revoked"] },
+        "lastValidatedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "version": { "type": "integer", "minimum": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "platform": { "const": "bilibili" } }, "required": ["platform"] },
+          "then": { "properties": { "externalId": { "pattern": "^[1-9][0-9]*$" } } }
+        }
+      ]
+    },
+    "CreatePlatformAccountInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "externalId", "displayName"],
+      "properties": {
+        "platform": { "$ref": "#/$defs/PlatformCode" },
+        "externalId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "profileUrl": { "type": "string", "format": "uri" },
+        "avatarUrl": { "type": "string", "format": "uri" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "platform": { "const": "bilibili" } }, "required": ["platform"] },
+          "then": { "properties": { "externalId": { "pattern": "^[1-9][0-9]*$" } } }
+        }
+      ]
+    },
+    "SubjectMonitorPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accountId", "capability", "state", "intervalSeconds"],
+      "properties": {
+        "accountId": { "type": "string", "format": "uuid" },
+        "capability": { "const": "follower.snapshot" },
+        "state": { "enum": ["active", "paused"] },
+        "intervalSeconds": { "type": "integer", "minimum": 300, "maximum": 604800 }
+      }
+    },
+    "SubjectSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "status", "tags", "accounts", "monitorPolicies", "createdAt", "updatedAt", "version"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "status": { "enum": ["active", "paused"] },
+        "tags": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 48 }
+        },
+        "accounts": { "type": "array", "items": { "$ref": "#/$defs/PlatformAccount" } },
+        "monitorPolicies": { "type": "array", "items": { "$ref": "#/$defs/SubjectMonitorPolicy" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "CreateSubjectInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "tags": {
+          "type": "array",
+          "maxItems": 32,
+          "default": [],
+          "items": { "type": "string", "minLength": 1, "maxLength": 48 }
+        },
+        "accountId": { "type": "string", "format": "uuid" },
+        "followerIntervalSeconds": { "type": "integer", "minimum": 300, "maximum": 604800 }
+      },
+      "dependentRequired": {
+        "followerIntervalSeconds": ["accountId"]
+      }
+    },
+    "BindSubjectAccountInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subjectId", "accountId"],
+      "properties": {
+        "subjectId": { "type": "string", "format": "uuid" },
+        "accountId": { "type": "string", "format": "uuid" },
+        "followerIntervalSeconds": { "type": "integer", "minimum": 300, "maximum": 604800, "default": 3600 }
+      }
+    }
+  }
+}

@@ -46,8 +46,11 @@ import {
   X,
   type LucideIcon
 } from "lucide-react"
+import type { DesktopBridge } from "@bmd/contracts"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useEffect, useMemo, useState, type JSX } from "react"
 
+import { ConnectedAccountSubjectWorkspace } from "./AccountSubjectWorkspace"
 import { resolvePageId, searchWorkspace } from "./navigation-state"
 import {
   findProductPage,
@@ -104,6 +107,7 @@ const activityFeed = [
 export interface DesktopWorkspaceProps {
   initialPageId: PageId
   runtime?: RuntimeViewState
+  bridge?: DesktopBridge
 }
 
 export interface RuntimeViewState {
@@ -269,7 +273,44 @@ function SignalTape(): JSX.Element {
   )
 }
 
-function WorkspaceHeader({ page }: { page: ProductPage }): JSX.Element {
+function BusinessSignalTape({ page }: { page: ProductPage }): JSX.Element {
+  const businessEvents = [
+    { state: "QUERY", source: "CORE", message: "等待本地查询结果时保留当前投影", tone: "cyan" as Tone },
+    { state: "SCHEMA", source: "SQLITE", message: `v2 · ${page.id === "platform-accounts" ? "platform_account" : "subject / binding / policy"}`, tone: "mint" as Tone },
+    { state: "ATOMIC", source: "OUTBOX", message: "业务状态与事件同事务提交", tone: "violet" as Tone }
+  ]
+
+  return (
+    <div className="signal-tape" aria-label="本地投影状态带">
+      <div className="signal-label">
+        <Database size={14} />
+        <strong>LOCAL PROJECTION</strong>
+        <span>V2</span>
+      </div>
+      <div className="signal-track">
+        {businessEvents.map((event) => (
+          <div className="signal-event" key={event.state}>
+            <ToneDot tone={event.tone} />
+            <time>{event.state}</time>
+            <strong>{event.source}</strong>
+            <span>{event.message}</span>
+          </div>
+        ))}
+      </div>
+      <div className="signal-pause" aria-label="本地数据隔离">
+        <ShieldCheck size={13} />
+      </div>
+    </div>
+  )
+}
+
+function WorkspaceHeader({
+  page,
+  onPrimaryAction
+}: {
+  page: ProductPage
+  onPrimaryAction?: () => void
+}): JSX.Element {
   return (
     <section className="workspace-heading">
       <div className="heading-copy">
@@ -283,7 +324,7 @@ function WorkspaceHeader({ page }: { page: ProductPage }): JSX.Element {
             {page.secondaryAction}
           </button>
         )}
-        <button className="button button-primary" type="button">
+        <button className="button button-primary" type="button" onClick={onPrimaryAction}>
           <Plus size={16} /> {page.primaryAction}
         </button>
       </div>
@@ -591,6 +632,63 @@ function ActivityRail({ page }: { page: ProductPage }): JSX.Element {
   )
 }
 
+function AccountSubjectActivityRail({ page }: { page: ProductPage }): JSX.Element {
+  const projection = page.id === "platform-accounts" ? "platform_account" : "subject / monitor_policy"
+
+  return (
+    <aside className="activity-rail">
+      <div className="rail-header">
+        <div><p>LOCAL BUSINESS TRACE</p><h2>本地业务轨道</h2></div>
+        <span className="health-pill"><ToneDot tone="mint" />已连接</span>
+      </div>
+
+      <div className="rail-context">
+        <span>正在查看</span>
+        <strong>{page.label}</strong>
+        <p>账号与对象投影</p>
+      </div>
+
+      <div className="activity-feed">
+        {[
+          { time: "实时", title: "SQLite v2 投影已读取", detail: projection, tone: "mint" as Tone },
+          { time: "本地", title: "窄化 IPC 契约已连接", detail: "5 个类型化业务方法", tone: "cyan" as Tone },
+          { time: "原子", title: "Outbox 事件已启用", detail: "创建与绑定同事务提交", tone: "violet" as Tone }
+        ].map((event) => (
+          <article key={event.title}>
+            <div className="activity-marker"><ToneDot tone={event.tone} /></div>
+            <div className="activity-content">
+              <time>{event.time}</time>
+              <strong>{event.title}</strong>
+              <p>{event.detail}</p>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      <div className="rail-section">
+        <div className="rail-section-title"><span>本地数据路径</span><strong>3 / 3</strong></div>
+        {[
+          ["SQLite v2", "healthy", "mint"],
+          ["Typed IPC", "active", "cyan"],
+          ["敏感凭据隔离", "ready", "violet"]
+        ].map(([service, state, tone]) => (
+          <div className="service-row" key={service}>
+            <ToneDot tone={tone as Tone} />
+            <span>{service}</span>
+            <small>{state}</small>
+          </div>
+        ))}
+      </div>
+
+      <button className="rail-inspect" type="button">
+        <Command size={15} />
+        <span><strong>本地投影可追溯</strong><small>业务状态、事件与错误码</small></span>
+        <Check size={14} />
+      </button>
+    </aside>
+  )
+}
+
 function CommandPalette({ onClose, onNavigate }: { onClose: () => void; onNavigate: (pageId: PageId) => void }): JSX.Element {
   const [query, setQuery] = useState("")
   const results = useMemo(() => searchWorkspace(query), [query])
@@ -640,14 +738,20 @@ function CommandPalette({ onClose, onNavigate }: { onClose: () => void; onNaviga
 
 export function DesktopWorkspace({
   initialPageId,
-  runtime = { phase: "starting" }
+  runtime = { phase: "starting" },
+  bridge
 }: DesktopWorkspaceProps): JSX.Element {
+  const [queryClient] = useState(() => new QueryClient({
+    defaultOptions: { queries: { staleTime: 15_000, retry: 1 } }
+  }))
   const [activePageId, setActivePageId] = useState<PageId>(initialPageId)
   const [collapsed, setCollapsed] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
   const [theme, setTheme] = useState<ThemeMode>("light")
   const page = findProductPage(activePageId) ?? findProductPage("command-center")
   const [activeTabs, setActiveTabs] = useState<Partial<Record<PageId, string>>>({})
+  const [creationPageId, setCreationPageId] = useState<"platform-accounts" | "subjects" | undefined>()
+  const businessBridge = bridge ?? (typeof window !== "undefined" ? window.bmd : undefined)
 
   useEffect(() => {
     const savedTheme = window.localStorage.getItem("bmd-theme")
@@ -675,6 +779,7 @@ export function DesktopWorkspace({
   const activeTab = activeTabs[page.id] ?? page.tabs[0] ?? "概览"
   const navigate = (pageId: PageId): void => {
     setActivePageId(pageId)
+    setCreationPageId(undefined)
     if (typeof window !== "undefined") window.location.hash = pageId
   }
   const toggleTheme = (): void => {
@@ -685,7 +790,10 @@ export function DesktopWorkspace({
     })
   }
 
+  const businessPageId = page.id === "platform-accounts" || page.id === "subjects" ? page.id : undefined
+
   return (
+    <QueryClientProvider client={queryClient}>
     <div className={`desktop-shell theme-${theme}`} data-theme={theme}>
       <Sidebar
         activePageId={page.id}
@@ -696,27 +804,52 @@ export function DesktopWorkspace({
       />
       <div className="desktop-stage">
         <TopBar onOpenCommand={() => setCommandOpen(true)} onToggleTheme={toggleTheme} theme={theme} />
-        <SignalTape />
+        {businessPageId && businessBridge ? <BusinessSignalTape page={page} /> : <SignalTape />}
         <div className="workspace-layout">
           <main className="workspace-main">
-            <WorkspaceHeader page={page} />
+            <WorkspaceHeader
+              page={page}
+              onPrimaryAction={businessPageId ? () => setCreationPageId(businessPageId) : undefined}
+            />
             <TabRail
               page={page}
               activeTab={activeTab}
               onChange={(tab) => setActiveTabs((tabs) => ({ ...tabs, [page.id]: tab }))}
             />
-            <MetricStrip page={page} />
-            {page.id === "command-center" ? <CommandCenterContent page={page} /> : <DomainContent page={page} />}
-            <footer className="workspace-footer">
-              <span><ToneDot tone="mint" />本地数据平面已同步</span>
-              <span>最后界面刷新 20:36:18</span>
-              <span>UI DRAFT / 0.1</span>
-            </footer>
+            {businessPageId && businessBridge ? (
+              <ConnectedAccountSubjectWorkspace
+                bridge={businessBridge}
+                pageId={businessPageId}
+                creationOpen={creationPageId === businessPageId}
+                onCloseCreation={() => setCreationPageId(undefined)}
+              />
+            ) : (
+              <>
+                <MetricStrip page={page} />
+                {page.id === "command-center" ? <CommandCenterContent page={page} /> : <DomainContent page={page} />}
+              </>
+            )}
+            {businessPageId && businessBridge ? (
+              <footer className="workspace-footer">
+                <span><ToneDot tone="mint" />本地控制面 · SQLite v2</span>
+                <span>查询状态由 React Query 驱动</span>
+                <span>SLICE 1 / 0.2</span>
+              </footer>
+            ) : (
+              <footer className="workspace-footer">
+                <span><ToneDot tone="mint" />本地数据平面已同步</span>
+                <span>最后界面刷新 20:36:18</span>
+                <span>UI DRAFT / 0.1</span>
+              </footer>
+            )}
           </main>
-          <ActivityRail page={page} />
+          {businessPageId && businessBridge
+            ? <AccountSubjectActivityRail page={page} />
+            : <ActivityRail page={page} />}
         </div>
       </div>
       {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} onNavigate={navigate} />}
     </div>
+    </QueryClientProvider>
   )
 }

@@ -1,9 +1,26 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
+import type { DesktopBridge } from "@bmd/contracts"
 
 import { DesktopWorkspace } from "./DesktopWorkspace"
 
 describe("DesktopWorkspace", () => {
+  const bridge: DesktopBridge = {
+    core: {
+      bootstrap: async () => { throw new Error("not used during server render") },
+      restart: async () => { throw new Error("not used during server render") }
+    },
+    platformAccounts: {
+      list: async () => ({ items: [], total: 0, snapshotAt: "2026-08-23T08:00:00.000Z" }),
+      create: async () => { throw new Error("not used during server render") }
+    },
+    subjects: {
+      list: async () => ({ items: [], total: 0, snapshotAt: "2026-08-23T08:00:00.000Z" }),
+      create: async () => { throw new Error("not used during server render") },
+      bindAccount: async () => { throw new Error("not used during server render") }
+    }
+  }
+
   it("renders the pale light theme and exposes a dark-theme switch", () => {
     const html = renderToStaticMarkup(<DesktopWorkspace initialPageId="command-center" />)
 
@@ -58,5 +75,22 @@ describe("DesktopWorkspace", () => {
 
     expect(html).toContain("Core 0.1.0 · SQLite v1")
     expect(html).not.toContain("18 / 18 服务在线")
+  })
+
+  it("uses the real account and subject projection for Slice 1 pages", () => {
+    const html = renderToStaticMarkup(
+      <DesktopWorkspace initialPageId="subjects" bridge={bridge} />
+    )
+
+    expect(html).toContain("正在读取本地监控对象")
+    expect(html).toContain("SQLite v2")
+    expect(html).not.toContain("18 个健康")
+    expect(html).toContain("账号与对象投影")
+    expect(html).not.toContain("弹幕事件写入")
+    expect(html).toContain("LOCAL PROJECTION")
+    expect(html).toContain("等待本地查询结果")
+    expect(html).not.toContain("room 21987615")
+    expect(html).toContain("SLICE 1 / 0.2")
+    expect(html).not.toContain("最后界面刷新 20:36:18")
   })
 })

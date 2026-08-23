@@ -9,3 +9,5 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - '@types/react@19.2.18'
   - '@types/react-dom@19.2.4'
+  - '@tanstack/query-core@5.102.0'
+  - '@tanstack/react-query@5.102.0'

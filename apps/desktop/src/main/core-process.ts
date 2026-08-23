@@ -6,6 +6,8 @@ import {
 } from "@bmd/contracts"
 import { LocalCoreRuntime } from "@bmd/core-runtime"
 
+import { dispatchBusinessRequest } from "./core-request-router"
+
 const parentPort = process.parentPort
 if (!parentPort) throw new Error("Local Core must run as an Electron utility process.")
 
@@ -29,6 +31,15 @@ function response<T>(request: RuntimeEnvelope, type: string, payload: T): Runtim
   })
 }
 
+function applicationErrorDetails(error: unknown): { code: string; retryable: boolean } | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined
+  if (typeof error.code !== "string") return undefined
+  const retryable = "retryable" in error && typeof error.retryable === "boolean"
+    ? error.retryable
+    : false
+  return { code: error.code, retryable }
+}
+
 async function handleMessage(message: unknown): Promise<void> {
   const parsed = RuntimeEnvelopeSchema.safeParse(message)
   if (!parsed.success) return
@@ -45,12 +56,14 @@ async function handleMessage(message: unknown): Promise<void> {
       setImmediate(() => process.exit(0))
       return
     }
-    throw new Error(`Unsupported local Core message type: ${request.type}`)
+    const result = dispatchBusinessRequest(runtime, request)
+    parentPort.postMessage(response(request, result.responseType, result.payload))
   } catch (error) {
+    const details = applicationErrorDetails(error)
     const payload: RuntimeError = {
-      code: "CORE_REQUEST_FAILED",
+      code: details?.code ?? "CORE_REQUEST_FAILED",
       message: error instanceof Error ? error.message : String(error),
-      retryable: false
+      retryable: details?.retryable ?? false
     }
     parentPort.postMessage(response(request, "core.error", payload))
   }

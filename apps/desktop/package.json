@@ -16,6 +16,7 @@
     "@bmd/contracts": "workspace:*",
     "@bmd/core-runtime": "workspace:*",
     "@bmd/storage": "workspace:*",
+    "@tanstack/react-query": "5.102.0",
     "lucide-react": "1.33.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"

@@ -66,6 +66,12 @@ async function ensureCoreStarted() {
   return coreStart
 }
 
+async function getReadyCore(): Promise<LocalCoreController> {
+  await ensureCoreStarted()
+  if (!core) throw new Error("Local Core controller is unavailable.")
+  return core
+}
+
 if (ownsPrimaryInstance) {
   app.on("second-instance", () => {
     const window = BrowserWindow.getAllWindows()[0]
@@ -82,6 +88,21 @@ if (ownsPrimaryInstance) {
       coreStart = undefined
       return ensureCoreStarted()
     })
+    ipcMain.handle("platform-accounts:list", async (_event, input: unknown) =>
+      (await getReadyCore()).listPlatformAccounts(input)
+    )
+    ipcMain.handle("platform-accounts:create", async (_event, input: unknown) =>
+      (await getReadyCore()).createPlatformAccount(input)
+    )
+    ipcMain.handle("subjects:list", async (_event, input: unknown) =>
+      (await getReadyCore()).listSubjects(input)
+    )
+    ipcMain.handle("subjects:create", async (_event, input: unknown) =>
+      (await getReadyCore()).createSubject(input)
+    )
+    ipcMain.handle("subjects:bind-account", async (_event, input: unknown) =>
+      (await getReadyCore()).bindSubjectAccount(input)
+    )
 
     createWindow()
     void ensureCoreStarted()

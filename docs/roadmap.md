@@ -2,6 +2,8 @@
 
 > 当前路线以 [当前运行时蓝图](architecture/typescript-python-local-runtime.md)、[本地原生业务与技术实现规格](architecture/local-native-business-implementation.md) 和 [ADR-0006](adr/0006-typescript-python-local-runtime.md) 为准。
 
+当前进度（2026-08-23）：阶段 0 的本地运行骨架已可运行；阶段 1 已完成首个“账号、Subject、绑定与监控策略”纵切。Windows Secret、扫码认证、在线 Connector、CAS 和粉丝快照仍待实现，不能视为阶段 1 已验收。
+
 ## 目录
 
 - [阶段 0：桌面 Core](#阶段-0桌面-core)
@@ -26,6 +28,13 @@
 验收：Core 强杀后 UI 进入可诊断状态并可恢复；任务状态不丢；应用无业务监听端口；完全退出无孤儿进程。
 
 ## 阶段 1：账号与监控对象
+
+已交付的首个增量：
+
+- `PlatformAccount`、`Subject`、账号绑定与 `follower.snapshot` 策略的 SQLite v2 Migration；
+- 业务状态与 Outbox 原子提交、稳定错误码和语言中立 JSON Schema；
+- 5 个窄化 IPC 方法与真实 React Query Projection；
+- 账号/对象创建、查询、空态、错误态和本地数据路径状态。
 
 交付：
 

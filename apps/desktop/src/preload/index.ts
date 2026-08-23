@@ -1,11 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { DesktopBridge } from "@bmd/contracts"
 
-const bridge: DesktopBridge = {
-  core: {
-    bootstrap: () => ipcRenderer.invoke("core:bootstrap"),
-    restart: () => ipcRenderer.invoke("core:restart")
-  }
-}
+import { createDesktopBridge } from "./bridge"
+
+const bridge = createDesktopBridge((channel, input) => ipcRenderer.invoke(channel, input))
 
 contextBridge.exposeInMainWorld("bmd", bridge)

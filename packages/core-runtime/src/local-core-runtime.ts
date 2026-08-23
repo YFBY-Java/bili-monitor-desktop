@@ -1,10 +1,26 @@
-import type { BootstrapResponse } from "@bmd/contracts"
+import { randomUUID } from "node:crypto"
+
+import type {
+  BindSubjectAccountInput,
+  BootstrapResponse,
+  CreatePlatformAccountInput,
+  CreateSubjectInput,
+  ListPlatformAccountsInput,
+  ListSubjectsInput,
+  PlatformAccount,
+  PlatformAccountList,
+  SubjectList,
+  SubjectSummary
+} from "@bmd/contracts"
 import { ControlDatabase } from "@bmd/storage"
+
+import { AccountSubjectService } from "./account-subject-service"
 
 export interface LocalCoreRuntimeOptions {
   dataDirectory: string
   version: string
   now?: () => Date
+  idFactory?: () => string
 }
 
 export class LocalCoreRuntime {
@@ -13,16 +29,28 @@ export class LocalCoreRuntime {
   private constructor(
     private readonly options: Required<LocalCoreRuntimeOptions>,
     private readonly database: ControlDatabase,
+    private readonly accountSubjects: AccountSubjectService,
     private readonly startedAt: string
   ) {}
 
   static async start(options: LocalCoreRuntimeOptions): Promise<LocalCoreRuntime> {
     const normalized: Required<LocalCoreRuntimeOptions> = {
       ...options,
-      now: options.now ?? (() => new Date())
+      now: options.now ?? (() => new Date()),
+      idFactory: options.idFactory ?? randomUUID
     }
     const database = await ControlDatabase.open(normalized.dataDirectory)
-    return new LocalCoreRuntime(normalized, database, normalized.now().toISOString())
+    const accountSubjects = new AccountSubjectService({
+      database,
+      now: normalized.now,
+      idFactory: normalized.idFactory
+    })
+    return new LocalCoreRuntime(
+      normalized,
+      database,
+      accountSubjects,
+      normalized.now().toISOString()
+    )
   }
 
   bootstrap(): BootstrapResponse {
@@ -48,9 +76,38 @@ export class LocalCoreRuntime {
     }
   }
 
+  createPlatformAccount(input: CreatePlatformAccountInput): PlatformAccount {
+    this.ensureRunning()
+    return this.accountSubjects.createPlatformAccount(input)
+  }
+
+  listPlatformAccounts(input?: ListPlatformAccountsInput): PlatformAccountList {
+    this.ensureRunning()
+    return this.accountSubjects.listPlatformAccounts(input)
+  }
+
+  createSubject(input: CreateSubjectInput): SubjectSummary {
+    this.ensureRunning()
+    return this.accountSubjects.createSubject(input)
+  }
+
+  bindSubjectAccount(input: BindSubjectAccountInput): SubjectSummary {
+    this.ensureRunning()
+    return this.accountSubjects.bindSubjectAccount(input)
+  }
+
+  listSubjects(input?: ListSubjectsInput): SubjectList {
+    this.ensureRunning()
+    return this.accountSubjects.listSubjects(input)
+  }
+
   async stop(): Promise<void> {
     if (this.stopped) return
     this.stopped = true
     this.database.close()
+  }
+
+  private ensureRunning(): void {
+    if (this.stopped) throw new Error("Local Core has already stopped.")
   }
 }

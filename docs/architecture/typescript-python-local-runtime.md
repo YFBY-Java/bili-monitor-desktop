@@ -57,6 +57,10 @@ Agent Definition/Version 是产品实体；一次 Run 由 Core 持有稳定状�
 - 浏览器 Worker 默认只允许公共 HTTPS 目标，Profile、浏览器和缓存都在 D 盘数据目录。
 - Parser 对保存的原始证据可离线重放，避免调试时重复访问平台。
 
-## 当前 Slice 0
+## 当前实现进度
 
-已实现桌面 UI、D 盘环境、TypeScript Local Core、SQLite schema v1、Durable Task 状态机、跨语言 Envelope、Python Worker、Crawlee/Playwright Worker、Realtime Worker 和完整质量脚本。业务页面仍主要使用演示 ViewModel；下一 Slice 才接入真实平台账号、Subject、Bilibili Connector、Object CAS 和粉丝快照。
+基础运行时已实现桌面 UI、D 盘环境、TypeScript Local Core、SQLite WAL、Durable Task 状态机、跨语言 Envelope、Python Worker、Crawlee/Playwright Worker、Realtime Worker 和完整质量脚本。
+
+Slice 1 的第一个纵切已落地：SQLite schema v2 持久化 `PlatformAccount`、`Subject`、账号绑定和 `follower.snapshot` 策略；Core 在同一事务内提交业务状态与 Outbox；Main/Preload 仅暴露 5 个版本化、经 Zod 校验的业务调用；React Query 驱动账号和对象的加载、错误、空态、创建和刷新状态。业务契约同时发布 Zod 与 JSON Schema v1，并明确排除 Cookie、Token 等 Secret 材料。
+
+尚未实现的 Slice 1 能力包括 Windows Secret Vault、B站扫码状态机、Bilibili Connector、Object CAS、Parser/Normalizer、粉丝快照与趋势。其余页面在逐个完成纵切前仍保留演示 ViewModel。

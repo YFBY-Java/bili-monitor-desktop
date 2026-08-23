@@ -1,9 +1,18 @@
 import { randomUUID } from "node:crypto"
 
 import {
+  BindSubjectAccountInputSchema,
   BootstrapResponseSchema,
+  CreatePlatformAccountInputSchema,
+  CreateSubjectInputSchema,
+  ListPlatformAccountsInputSchema,
+  ListSubjectsInputSchema,
+  PlatformAccountListSchema,
+  PlatformAccountSchema,
   RuntimeEnvelopeSchema,
   RuntimeErrorSchema,
+  SubjectListSchema,
+  SubjectSummarySchema,
   createRuntimeEnvelope,
   type BootstrapResponse,
   type RuntimeEnvelope
@@ -82,6 +91,40 @@ export class LocalCoreController {
     const response = BootstrapResponseSchema.parse(envelope.payload)
     this.lastBootstrap = response
     return response
+  }
+
+  async listPlatformAccounts(input: unknown) {
+    const envelope = await this.request(
+      "platform-accounts.list",
+      ListPlatformAccountsInputSchema.parse(input ?? {})
+    )
+    return PlatformAccountListSchema.parse(envelope.payload)
+  }
+
+  async createPlatformAccount(input: unknown) {
+    const envelope = await this.request(
+      "platform-accounts.create",
+      CreatePlatformAccountInputSchema.parse(input)
+    )
+    return PlatformAccountSchema.parse(envelope.payload)
+  }
+
+  async listSubjects(input: unknown) {
+    const envelope = await this.request("subjects.list", ListSubjectsInputSchema.parse(input ?? {}))
+    return SubjectListSchema.parse(envelope.payload)
+  }
+
+  async createSubject(input: unknown) {
+    const envelope = await this.request("subjects.create", CreateSubjectInputSchema.parse(input))
+    return SubjectSummarySchema.parse(envelope.payload)
+  }
+
+  async bindSubjectAccount(input: unknown) {
+    const envelope = await this.request(
+      "subjects.bind-account",
+      BindSubjectAccountInputSchema.parse(input)
+    )
+    return SubjectSummarySchema.parse(envelope.payload)
   }
 
   snapshot(): BootstrapResponse | undefined {
