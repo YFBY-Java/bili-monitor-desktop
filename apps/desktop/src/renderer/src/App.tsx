@@ -1,15 +1,31 @@
 import { useEffect, useState, type JSX } from "react"
 
 import { DesktopWorkspace, type RuntimeViewState } from "./DesktopWorkspace"
+import { createBrowserPreviewBridge } from "./browser-preview-bridge"
 import { resolvePageId } from "./navigation-state"
+
+export function createInitialRuntime(preview: boolean): RuntimeViewState {
+  return preview
+    ? {
+        phase: "offline",
+        version: "browser-preview",
+        schemaVersion: 11,
+        workerCount: 0,
+        error: "普通浏览器只读预览；真实业务运行在 Electron 客户端。"
+      }
+    : { phase: "starting" }
+}
 
 export default function App(): JSX.Element {
   const initialPageId = resolvePageId(window.location.hash)
-  const [runtime, setRuntime] = useState<RuntimeViewState>({ phase: "starting" })
+  const preview = window.bmd === undefined
+  const bridge = window.bmd ?? createBrowserPreviewBridge()
+  const [runtime, setRuntime] = useState<RuntimeViewState>(() => createInitialRuntime(preview))
 
   useEffect(() => {
     let active = true
-    void window.bmd.core.bootstrap().then(
+    if (preview) return () => { active = false }
+    void bridge.core.bootstrap().then(
       (bootstrap) => {
         if (!active) return
         setRuntime({
@@ -31,7 +47,7 @@ export default function App(): JSX.Element {
     return () => {
       active = false
     }
-  }, [])
+  }, [bridge, preview])
 
-  return <DesktopWorkspace initialPageId={initialPageId} runtime={runtime} bridge={window.bmd} />
+  return <DesktopWorkspace initialPageId={initialPageId} runtime={runtime} bridge={bridge} />
 }

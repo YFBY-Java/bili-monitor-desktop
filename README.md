@@ -1,8 +1,8 @@
 # BiliMonitor Desktop
 
-BiliMonitor Desktop 是从 BiliMonitor 领域经验出发重新设计的本地优先桌面应用，面向社交平台采集、数据整理、AI 分析和 Agent 工作流。它不依赖远程业务后端，也不要求本机维护数据库服务、消息队列、容器或 WSL。
+BiliMonitor Desktop 是把原 BiliMonitor B/S 项目的真实业务改造成完全本地桌面应用的独立仓库。它不依赖远程业务后端，也不要求本机维护数据库服务、消息队列、容器或 WSL。
 
-当前已从 Slice 0 框架进入 Slice 1：樱花雾白工作台中的“平台与账号”和“监控对象”已接通真实 Local Core、SQLite v2 与类型化 IPC，可在本地创建、查询账号和对象，并原子写入绑定、粉丝监控策略与 Outbox。其他业务页面仍以演示 ViewModel 为主，尚不包含生产可用的 Bilibili 登录和在线采集。
+当前导航只显示已接到本地 Contract、Core、SQLite、Worker、IPC 与真实 UI 的原业务：B站用户工作台、粉丝监控、扫码登录、直播间 REST、实时弹幕、观众/大航海榜、直播场次、数据中心、场次洞察与导出，以及抖音本人 Web/OAuth 登录态。SQLite 当前 schema 为 v11；敏感凭据由 Electron `safeStorage` 封装的本机密钥进行 AES-256-GCM 加密。B站真人扫码和抖音真人扫码/开放平台授权仍是发布前手工验收项，不把未执行的人机操作写成已通过。
 
 ## 当前技术栈
 
@@ -12,11 +12,10 @@ BiliMonitor Desktop 是从 BiliMonitor 领域经验出发重新设计的本地�
 | 本地核心 | TypeScript Local Core，运行在 Electron `utilityProcess` |
 | 控制数据 | Node `node:sqlite`、SQLite WAL、schema migration |
 | 进程契约 | JSON Schema + Zod + Pydantic；utility messaging / NDJSON stdio |
-| HTTP 爬虫 | Python Scrapy + httpx |
-| 浏览器爬虫 | Node Crawlee + Playwright |
+| HTTP / OAuth Worker | Python httpx |
+| 浏览器登录 Worker | Node Playwright |
 | 实时采集 | Node WebSocket Worker |
-| Agent | PydanticAI + LangGraph + Pydantic Evals + MCP |
-| 本地分析 | DuckDB + PyArrow + Parquet |
+| 当前业务分析 | TypeScript Core + SQLite 查询投影 |
 
 项目源码只使用 TypeScript、Python、PowerShell、SQL 和声明式配置，不包含 C、C++、Rust 源码或对应编译工具链。第三方依赖只安装官方/上游预编译产物。
 
@@ -27,12 +26,12 @@ flowchart LR
   UI[React Renderer] --> MAIN[Electron Main]
   MAIN -->|utility messaging| CORE[TypeScript Local Core]
   CORE --> DB[(SQLite WAL)]
-  CORE -->|stdio| PY[Python Agent / HTTP / Data]
-  CORE -->|stdio| BROWSER[Crawlee / Playwright]
+  CORE -->|stdio| PY[Python HTTP / OAuth]
+  CORE -->|stdio| BROWSER[Playwright Auth]
   CORE -->|stdio| LIVE[Node Realtime]
 ```
 
-应用不开放业务 HTTP/TCP 端口。Renderer 只能访问窄化 Preload API；Local Core 独占控制数据库；高风险 Tool、网络和文件能力后续统一经过 Policy/Approval。
+应用不开放业务 HTTP/TCP 端口。Renderer 只能访问窄化 Preload API；Local Core 独占控制数据库；当前未实现的 AI、Agent、Tool 能力不对外声明。
 
 ## 目录
 
@@ -42,8 +41,8 @@ packages/contracts/    JSON Schema、Zod DTO 和 Runtime Envelope
 packages/core-runtime/ TypeScript Local Core
 packages/storage/      SQLite WAL 与迁移
 packages/task-engine/  Durable Task 状态机
-workers/python/        Agent、Scrapy、DuckDB/PyArrow Worker
-workers/node-browser/  Crawlee/Playwright Worker
+workers/python/        B站 HTTP 与抖音 OAuth Worker
+workers/node-browser/  Playwright 登录 Worker
 workers/node-realtime/ WebSocket Worker
 scripts/               D 盘 bootstrap、dev、check、build
 docs/                   架构、ADR、UI 与路线图
@@ -51,7 +50,7 @@ docs/                   架构、ADR、UI 与路线图
 
 ## 本地开发
 
-所有项目工具、缓存、临时文件、浏览器、构建物和运行数据都会固定到当前 D 盘仓库；Python 基础解释器来自 E 盘，项目 venv 位于 D 盘。脚本会拒绝 C 盘数据目录或 C 盘 Python base runtime。
+所有项目工具、缓存、临时文件、浏览器、构建物和运行数据都会固定到 D 盘；Python 基础解释器来自 E 盘，项目 venv 位于 D 盘。运行目录和导出保存位置会拒绝 C、E 与 UNC 路径，只接受 `D:\`。
 
 ```bat
 bootstrap.cmd
@@ -62,16 +61,33 @@ build.cmd
 
 首次 `bootstrap.cmd` 会准备 Node 24 LTS、pnpm 11、Python 依赖、Crawlee/Playwright Chromium 和锁文件依赖。不要绕过脚本调用 C 盘全局 `pnpm` 或 `python`。
 
+## Windows 安装包与运行数据
+
+```bat
+build.cmd -Package
+```
+
+安装目录固定为 `D:\BiliMonitor Desktop`，不可改到系统盘；可变数据固定为 `D:\BiliMonitor Desktop Data`，升级和卸载不会删除其中的 SQLite、CAS、凭据、Chromium Profile 与导出文件。安装包内自带 Python Worker、Node Worker 和 Playwright Chromium，不依赖开发仓库的 Python 环境。
+
+## 抖音 OAuth 正式配置
+
+首次启动会生成：
+
+```text
+D:\BiliMonitor Desktop Data\config\douyin-oauth.env.example
+```
+
+复制为同目录的 `douyin-oauth.env`，填写抖音开放平台的 `client key`、`client secret`，并把回调地址配置为 `bilimonitor://douyin-oauth`，然后重启应用。应用会立即使用 Electron `safeStorage` 将完整配置加密为 `douyin-oauth.secure`，并删除明文 `douyin-oauth.env`。浏览器 Worker、爬虫 Worker 和 Renderer 都拿不到 client secret。
+
 ## 当前边界
 
-已实现：D 盘环境隔离、Local Core utility process、真实 Bootstrap、SQLite schema v2、Task/Approval/Outbox 表、跨语言协议、Python/Browser/Realtime Worker 骨架，以及平台账号/监控对象的真实 UI Projection。Renderer 仅通过 5 个窄化业务方法访问 Core；Cookie、Token 和二维码登录材料不会进入业务 DTO 或控制数据库。
+原仓库 commit `01200f3c21c264963f2ad92a23b991ced5b0c9c0` 是当前业务事实源。System overview、CollectTask run-once、AI mock、Analytics summary placeholder 和 Platform adapter 骨架不是可用业务，因此不会在桌面端导航中冒充已实现功能。当前只迁移原项目已经形成闭环的 B站与抖音本人登录态业务；AI、Agent 和通用平台扩展暂不开发。
 
-当前 Slice 1 增量的实现与验收范围见 [账号与监控对象纵切](docs/implementation/slice-1-account-subject.md)。下一增量是 Windows Secret Vault、B站扫码、Bilibili HTTP Connector、Object CAS、粉丝快照和趋势投影。
+逐控制器、Service、状态机和本地映射见 [原 B/S 业务复刻基线](docs/implementation/original-bs-business-parity.md)。
 
 ## 文档
 
 - [当前运行时蓝图](docs/architecture/typescript-python-local-runtime.md)
-- [完整业务实现规格](docs/architecture/local-native-business-implementation.md)
 - [ADR-0006](docs/adr/0006-typescript-python-local-runtime.md)
 - [本地开发环境](docs/development.md)
 - [实施路线图](docs/roadmap.md)

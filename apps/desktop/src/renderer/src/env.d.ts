@@ -4,7 +4,7 @@ import type { DesktopBridge } from "@bmd/contracts"
 
 declare global {
   interface Window {
-    bmd: DesktopBridge
+    bmd?: DesktopBridge
   }
 }
 

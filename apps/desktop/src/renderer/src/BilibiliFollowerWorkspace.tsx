@@ -1,0 +1,437 @@
+import type {
+  AddBilibiliFollowerMonitorInput,
+  BilibiliFollowerMonitor,
+  BilibiliFollowerTrend,
+  DesktopBridge,
+  UpdateBilibiliFollowerMonitorSettingsInput
+} from "@bmd/contracts"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  Activity,
+  CircleAlert,
+  Clock3,
+  LoaderCircle,
+  Pause,
+  Play,
+  RefreshCcw,
+  Settings2,
+  Trash2,
+  TrendingUp,
+  UserRoundPlus,
+  UsersRound,
+  X
+} from "lucide-react"
+import { useEffect, useMemo, useState, type FormEvent, type JSX } from "react"
+
+export type FollowerResourceState<T> =
+  | { phase: "loading" }
+  | { phase: "error"; message: string }
+  | { phase: "success"; data: T; total?: number; refreshing?: boolean; staleMessage?: string }
+
+export interface BilibiliFollowerWorkspaceProps {
+  view: "监控用户" | "趋势对比"
+  monitors: FollowerResourceState<BilibiliFollowerMonitor[]>
+  trends: FollowerResourceState<BilibiliFollowerTrend[]>
+  creationOpen: boolean
+  mutationError: string | undefined
+  actionError?: string | undefined
+  busyUserIds: string[]
+  selectedUserIds?: string[]
+  onCloseCreation: () => void
+  onAdd: (input: AddBilibiliFollowerMonitorInput) => Promise<void>
+  onRefreshUser: (userId: string) => Promise<void>
+  onUpdateStatus: (userId: string, enabled: boolean) => Promise<void>
+  onUpdateSettings: (input: UpdateBilibiliFollowerMonitorSettingsInput) => Promise<void>
+  onDelete: (userId: string) => Promise<void>
+  onReload: () => void
+  onToggleTrendUser?: (userId: string) => void
+}
+
+function formatCount(value: number | undefined): string {
+  return value === undefined ? "—" : new Intl.NumberFormat("zh-CN").format(value)
+}
+
+function formatDelta(value: number | undefined): string {
+  if (value === undefined) return "暂无对比"
+  return `${value >= 0 ? "+" : ""}${new Intl.NumberFormat("zh-CN").format(value)}`
+}
+
+function formatTime(value: string | undefined): string {
+  return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "尚未采集"
+}
+
+function formatInterval(seconds: number): string {
+  if (seconds % 86_400 === 0) return `每 ${seconds / 86_400} 天`
+  if (seconds % 3_600 === 0) return `每 ${seconds / 3_600} 小时`
+  if (seconds % 60 === 0) return `每 ${seconds / 60} 分钟`
+  return `每 ${seconds} 秒`
+}
+
+export function hideBrokenAvatar(event: { currentTarget: { hidden: boolean | "until-found" } }): void {
+  event.currentTarget.hidden = true
+}
+
+function MonitorState({ monitors, onReload }: Pick<BilibiliFollowerWorkspaceProps, "monitors" | "onReload">): JSX.Element | null {
+  if (monitors.phase === "loading") {
+    return (
+      <div className="follower-state" role="status">
+        <LoaderCircle className="spin" size={20} />
+        <div><strong>正在读取粉丝监控列表</strong><span>数据来自本机 SQLite，不经过业务服务端。</span></div>
+      </div>
+    )
+  }
+  if (monitors.phase === "error") {
+    return (
+      <div className="follower-state is-error" role="alert">
+        <CircleAlert size={20} />
+        <div><strong>粉丝监控暂时不可用</strong><span>{monitors.message}</span></div>
+        <button className="button button-secondary" type="button" onClick={onReload}><RefreshCcw size={14} />重新加载</button>
+      </div>
+    )
+  }
+  return null
+}
+
+function AddMonitorForm({
+  mutationError,
+  onClose,
+  onAdd
+}: {
+  mutationError: string | undefined
+  onClose: () => void
+  onAdd: (input: AddBilibiliFollowerMonitorInput) => Promise<void>
+}): JSX.Element {
+  const [mid, setMid] = useState("")
+  const [intervalSeconds, setIntervalSeconds] = useState(3_600)
+  const [submitting, setSubmitting] = useState(false)
+  const [submissionError, setSubmissionError] = useState<string>()
+  const submit = (event: FormEvent<HTMLFormElement>): void => {
+    event.preventDefault()
+    setSubmitting(true)
+    setSubmissionError(undefined)
+    void onAdd({ mid, intervalSeconds })
+      .catch((error: unknown) => setSubmissionError(errorMessage(error)))
+      .finally(() => setSubmitting(false))
+  }
+
+  return (
+    <form className="creation-form" onSubmit={submit}>
+      <label>
+        <span>B站 UID</span>
+        <input required inputMode="numeric" pattern="[1-9][0-9]*" value={mid} onChange={(event) => setMid(event.target.value)} placeholder="例如：672328094" />
+      </label>
+      <label>
+        <span>采集间隔</span>
+        <input
+          required
+          type="number"
+          min={1}
+          max={2_592_000}
+          step={1}
+          value={intervalSeconds}
+          onChange={(event) => setIntervalSeconds(Number(event.target.value))}
+        />
+      </label>
+      {intervalSeconds < 60 && <p className="form-warning">短间隔会受全局请求节流和失败退避保护，建议只用于少量用户的临时观察。</p>}
+      <p className="form-note"><Activity size={14} />保存前会先请求 B站用户卡片接口，自动校验 UID，并写入第一条真实粉丝快照。默认每 1 小时采集一次。</p>
+      {(mutationError || submissionError) && <p className="form-error" role="alert">{mutationError || submissionError}</p>}
+      <div className="form-actions">
+        <button className="button button-secondary" type="button" onClick={onClose}>取消</button>
+        <button className="button button-primary" disabled={submitting} type="submit">{submitting ? "正在校验并添加…" : "添加监控"}</button>
+      </div>
+    </form>
+  )
+}
+
+function MonitorCard({
+  user,
+  busy,
+  selected,
+  selectionLocked,
+  onRefreshUser,
+  onUpdateStatus,
+  onUpdateSettings,
+  onDelete,
+  onToggleTrendUser
+}: {
+  user: BilibiliFollowerMonitor
+  busy: boolean
+  selected: boolean
+  selectionLocked: boolean
+  onRefreshUser: BilibiliFollowerWorkspaceProps["onRefreshUser"]
+  onUpdateStatus: BilibiliFollowerWorkspaceProps["onUpdateStatus"]
+  onUpdateSettings: BilibiliFollowerWorkspaceProps["onUpdateSettings"]
+  onDelete: BilibiliFollowerWorkspaceProps["onDelete"]
+  onToggleTrendUser?: BilibiliFollowerWorkspaceProps["onToggleTrendUser"]
+}): JSX.Element {
+  const [intervalDraft, setIntervalDraft] = useState<number>()
+  const intervalSeconds = intervalDraft ?? user.intervalSeconds
+  const validInterval = Number.isInteger(intervalSeconds) && intervalSeconds >= 1 && intervalSeconds <= 2_592_000
+  useEffect(() => {
+    if (intervalDraft === user.intervalSeconds) setIntervalDraft(undefined)
+  }, [user.intervalSeconds, intervalDraft])
+  const active = user.monitorStatus === "ACTIVE"
+  const deleteUser = (): void => {
+    const message = `确定删除“${user.nickname}”吗？这会同时删除该用户的全部粉丝历史快照，且无法恢复。`
+    if (typeof window === "undefined" || window.confirm(message)) void onDelete(user.id)
+  }
+
+  return (
+    <article className={`follower-card ${user.lastErrorType ? "has-error" : ""}`}>
+      <div className="follower-profile">
+        <div className="follower-avatar">
+          <div className="follower-avatar-fallback"><UsersRound size={19} /></div>
+          {user.avatarUrl && (
+            <img
+              src={user.avatarUrl}
+              alt=""
+              referrerPolicy="no-referrer"
+              onError={hideBrokenAvatar}
+            />
+          )}
+        </div>
+        <div>
+          <a href={user.profileUrl} target="_blank" rel="noreferrer">{user.nickname}</a>
+          <span>UID {user.mid}</span>
+        </div>
+        <span className={`follower-status is-${active ? "active" : "paused"}`}><i />{active ? "监控中" : "已暂停"}</span>
+      </div>
+
+      <div className="follower-counts">
+        <div><span>粉丝</span><strong>{formatCount(user.currentFollowerCount)}</strong></div>
+        <div className={(user.deltaSincePrevious ?? 0) < 0 ? "is-negative" : "is-positive"}><span>较上次</span><strong>{formatDelta(user.deltaSincePrevious)}</strong></div>
+        <div><span>关注</span><strong>关注 {formatCount(user.followingCount)}</strong></div>
+      </div>
+
+      <div className="follower-times">
+        <span><Clock3 size={13} />上次成功 {formatTime(user.lastSuccessAt)}</span>
+        <span><Clock3 size={13} />下次采集 {active ? formatTime(user.nextCollectAt) : "已暂停"}</span>
+        <span><Activity size={13} />来源 {user.sourceEndpoint ?? "等待首次采集"}</span>
+      </div>
+
+      {user.lastErrorMessage && (
+        <div className="follower-error" role="alert"><CircleAlert size={14} /><span><strong>{user.lastErrorType}</strong>{user.lastErrorMessage}</span></div>
+      )}
+
+      <div className="follower-actions">
+        <button className="button button-secondary" disabled={busy} type="button" onClick={() => void onRefreshUser(user.id)}><RefreshCcw size={14} />立即刷新</button>
+        <button className="button button-secondary" disabled={busy} type="button" onClick={() => void onUpdateStatus(user.id, !active)}>{active ? <Pause size={14} /> : <Play size={14} />}{active ? "暂停监控" : "恢复监控"}</button>
+        <label className={`trend-selector ${selected ? "is-selected" : ""}`} title={selectionLocked ? "最多选择 4 个用户" : "加入或移出趋势对比"}><input type="checkbox" checked={selected} disabled={selectionLocked} onChange={() => onToggleTrendUser?.(user.id)} /><TrendingUp size={14} />趋势对比</label>
+        <details className="follower-settings">
+          <summary><Settings2 size={14} />采集设置</summary>
+          <div>
+            <label><span>采集间隔（秒）</span><input required type="number" min={1} max={2_592_000} step={1} value={intervalSeconds} onChange={(event) => setIntervalDraft(Number(event.target.value))} /></label>
+            <small>当前：{formatInterval(user.intervalSeconds)}</small>
+            {intervalSeconds < 60 && <small className="form-warning">短间隔会受全局请求节流和失败退避保护。</small>}
+            {!validInterval && <small className="form-warning">请输入 1 至 2592000 的整数秒数。</small>}
+            <button className="button button-secondary" disabled={busy || !validInterval || intervalSeconds === user.intervalSeconds} type="button" onClick={() => void onUpdateSettings({ userId: user.id, intervalSeconds })}>保存间隔</button>
+            <button className="follower-delete" disabled={busy} type="button" onClick={deleteUser}><Trash2 size={14} />删除监控与全部历史快照</button>
+          </div>
+        </details>
+      </div>
+    </article>
+  )
+}
+
+function TrendChart({ trend, colorIndex }: { trend: BilibiliFollowerTrend; colorIndex: number }): JSX.Element {
+  const width = 720
+  const height = 180
+  const values = trend.points.map((point) => point.followerCount)
+  const minimum = Math.min(...values)
+  const maximum = Math.max(...values)
+  const span = Math.max(1, maximum - minimum)
+  const first = trend.points[0]
+  const last = trend.points.at(-1)
+  const firstTime = first ? Date.parse(first.capturedAt) : 0
+  const timeSpan = last ? Date.parse(last.capturedAt) - firstTime : 0
+  const coordinates = trend.points.map((point) => ({
+    x: timeSpan === 0 ? width / 2 : ((Date.parse(point.capturedAt) - firstTime) / timeSpan) * width,
+    y: maximum === minimum ? height / 2 : height - 18 - ((point.followerCount - minimum) / span) * (height - 36)
+  }))
+  const path = coordinates.map(({ x, y }, index) => {
+    return `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`
+  }).join(" ")
+
+  return (
+    <article className={`follower-trend-card trend-color-${colorIndex % 4}`}>
+      <div><strong>{trend.user.nickname}</strong><span>UID {trend.user.mid} · {trend.points.length} 个快照</span></div>
+      {trend.points.length === 0 ? (
+        <p className="trend-empty">暂无历史快照</p>
+      ) : (
+        <>
+          <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${trend.user.nickname}粉丝趋势`}>
+            <path className="trend-grid-line" d={`M0 ${height - 18} H${width}`} />
+            <path className="trend-data-line" d={path} />
+            {trend.points.map((point, index) => {
+              const { x, y } = coordinates[index]!
+              const label = `${formatTime(point.capturedAt)} · 粉丝 ${formatCount(point.followerCount)}`
+              return <circle key={point.capturedAt} cx={x} cy={y} r="4" tabIndex={0} aria-label={label}><title>{label}</title></circle>
+            })}
+          </svg>
+          <div className="trend-time-range"><time dateTime={first?.capturedAt}>{formatTime(first?.capturedAt)}</time><time dateTime={last?.capturedAt}>{formatTime(last?.capturedAt)}</time></div>
+          <div className="trend-range"><span>最低 {formatCount(minimum)}</span><strong className={(last?.followerCount ?? 0) < (first?.followerCount ?? 0) ? "is-negative" : "is-positive"}>区间净变化 {first && last ? formatDelta(last.followerCount - first.followerCount) : "—"}</strong><span>最高 {formatCount(maximum)}</span></div>
+        </>
+      )}
+    </article>
+  )
+}
+
+function TrendWorkspace({ trends }: { trends: FollowerResourceState<BilibiliFollowerTrend[]> }): JSX.Element {
+  if (trends.phase === "loading") return <div className="follower-state" role="status"><LoaderCircle className="spin" size={20} /><div><strong>正在读取粉丝历史趋势</strong><span>历史快照来自本机 SQLite。</span></div></div>
+  if (trends.phase === "error") return <div className="follower-state is-error" role="alert"><CircleAlert size={20} /><div><strong>趋势数据暂时不可用</strong><span>{trends.message}</span></div></div>
+  return (
+    <section className="panel follower-trends">
+      <div className="panel-header compact"><div><p>FOLLOWER HISTORY</p><h2>粉丝历史趋势</h2></div><span className="follower-limit">最多选择 4 个用户</span></div>
+      {trends.staleMessage && <p className="form-error" role="alert">趋势更新失败，保留上次数据：{trends.staleMessage}</p>}
+      {trends.data.length === 0
+        ? <div className="business-empty"><TrendingUp size={25} /><strong>请选择监控用户</strong><span>在“监控用户”页勾选最多 4 个用户进行历史趋势对比。</span></div>
+        : <div className="follower-trend-list">{trends.data.map((trend, index) => <TrendChart key={trend.user.id} trend={trend} colorIndex={index} />)}</div>}
+    </section>
+  )
+}
+
+export function BilibiliFollowerWorkspace(props: BilibiliFollowerWorkspaceProps): JSX.Element {
+  const users = props.monitors.phase === "success" ? props.monitors.data : []
+  const activeCount = users.filter((user) => user.monitorStatus === "ACTIVE").length
+  const failureCount = users.filter((user) => user.lastErrorType).length
+  const selected = props.selectedUserIds
+    ?? (props.trends.phase === "success" ? props.trends.data.map((trend) => trend.user.id) : [])
+
+  return (
+    <>
+      {props.actionError && <div className="follower-state is-error" role="alert"><CircleAlert size={20} /><span>{props.actionError}</span></div>}
+      {props.monitors.phase === "success" && props.monitors.staleMessage && <div className="follower-state is-error" role="alert"><CircleAlert size={20} /><span>更新失败，保留上次数据：{props.monitors.staleMessage}</span><button className="button button-secondary" onClick={props.onReload}>重新加载</button></div>}
+      <section className="business-metrics follower-metrics" aria-label="粉丝监控统计">
+        <div><span>监控用户</span><strong>{props.monitors.phase === "success" ? props.monitors.total ?? users.length : "—"}</strong></div>
+        <div><span>运行中</span><strong>{activeCount}</strong></div>
+        <div><span>已暂停</span><strong>{users.length - activeCount}</strong></div>
+        <div><span>采集异常</span><strong>{failureCount}</strong></div>
+      </section>
+
+      {props.view === "趋势对比" ? (
+        <TrendWorkspace trends={props.trends} />
+      ) : (
+        <>
+          <MonitorState monitors={props.monitors} onReload={props.onReload} />
+          {props.monitors.phase === "success" && (
+            <section className="panel follower-directory">
+              <div className="panel-header compact"><div><p>BILIBILI USER MONITORS</p><h2>监控用户</h2></div><span className="follower-limit">已选趋势 {selected.length}/4</span><button className="button button-secondary" disabled={props.monitors.refreshing} onClick={props.onReload}><RefreshCcw size={14} />刷新列表</button></div>
+              {users.length === 0
+                ? <div className="business-empty"><UserRoundPlus size={26} /><strong>还没有监控用户</strong><span>添加 B站 UID 后，会先校验用户并保存第一条粉丝快照。</span></div>
+                : <div className="follower-list">{users.map((user) => <MonitorCard key={user.id} user={user} busy={props.busyUserIds.includes(user.id)} selected={selected.includes(user.id)} selectionLocked={!selected.includes(user.id) && selected.length >= 4} onRefreshUser={props.onRefreshUser} onUpdateStatus={props.onUpdateStatus} onUpdateSettings={props.onUpdateSettings} onDelete={props.onDelete} onToggleTrendUser={props.onToggleTrendUser} />)}</div>}
+            </section>
+          )}
+        </>
+      )}
+
+      {props.creationOpen && (
+        <div className="creation-backdrop" role="presentation">
+          <section className="creation-drawer" role="dialog" aria-modal="true" aria-label="添加 B站监控用户">
+            <div className="creation-head"><div><p>BILIBILI FOLLOWER MONITOR</p><h2>添加 B站监控用户</h2></div><button className="icon-button" type="button" aria-label="关闭" onClick={props.onCloseCreation}><X size={17} /></button></div>
+            <AddMonitorForm mutationError={props.mutationError} onClose={props.onCloseCreation} onAdd={props.onAdd} />
+          </section>
+        </div>
+      )}
+    </>
+  )
+}
+
+export function ConnectedBilibiliFollowerWorkspace({
+  bridge,
+  view,
+  creationOpen,
+  onCloseCreation
+}: {
+  bridge: DesktopBridge
+  view: "监控用户" | "趋势对比"
+  creationOpen: boolean
+  onCloseCreation: () => void
+}): JSX.Element {
+  const queryClient = useQueryClient()
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([])
+  const [busyUserIds, setBusyUserIds] = useState<string[]>([])
+  const [actionError, setActionError] = useState<string>()
+  // Read local projections only; the Core owns platform requests and scheduling.
+  const monitorsQuery = useQuery({ queryKey: ["bilibili-followers"], queryFn: () => bridge.bilibiliFollowers.list({ limit: 500 }), refetchInterval: 2_000 })
+  const effectiveUserIds = useMemo(() => {
+    return selectedUserIds.filter((id) => monitorsQuery.data?.items.some((user) => user.id === id))
+  }, [monitorsQuery.data, selectedUserIds])
+  useEffect(() => {
+    if (monitorsQuery.data) setSelectedUserIds((ids) => ids.filter((id) => monitorsQuery.data.items.some((user) => user.id === id)))
+  }, [monitorsQuery.data])
+  const trendsQuery = useQuery({
+    queryKey: ["bilibili-follower-trends", effectiveUserIds],
+    queryFn: () => bridge.bilibiliFollowers.trends({ userIds: effectiveUserIds, limitPerUser: 500 }),
+    enabled: view === "趋势对比" && effectiveUserIds.length > 0,
+    refetchInterval: view === "趋势对比" ? 2_000 : false
+  })
+  const invalidate = async (): Promise<void> => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["bilibili-followers"] }),
+      queryClient.invalidateQueries({ queryKey: ["bilibili-follower-trends"] })
+    ])
+  }
+  const addMutation = useMutation({
+    mutationFn: (input: AddBilibiliFollowerMonitorInput) => bridge.bilibiliFollowers.add(input),
+    onSuccess: async (user) => {
+      setSelectedUserIds((ids) => ids.includes(user.id) || ids.length >= 4 ? ids : [...ids, user.id])
+      onCloseCreation()
+      await invalidate()
+    }
+  })
+  const runUserAction = async (userId: string, action: () => Promise<unknown>): Promise<void> => {
+    setBusyUserIds((ids) => [...new Set([...ids, userId])])
+    setActionError(undefined)
+    try { await action() }
+    catch (error) { setActionError(errorMessage(error)) }
+    finally {
+      await invalidate()
+      setBusyUserIds((ids) => ids.filter((id) => id !== userId))
+    }
+  }
+  const monitors: FollowerResourceState<BilibiliFollowerMonitor[]> = monitorsQuery.data
+    ? { phase: "success", data: monitorsQuery.data.items, total: monitorsQuery.data.total, refreshing: monitorsQuery.isFetching,
+        ...(monitorsQuery.isError ? { staleMessage: monitorsQuery.error.message } : {}) }
+    : monitorsQuery.isError
+      ? { phase: "error", message: monitorsQuery.error.message }
+      : { phase: "loading" }
+  const trends: FollowerResourceState<BilibiliFollowerTrend[]> = effectiveUserIds.length === 0
+    ? { phase: "success", data: [] }
+    : trendsQuery.data
+      ? { phase: "success", data: trendsQuery.data, refreshing: trendsQuery.isFetching,
+          ...(trendsQuery.isError ? { staleMessage: trendsQuery.error.message } : {}) }
+      : trendsQuery.isError
+        ? { phase: "error", message: trendsQuery.error.message }
+        : { phase: "loading" }
+  const toggleTrendUser = (userId: string): void => {
+    setSelectedUserIds((ids) => ids.includes(userId) ? ids.filter((id) => id !== userId) : ids.length < 4 ? [...ids, userId] : ids)
+  }
+
+  return (
+    <BilibiliFollowerWorkspace
+      view={view}
+      monitors={monitors}
+      trends={trends}
+      creationOpen={creationOpen}
+      mutationError={addMutation.error?.message}
+      actionError={actionError}
+      busyUserIds={busyUserIds}
+      selectedUserIds={effectiveUserIds}
+      onCloseCreation={onCloseCreation}
+      onAdd={async (input) => { await addMutation.mutateAsync(input) }}
+      onRefreshUser={async (userId) => { await runUserAction(userId, () => bridge.bilibiliFollowers.refresh({ userId })) }}
+      onUpdateStatus={async (userId, enabled) => { await runUserAction(userId, () => bridge.bilibiliFollowers.updateStatus({ userId, enabled })) }}
+      onUpdateSettings={async (input) => { await runUserAction(input.userId, () => bridge.bilibiliFollowers.updateSettings(input)) }}
+      onDelete={async (userId) => { await runUserAction(userId, async () => {
+        await bridge.bilibiliFollowers.remove({ userId })
+        setSelectedUserIds((ids) => ids.filter((id) => id !== userId))
+      }) }}
+      onReload={() => { void monitorsQuery.refetch() }}
+      onToggleTrendUser={toggleTrendUser}
+    />
+  )
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}

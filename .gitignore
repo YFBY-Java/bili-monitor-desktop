@@ -24,6 +24,7 @@ __pycache__/
 .tools/
 .dev-data/
 .local-data/
+.package-smoke-data/
 .tmp/
 .cache/
 data/

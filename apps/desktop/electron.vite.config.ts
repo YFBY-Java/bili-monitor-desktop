@@ -14,7 +14,9 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(projectDirectory, "src/main/index.ts"),
-          "core-process": resolve(projectDirectory, "src/main/core-process.ts")
+          "core-process": resolve(projectDirectory, "src/main/core-process.ts"),
+          "realtime-worker": resolve(projectDirectory, "../../workers/node-realtime/src/process.ts"),
+          "browser-worker": resolve(projectDirectory, "../../workers/node-browser/src/douyin-process.ts")
         }
       }
     }

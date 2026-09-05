@@ -8,7 +8,7 @@ try {
     & $env:BMD_PNPM_CMD build
     if ($LASTEXITCODE -ne 0) { throw "Electron build failed" }
     if ($Package) {
-        & $env:BMD_PNPM_CMD --filter @bmd/desktop package:win
+        & $env:BMD_PNPM_CMD package:win
         if ($LASTEXITCODE -ne 0) { throw "Windows packaging failed" }
     }
 }

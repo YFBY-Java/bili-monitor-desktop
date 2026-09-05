@@ -2,7 +2,7 @@
 
 > 当前路线以 [当前运行时蓝图](architecture/typescript-python-local-runtime.md)、[本地原生业务与技术实现规格](architecture/local-native-business-implementation.md) 和 [ADR-0006](adr/0006-typescript-python-local-runtime.md) 为准。
 
-当前进度（2026-08-23）：阶段 0 的本地运行骨架已可运行；阶段 1 已完成首个“账号、Subject、绑定与监控策略”纵切。Windows Secret、扫码认证、在线 Connector、CAS 和粉丝快照仍待实现，不能视为阶段 1 已验收。
+当前进度（2026-08-30）：原 commit `01200f3` 中形成真实闭环的 B站与抖音本人登录态业务已迁移到本地 Contract、Core、SQLite v11、Worker、IPC 和 UI。包括用户工作台、粉丝、B站扫码、直播 REST、实时弹幕、榜单、场次、数据中心、洞察/导出，以及抖音 Web/OAuth 双凭据。B站公开 API 与真实 WebSocket smoke 已通过；B站真人扫码、抖音真人扫码/滑块和官方 OAuth 授权仍待手工验收。AI mock、采集任务 mock、Analytics placeholder 和平台骨架不计为待迁移业务，也不进入导航。
 
 ## 目录
 
@@ -36,15 +36,39 @@
 - 5 个窄化 IPC 方法与真实 React Query Projection；
 - 账号/对象创建、查询、空态、错误态和本地数据路径状态。
 
+已交付的粉丝监控增量：
+
+- 对照原 `BilibiliFollowerMonitorController/Service/Repository` 实现添加、列表、状态、间隔、刷新、删除、历史和多用户趋势；
+- Python `httpx` Worker 采集 `x/web-interface/card`，仅对原项目允许的解析/网络/服务端错误回退 `x/relation/stat`；
+- 三次重试、1500ms 最小请求间隔、指数退避、风控不强制回退、失败后 300～900 秒调度退避；
+- SQLite v3 保存 Monitor、秒级幂等 Snapshot、CAS Artifact 和每次 API Attempt；
+- 7 个粉丝业务 IPC 方法和真实 React Query 页面，覆盖加载、错误、空态、操作中、列表和最多 4 用户趋势。
+
+已交付的 B站扫码登录增量：
+
+- 对照原 `BilibiliAuthController/Service/PassportClient/Repository` 复刻二维码生成、轮询、最低 Cookie 门槛、`nav` 复验和撤销；
+- WAITING、SCANNED、EXPIRED、SUCCESS、FAILED 五态及终态幂等缓存；
+- 独立 Python Auth Worker 负责 Passport 会话，认证响应不写 Object CAS；
+- Electron `safeStorage` 封装本机随机密钥，SQLite v4 只保存 AES-256-GCM 密文并保证唯一 ACTIVE；
+- 6 个窄化认证 IPC 方法与真实登录态面板；完整凭据只在用户明确查看时读取，不进入 React Query cache。
+
+已交付的 B站直播间 REST 监控增量：
+
+- 对照原 `BilibiliLiveMonitorController/Service/SnapshotApplicationService/Scheduler`、`BilibiliLiveApiClient` 和 V4 表结构实现；
+- 支持按房间号或主播 UID 添加，解析短号/真实房间号，并在 UID 状态接口缺失时按原规则回退旧房间接口；
+- 支持列表、暂停、恢复、删除、立即刷新、`1..2592000` 秒采集间隔、最多 30 个到期房间批处理和失败退避；
+- SQLite v5 保存房间、秒级幂等快照和 `LIVE_STARTED`、`LIVE_ENDED`、`ROUND_STARTED`、`TITLE_CHANGED`、`ERROR_OCCURRED`、`ERROR_RECOVERED` 事件；
+- 11 个窄化 IPC 方法和真实 React Query 页面，覆盖汇总、卡片、状态操作、事件和最多 4 房间趋势。
+
 交付：
 
-- Windows Secret Vault 和短期 Secret Lease；
-- B站 Playwright 扫码、登录态验证、续期和撤销；
+- 真人手机扫码成功与应用重启后的手工复验；
+- 受控短期 Secret Lease（后续供直播 Worker 使用）；
 - PlatformAccount、Subject、绑定和监控策略；
-- Scrapy Worker、Bilibili Connector、CAS 原始响应和 Parser；
-- Arrow/Data Worker、粉丝当前投影和 Parquet 历史。
+- 扩展 Scrapy 批量采集能力和可离线重放 Parser；
+- Arrow/Data Worker 与 Parquet 长期历史（当前历史已由 SQLite v3 可靠保存）。
 
-验收：扫码到粉丝趋势完整跑通；Cookie/API Key 不进入数据库、日志、IPC 事件或 Git；重复时间桶不产生重复快照。
+验收：扫码到粉丝趋势完整跑通；Cookie/API Key 不以明文进入数据库、日志、Outbox、查询缓存或 Git，只有“查看完整登录态”这一明确业务操作允许通过专用 IPC 返回原文；重复时间桶不产生重复快照。
 
 ## 阶段 2：Campaign 与数据资产
 
@@ -59,16 +83,18 @@
 
 ## 阶段 3：直播完整链路
 
-交付：
+已交付：
 
-- 直播状态 Snapshot、Node Realtime Worker、心跳和重连；
-- Arrow Batch、分区 Parquet、DuckDB 聚合和现场 MessagePort；
-- 榜单快照、场次 Revision、Coverage 和人工边界修正；
-- 直播场次查询与 CSV/XLSX/Parquet 导出。
+- Node Realtime Worker 的真实弹幕协议、心跳、重连、认证升级和原事件持久化；
+- 观众与大航海榜单快照、REST/WebSocket 场次边界和 Coverage；
+- 直播场次查询、用户/事件筛选、规则洞察以及 CSV/XLSX/ZIP 导出；
+- Subject 对粉丝、直播、弹幕、健康和榜单的聚合工作台。
 
 验收：断网、乱序、迟到事件、系统时钟变化和高频 UI 基准通过；任何连接缺口都反映在 Coverage。
 
-## 阶段 4：模型、Agent 与工具
+## 阶段 4：模型、Agent 与工具（当前暂停）
+
+只有原 B/S 业务的真人验收与发布打包门槛完成后，才重新评审这一阶段；当前不实现、不展示。
 
 交付：
 

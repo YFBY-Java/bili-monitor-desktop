@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bilimonitor.local/schemas/bilibili-auth.v1.schema.json",
+  "title": "BiliMonitor Desktop Bilibili authentication contracts",
+  "$defs": {
+    "BilibiliAuthAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mid", "uname"],
+      "properties": {
+        "mid": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+        "uname": { "type": "string", "minLength": 1 },
+        "face": { "type": "string", "format": "uri" },
+        "level": { "type": "integer", "minimum": 0 },
+        "vipStatus": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "BilibiliAuthCookie": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "value": { "type": "string" },
+        "domain": { "type": "string" },
+        "path": { "type": "string" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "httpOnly": { "type": "boolean" },
+        "secure": { "type": "boolean" },
+        "sameSite": { "type": "string" }
+      }
+    },
+    "BilibiliCredential": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credentialId", "cookieHeader", "cookies", "rawPayload"],
+      "properties": {
+        "credentialId": { "type": "string", "format": "uuid" },
+        "account": { "$ref": "#/$defs/BilibiliAuthAccount" },
+        "cookieHeader": { "type": "string" },
+        "cookies": { "type": "array", "items": { "$ref": "#/$defs/BilibiliAuthCookie" } },
+        "csrf": { "type": "string" },
+        "refreshToken": { "type": "string" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "rawPayload": { "type": "object" }
+      }
+    },
+    "BilibiliQrLoginStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["loginId", "qrUrl", "expiresInSeconds", "pollIntervalMillis"],
+      "properties": {
+        "loginId": { "type": "string", "format": "uuid" },
+        "qrUrl": { "type": "string", "format": "uri" },
+        "expiresInSeconds": { "type": "integer", "minimum": 1 },
+        "pollIntervalMillis": { "type": "integer", "minimum": 1000, "maximum": 10000 }
+      }
+    },
+    "BilibiliQrLoginStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "message"],
+      "properties": {
+        "status": { "enum": ["WAITING", "SCANNED", "EXPIRED", "SUCCESS", "FAILED"] },
+        "message": { "type": "string", "minLength": 1 },
+        "expiresInSeconds": { "type": "integer", "minimum": 0 },
+        "account": { "$ref": "#/$defs/BilibiliAuthAccount" },
+        "credential": { "$ref": "#/$defs/BilibiliCredential" }
+      }
+    },
+    "BilibiliAuthWorkerPollResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "cookies"],
+      "properties": {
+        "code": { "type": "integer" },
+        "message": { "type": "string" },
+        "refreshToken": { "type": "string" },
+        "cookies": { "type": "array", "items": { "$ref": "#/$defs/BilibiliAuthCookie" } }
+      }
+    }
+  }
+}

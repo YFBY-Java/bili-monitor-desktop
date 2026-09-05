@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "bmd-workers"
 version = "0.1.0"
-description = "Local Python workers for BiliMonitor Desktop crawling, data and agents"
+description = "Local Python workers for the implemented BiliMonitor HTTP and OAuth workflows"
 requires-python = ">=3.11,<3.14"
 
 [project.scripts]

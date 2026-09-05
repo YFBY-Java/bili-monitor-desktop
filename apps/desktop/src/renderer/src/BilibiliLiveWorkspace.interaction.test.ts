@@ -1,0 +1,186 @@
+import { resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+
+import react from "@vitejs/plugin-react"
+import { chromium, type Browser, type Page } from "playwright"
+import { createServer, type ViteDevServer } from "vite"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+
+describe("original live-room renderer workflows", () => {
+  let server: ViteDevServer
+  let browser: Browser
+  let page: Page
+  let url: string
+  beforeAll(async () => {
+    server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
+      cacheDir: resolve("node_modules/.vite-live-test"), plugins: [react()],
+      server: { host: "127.0.0.1", port: 0 }, logLevel: "error" })
+    await server.listen()
+    const address = server.httpServer!.address()
+    if (!address || typeof address === "string") throw new Error("Missing fixture port")
+    url = `http://127.0.0.1:${address.port}/__fixtures__/live-workspace.html`
+    browser = await chromium.launch({ headless: true })
+  }, 30_000)
+  afterAll(async () => { await browser?.close(); await server?.close() })
+  beforeEach(async () => {
+    page = await browser.newPage()
+    page.setDefaultTimeout(3000)
+    page.setDefaultNavigationTimeout(15000)
+    await page.goto(url)
+    await page.getByRole("heading", { name: "测试主播1", exact: true }).waitFor({ timeout: 15_000 })
+  })
+  afterEach(async () => { await page?.close() })
+
+  it("initially selects a live room, caps comparison at four, and honors explicitly clearing the selection", async () => {
+    await expect.poll(() => page.getByRole("button", { name: "已选趋势", exact: true }).count()).toBe(1)
+    expect(await page.locator(".live-room-card").nth(1).getByRole("button", { name: "已选趋势" }).count()).toBe(1)
+    for (let index = 0; index < 3; index++) await page.getByRole("button", { name: "加入趋势", exact: true }).first().click()
+    expect(await page.getByRole("button", { name: "趋势已满" }).isDisabled()).toBe(true)
+    await page.getByRole("button", { name: "查看趋势", exact: true }).click()
+    for (let index = 0; index < 5; index++) await page.getByRole("checkbox").nth(index).uncheck()
+    await page.evaluate(() => window.liveFixture.reload())
+    await page.getByText("尚未选择直播间", { exact: true }).waitFor()
+    expect(await page.locator(".live-chart-card").count()).toBe(0)
+  })
+
+  it("validates input and adds by room number or UID with the original default interval", async () => {
+    await page.getByRole("button", { name: "添加直播间", exact: true }).click()
+    const form = page.locator(".live-add-panel")
+    await form.getByRole("button", { name: "添加监控", exact: true }).click()
+    await form.getByRole("alert").waitFor()
+    expect(await page.evaluate(() => window.liveFixture.addInputs.length)).toBe(0)
+    await form.getByRole("textbox").fill("6")
+    await form.getByRole("button", { name: "添加监控", exact: true }).click()
+    await page.getByRole("heading", { name: "新主播6", exact: true }).waitFor()
+    await page.getByRole("button", { name: "添加直播间", exact: true }).click()
+    await form.getByRole("combobox").selectOption("uid")
+    await form.getByRole("textbox").fill("22")
+    await form.getByRole("spinbutton").fill("120")
+    await form.getByRole("button", { name: "添加监控", exact: true }).click()
+    await page.getByRole("heading", { name: "新主播7", exact: true }).waitFor()
+    expect(await page.evaluate(() => window.liveFixture.addInputs)).toEqual([{ roomId: "6", intervalSeconds: 300 }, { uid: "22", intervalSeconds: 120 }])
+    expect(await page.locator(".live-room-card").filter({ hasText: "新主播7" }).getByRole("button", { name: "已选趋势" }).count()).toBe(1)
+  })
+
+  it("locks only the busy room and releases it after a real response", async () => {
+    await page.evaluate(() => { window.liveFixture.holdAction = true })
+    const room = page.locator(".live-room-card").first()
+    await room.getByRole("button", { name: "立即刷新", exact: true }).click()
+    await expect.poll(() => page.evaluate(() => window.liveFixture.calls.filter((call) => call === "refresh").length)).toBe(1)
+    expect(await room.getByRole("button", { name: "暂停监控", exact: true }).isDisabled()).toBe(true)
+    expect(await page.locator(".live-room-card").nth(1).getByRole("button", { name: "暂停监控", exact: true }).isEnabled()).toBe(true)
+    await page.evaluate(() => { window.liveFixture.holdAction = false; window.liveFixture.release() })
+    await room.getByText("45,678", { exact: true }).waitFor()
+    await expect.poll(() => room.getByRole("button", { name: "暂停监控", exact: true }).isEnabled()).toBe(true)
+  })
+
+  it("shows failures and their updated persisted projection without unhandled rejections", async () => {
+    const errors: string[] = []
+    page.on("pageerror", (error) => errors.push(error.message))
+    await page.evaluate(() => { window.liveFixture.actionError = "B站风控，稍后再试" })
+    await page.getByRole("button", { name: "立即刷新", exact: true }).first().click()
+    await page.getByRole("alert").filter({ hasText: "B站风控" }).first().waitFor()
+    expect(errors).toEqual([])
+    await page.locator(".live-room-card").first().getByText("BILIBILI_RISK_CONTROL", { exact: true }).waitFor()
+    await page.evaluate(() => { window.liveFixture.actionError = "" })
+    await page.getByRole("button", { name: "暂停监控", exact: true }).first().click()
+    await page.getByRole("button", { name: "恢复监控", exact: true }).waitFor()
+    expect(await page.locator(".live-room-card").first().getByText("下次采集 已暂停", { exact: true }).count()).toBe(1)
+  })
+
+  it("keeps dirty interval drafts, validates them, and synchronizes unedited values", async () => {
+    const room = page.locator(".live-room-card").first()
+    const input = room.getByRole("spinbutton")
+    await page.evaluate(async () => { window.liveFixture.updateFirst(120); await window.liveFixture.reload() })
+    await expect.poll(() => input.inputValue()).toBe("120")
+    await input.fill("600")
+    await page.evaluate(async () => { window.liveFixture.updateFirst(900); await window.liveFixture.reload() })
+    await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
+    expect(await input.inputValue()).toBe("600")
+    await input.fill("0")
+    expect(await room.getByRole("button", { name: "保存", exact: true }).isDisabled()).toBe(true)
+    await input.fill("600")
+    await room.getByRole("button", { name: "保存", exact: true }).click()
+    await expect.poll(() => room.getByRole("button", { name: "保存", exact: true }).isDisabled()).toBe(true)
+    await page.evaluate(async () => { window.liveFixture.updateFirst(180); await window.liveFixture.reload() })
+    await expect.poll(() => input.inputValue()).toBe("180")
+  })
+
+  it("confirms deletion, removes selected rooms, and does not query deleted trend IDs", async () => {
+    await page.locator(".live-room-card").first().getByRole("button", { name: "加入趋势", exact: true }).click()
+    await page.getByRole("button", { name: "查看趋势", exact: true }).click()
+    await page.locator(".live-chart-card").first().waitFor()
+    await page.getByRole("button", { name: "查看直播间", exact: true }).click()
+    page.once("dialog", (dialog) => { void dialog.dismiss() })
+    await page.getByRole("button", { name: "删除", exact: true }).first().click()
+    expect(await page.evaluate(() => window.liveFixture.calls.includes("delete"))).toBe(false)
+    page.once("dialog", (dialog) => { void dialog.accept() })
+    await page.getByRole("button", { name: "删除", exact: true }).first().click()
+    await page.getByRole("heading", { name: "测试主播1", exact: true }).waitFor({ state: "detached" })
+    await page.getByRole("button", { name: "查看趋势", exact: true }).click()
+    await expect.poll(() => page.locator(".live-chart-card").count()).toBe(1)
+    expect(await page.evaluate(() => window.liveFixture.missingTrendIds)).toEqual([])
+  })
+
+  it("shows trend query failures, supports retry, and keeps stale data on a later failure", async () => {
+    await page.getByRole("button", { name: "加入趋势", exact: true }).first().click()
+    await page.evaluate(() => { window.liveFixture.trendError = "无法读取直播历史" })
+    await page.getByRole("button", { name: "查看趋势", exact: true }).click()
+    await page.getByRole("alert").filter({ hasText: "无法读取直播历史" }).waitFor()
+    await page.evaluate(() => { window.liveFixture.trendError = "" })
+    await page.getByRole("button", { name: "重试趋势查询" }).click()
+    await page.locator(".live-chart-card").first().waitFor()
+    await page.evaluate(async () => { window.liveFixture.trendError = "历史查询暂时失败"; await window.liveFixture.reload() })
+    expect(await page.locator(".live-chart-card").count()).toBeGreaterThan(0)
+    await page.getByRole("alert").filter({ hasText: "历史查询暂时失败" }).waitFor()
+    await page.getByRole("button", { name: "查看直播间", exact: true }).click()
+    expect(await page.getByRole("alert").count()).toBe(0)
+  })
+
+  it("uses actual timestamps and leaves missing heat values as gaps", async () => {
+    await page.getByRole("button", { name: "加入趋势", exact: true }).first().click()
+    await page.getByRole("button", { name: "查看趋势", exact: true }).click()
+    const chart = page.locator(".live-chart-card").first()
+    await chart.locator("svg").waitFor()
+    const path = await chart.locator("svg path").getAttribute("d")
+    const coordinates = path!.match(/-?\d+(?:\.\d+)?/g)!.map(Number)
+    expect((coordinates[2]! - coordinates[0]!) / (coordinates[4]! - coordinates[0]!)).toBeCloseTo(0.1, 2)
+    await page.evaluate(async () => { window.liveFixture.missingHeat(); await window.liveFixture.reload() })
+    await expect.poll(() => chart.locator("circle").count()).toBe(2)
+    expect((await chart.locator("svg path").getAttribute("d"))?.match(/M/g)).toHaveLength(2)
+    expect(await chart.locator("circle title").first().textContent()).toContain("100")
+  })
+
+  it("retains already loaded rooms when a changed comparison selection fails to load", async () => {
+    await page.getByRole("button", { name: "查看趋势", exact: true }).click()
+    await page.locator(".live-chart-card").filter({ hasText: "测试主播2" }).waitFor()
+    await page.evaluate(() => { window.liveFixture.trendError = "新选择暂时无法查询" })
+    await page.getByRole("checkbox", { name: "测试主播1", exact: true }).check()
+    await page.getByRole("alert").filter({ hasText: "新选择暂时无法查询" }).waitFor()
+    expect(await page.locator(".live-chart-card").filter({ hasText: "测试主播2" }).count()).toBe(1)
+    expect(await page.locator(".live-chart-card").filter({ hasText: "测试主播1" }).count()).toBe(0)
+    await page.evaluate(() => { window.liveFixture.trendError = "" })
+    await page.getByRole("button", { name: "重试趋势查询" }).click()
+    await expect.poll(() => page.locator(".live-chart-card").count()).toBe(2)
+    await page.evaluate(() => { window.liveFixture.trendError = "选择减少后查询失败" })
+    await page.getByRole("checkbox", { name: "测试主播2", exact: true }).uncheck()
+    await page.getByRole("alert").filter({ hasText: "选择减少后查询失败" }).waitFor()
+    expect(await page.locator(".live-chart-card").filter({ hasText: "测试主播1" }).count()).toBe(1)
+    expect(await page.locator(".live-chart-card").filter({ hasText: "测试主播2" }).count()).toBe(0)
+  })
+
+  it("renders source events and exposes a retry for failed room reads while preserving loaded rooms", async () => {
+    await page.getByRole("button", { name: "查看事件", exact: true }).click()
+    await page.getByText("暂无状态事件", { exact: true }).waitFor()
+    await page.getByRole("button", { name: "注入测试事件" }).click()
+    await page.getByText("标题变化", { exact: true }).waitFor()
+    await page.getByText("旧标题 → 新标题", { exact: true }).waitFor()
+    await page.getByRole("button", { name: "查看直播间", exact: true }).click()
+    await page.evaluate(async () => { window.liveFixture.listError = "暂时无法读取房间"; await window.liveFixture.reload() })
+    expect(await page.locator(".live-room-card").count()).toBe(5)
+    await page.getByRole("alert").filter({ hasText: "暂时无法读取房间" }).waitFor()
+    await page.evaluate(() => { window.liveFixture.listError = "" })
+    await page.getByRole("button", { name: "刷新监控数据" }).click()
+    await page.getByRole("alert").waitFor({ state: "detached" })
+  })
+})

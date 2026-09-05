@@ -51,7 +51,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useEffect, useMemo, useState, type JSX } from "react"
 
 import { ConnectedAccountSubjectWorkspace } from "./AccountSubjectWorkspace"
-import { resolvePageId, searchWorkspace } from "./navigation-state"
+import { ConnectedBilibiliAuthPanel } from "./BilibiliAuthPanel"
+import { ConnectedBilibiliFollowerWorkspace } from "./BilibiliFollowerWorkspace"
+import { ConnectedBilibiliLiveWorkspace } from "./BilibiliLiveWorkspace"
+import { ConnectedBilibiliSubjectWorkspace } from "./BilibiliSubjectWorkspace"
+import { ConnectedDouyinAuthWorkspace } from "./DouyinAuthWorkspace"
+import { resolvePageId } from "./navigation-state"
 import {
   findProductPage,
   navigationGroups,
@@ -204,29 +209,20 @@ function Sidebar({
 }
 
 function TopBar({
-  onOpenCommand,
   onToggleTheme,
   theme
 }: {
-  onOpenCommand: () => void
   onToggleTheme: () => void
   theme: ThemeMode
 }): JSX.Element {
   return (
     <header className="topbar">
       <div className="workspace-switcher">
-        <span className="workspace-code">WS / 01</span>
-        <button type="button">
-          本地研究工作区 <ChevronDown size={14} />
-        </button>
+        <span className="workspace-code">BILIMONITOR / LOCAL</span>
+        <strong>本地客户端</strong>
       </div>
       <div className="topbar-actions">
         <div className="local-badge"><ToneDot tone="mint" />LOCAL ONLY</div>
-        <button className="command-trigger" type="button" onClick={onOpenCommand}>
-          <Search size={15} />
-          <span>搜索页面、对象、工具…</span>
-          <kbd>Ctrl K</kbd>
-        </button>
         <button
           className="icon-button theme-toggle"
           type="button"
@@ -235,13 +231,6 @@ function TopBar({
           title={theme === "light" ? "切换至深色主题" : "切换至浅色主题"}
         >
           {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
-        </button>
-        <button className="icon-button notification-button" type="button" aria-label="通知">
-          <Bell size={17} />
-          <i />
-        </button>
-        <button className="profile-button" type="button" aria-label="本地用户">
-          YF
         </button>
       </div>
     </header>
@@ -274,18 +263,19 @@ function SignalTape(): JSX.Element {
 }
 
 function BusinessSignalTape({ page }: { page: ProductPage }): JSX.Element {
+  const followerPage = page.id === "bilibili-followers"
   const businessEvents = [
-    { state: "QUERY", source: "CORE", message: "等待本地查询结果时保留当前投影", tone: "cyan" as Tone },
-    { state: "SCHEMA", source: "SQLITE", message: `v2 · ${page.id === "platform-accounts" ? "platform_account" : "subject / binding / policy"}`, tone: "mint" as Tone },
-    { state: "ATOMIC", source: "OUTBOX", message: "业务状态与事件同事务提交", tone: "violet" as Tone }
+    { state: followerPage ? "CRAWL" : "QUERY", source: "CORE", message: followerPage ? "到期任务由本地调度器触发 Python Worker" : "等待本地查询结果时保留当前投影", tone: "cyan" as Tone },
+    { state: "SCHEMA", source: "SQLITE", message: followerPage ? "v3 · monitor / snapshot / artifact" : `v2 · ${page.id === "platform-accounts" ? "platform_account" : "subject / binding / policy"}`, tone: "mint" as Tone },
+    { state: followerPage ? "EVIDENCE" : "ATOMIC", source: followerPage ? "CAS" : "OUTBOX", message: followerPage ? "原始 B站响应按 SHA-256 留存" : "业务状态与事件同事务提交", tone: "violet" as Tone }
   ]
 
   return (
     <div className="signal-tape" aria-label="本地投影状态带">
       <div className="signal-label">
         <Database size={14} />
-        <strong>LOCAL PROJECTION</strong>
-        <span>V2</span>
+        <strong>{followerPage ? "FOLLOWER PIPELINE" : "LOCAL PROJECTION"}</strong>
+        <span>{followerPage ? "V3" : "V2"}</span>
       </div>
       <div className="signal-track">
         {businessEvents.map((event) => (
@@ -355,13 +345,6 @@ function TabRail({
           {tab}
         </button>
       ))}
-      <div className="tab-spacer" />
-      <button className="filter-button" type="button">
-        <SlidersHorizontal size={14} /> 筛选
-      </button>
-      <button className="icon-button small" type="button" aria-label="刷新">
-        <RefreshCcw size={14} />
-      </button>
     </div>
   )
 }
@@ -689,53 +672,6 @@ function AccountSubjectActivityRail({ page }: { page: ProductPage }): JSX.Elemen
   )
 }
 
-function CommandPalette({ onClose, onNavigate }: { onClose: () => void; onNavigate: (pageId: PageId) => void }): JSX.Element {
-  const [query, setQuery] = useState("")
-  const results = useMemo(() => searchWorkspace(query), [query])
-
-  return (
-    <div className="command-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="command-palette" role="dialog" aria-modal="true" aria-label="命令面板" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="command-input-row">
-          <Search size={18} />
-          <input
-            autoFocus
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索页面、BiliMonitor 功能、工具或工作流…"
-          />
-          <button type="button" onClick={onClose}><X size={16} /></button>
-        </div>
-        <p className="command-hint">{query ? `找到 ${results.length} 个结果` : "常用工作区"}</p>
-        <div className="command-results">
-          {results.map((result) => (
-            <button
-              key={result.id}
-              type="button"
-              onClick={() => {
-                onNavigate(result.pageId)
-                onClose()
-              }}
-            >
-              <span className={`command-result-icon tone-surface-${result.tone}`}>
-                {result.kind === "page" ? <Layers3 size={16} /> : <Sparkles size={16} />}
-              </span>
-              <span><strong>{result.label}</strong><small>{result.detail}</small></span>
-              <em>{result.kind === "page" ? "页面" : "功能"}</em>
-              <ArrowUpRight size={14} />
-            </button>
-          ))}
-        </div>
-        <footer>
-          <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
-          <span><kbd>Enter</kbd> 打开</span>
-          <span><kbd>Esc</kbd> 关闭</span>
-        </footer>
-      </section>
-    </div>
-  )
-}
-
 export function DesktopWorkspace({
   initialPageId,
   runtime = { phase: "starting" },
@@ -746,11 +682,10 @@ export function DesktopWorkspace({
   }))
   const [activePageId, setActivePageId] = useState<PageId>(initialPageId)
   const [collapsed, setCollapsed] = useState(false)
-  const [commandOpen, setCommandOpen] = useState(false)
   const [theme, setTheme] = useState<ThemeMode>("light")
-  const page = findProductPage(activePageId) ?? findProductPage("command-center")
+  const page = findProductPage(activePageId) ?? findProductPage("bilibili-followers")
   const [activeTabs, setActiveTabs] = useState<Partial<Record<PageId, string>>>({})
-  const [creationPageId, setCreationPageId] = useState<"platform-accounts" | "subjects" | undefined>()
+  const [creationPageId, setCreationPageId] = useState<"platform-accounts" | "subjects" | "bilibili-subjects" | "bilibili-followers" | "bilibili-live" | undefined>()
   const businessBridge = bridge ?? (typeof window !== "undefined" ? window.bmd : undefined)
 
   useEffect(() => {
@@ -758,19 +693,9 @@ export function DesktopWorkspace({
     if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme)
 
     const handleHashChange = (): void => setActivePageId(resolvePageId(window.location.hash))
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault()
-        setCommandOpen((open) => !open)
-      }
-      if (event.key === "Escape") setCommandOpen(false)
-    }
-
     window.addEventListener("hashchange", handleHashChange)
-    window.addEventListener("keydown", handleKeyDown)
     return () => {
       window.removeEventListener("hashchange", handleHashChange)
-      window.removeEventListener("keydown", handleKeyDown)
     }
   }, [])
 
@@ -791,6 +716,11 @@ export function DesktopWorkspace({
   }
 
   const businessPageId = page.id === "platform-accounts" || page.id === "subjects" ? page.id : undefined
+  const followerPage = page.id === "bilibili-followers"
+  const livePage = page.id === "bilibili-live"
+  const subjectPage = page.id === "bilibili-subjects"
+  const douyinPage = page.id === "douyin-auth"
+  const originalBusinessPage = subjectPage || followerPage || livePage || douyinPage
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -802,21 +732,71 @@ export function DesktopWorkspace({
         onToggle={() => setCollapsed((value) => !value)}
         runtime={runtime}
       />
-      <div className="desktop-stage">
-        <TopBar onOpenCommand={() => setCommandOpen(true)} onToggleTheme={toggleTheme} theme={theme} />
-        {businessPageId && businessBridge ? <BusinessSignalTape page={page} /> : <SignalTape />}
-        <div className="workspace-layout">
+      <div className={`desktop-stage ${originalBusinessPage ? "is-business-only" : ""}`}>
+        <TopBar onToggleTheme={toggleTheme} theme={theme} />
+        {!originalBusinessPage && ((businessPageId && businessBridge) ? <BusinessSignalTape page={page} /> : <SignalTape />)}
+        <div className={`workspace-layout ${originalBusinessPage ? "is-single-pane" : ""}`}>
           <main className="workspace-main">
-            <WorkspaceHeader
+            {!douyinPage && <WorkspaceHeader
               page={page}
-              onPrimaryAction={businessPageId ? () => setCreationPageId(businessPageId) : undefined}
-            />
-            <TabRail
+              onPrimaryAction={businessPageId
+                ? () => setCreationPageId(businessPageId)
+                : subjectPage
+                  ? () => setCreationPageId("bilibili-subjects")
+                : followerPage
+                  ? () => setCreationPageId("bilibili-followers")
+                  : livePage
+                    ? () => setCreationPageId("bilibili-live")
+                  : undefined}
+            />}
+            {followerPage && businessBridge && <ConnectedBilibiliAuthPanel bridge={businessBridge} />}
+            {!douyinPage && <TabRail
               page={page}
               activeTab={activeTab}
               onChange={(tab) => setActiveTabs((tabs) => ({ ...tabs, [page.id]: tab }))}
-            />
-            {businessPageId && businessBridge ? (
+            />}
+            {subjectPage && businessBridge ? (
+              <ConnectedBilibiliSubjectWorkspace
+                bridge={businessBridge}
+                view={activeTab === "用户工作台" ? "用户工作台" : "监控对象"}
+                creationOpen={creationPageId === "bilibili-subjects"}
+                onCloseCreation={() => setCreationPageId(undefined)}
+                onOpenWorkbench={() => setActiveTabs((tabs) => ({ ...tabs, [page.id]: "用户工作台" }))}
+                onBackToList={() => setActiveTabs((tabs) => ({ ...tabs, [page.id]: "监控对象" }))}
+              />
+            ) : followerPage && businessBridge ? (
+              <ConnectedBilibiliFollowerWorkspace
+                bridge={businessBridge}
+                view={activeTab === "趋势对比" ? "趋势对比" : "监控用户"}
+                creationOpen={creationPageId === "bilibili-followers"}
+                onCloseCreation={() => setCreationPageId(undefined)}
+              />
+            ) : livePage && businessBridge ? (
+              <ConnectedBilibiliLiveWorkspace
+                bridge={businessBridge}
+                view={
+                  activeTab === "趋势对比"
+                    ? "趋势对比"
+                    : activeTab === "状态事件"
+                      ? "状态事件"
+                      : activeTab === "观众榜单"
+                        ? "观众榜单"
+                        : activeTab === "实时弹幕"
+                          ? "实时弹幕"
+                          : activeTab === "直播场次"
+                            ? "直播场次"
+                            : activeTab === "数据中心"
+                              ? "数据中心"
+                              : activeTab === "场次分析"
+                                ? "场次分析"
+                          : "直播间"
+                }
+                creationOpen={creationPageId === "bilibili-live"}
+                onCloseCreation={() => setCreationPageId(undefined)}
+              />
+            ) : douyinPage && businessBridge ? (
+              <ConnectedDouyinAuthWorkspace bridge={businessBridge} />
+            ) : businessPageId && businessBridge ? (
               <ConnectedAccountSubjectWorkspace
                 bridge={businessBridge}
                 pageId={businessPageId}
@@ -829,7 +809,31 @@ export function DesktopWorkspace({
                 {page.id === "command-center" ? <CommandCenterContent page={page} /> : <DomainContent page={page} />}
               </>
             )}
-            {businessPageId && businessBridge ? (
+            {douyinPage && businessBridge ? (
+              <footer className="workspace-footer">
+                <span><ToneDot tone="mint" />本地抖音登录态 · SQLite v11</span>
+                <span>Web 会话与 OAuth 凭据独立加密保存</span>
+                <span>DOUYIN AUTH / 1.0</span>
+              </footer>
+            ) : subjectPage && businessBridge ? (
+              <footer className="workspace-footer">
+                <span><ToneDot tone="mint" />本地用户工作台 · SQLite v10</span>
+                <span>UID 自动绑定、聚合查询与布局持久化</span>
+                <span>SUBJECT / 1.0</span>
+              </footer>
+            ) : followerPage && businessBridge ? (
+              <footer className="workspace-footer">
+                <span><ToneDot tone="mint" />本地粉丝监控 · SQLite v3</span>
+                <span>真实 B站数据经 Python Worker 写入</span>
+                <span>FOLLOWER / 0.3</span>
+              </footer>
+            ) : livePage && businessBridge ? (
+              <footer className="workspace-footer">
+                <span><ToneDot tone="mint" />本地直播间、弹幕、场次与用户工作台 · SQLite v10</span>
+                <span>REST、WebSocket、查询和导出均为真实本地闭环</span>
+                <span>LIVE SESSION / 0.8</span>
+              </footer>
+            ) : businessPageId && businessBridge ? (
               <footer className="workspace-footer">
                 <span><ToneDot tone="mint" />本地控制面 · SQLite v2</span>
                 <span>查询状态由 React Query 驱动</span>
@@ -844,11 +848,10 @@ export function DesktopWorkspace({
             )}
           </main>
           {businessPageId && businessBridge
-            ? <AccountSubjectActivityRail page={page} />
-            : <ActivityRail page={page} />}
+              ? <AccountSubjectActivityRail page={page} />
+              : !originalBusinessPage && <ActivityRail page={page} />}
         </div>
       </div>
-      {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} onNavigate={navigate} />}
     </div>
     </QueryClientProvider>
   )

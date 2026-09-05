@@ -1,4 +1,4 @@
-import { dirname, isAbsolute, parse, resolve } from "node:path"
+import { isAbsolute, parse, resolve } from "node:path"
 
 interface DataDirectoryPaths {
   appPath: string
@@ -7,22 +7,29 @@ interface DataDirectoryPaths {
   overridePath?: string
 }
 
+interface PlaywrightBrowserPaths {
+  appPath: string
+  isPackaged: boolean
+  resourcesPath: string
+}
+
 function absolutePath(path: string): string {
   return isAbsolute(path) ? resolve(path) : resolve(process.cwd(), path)
 }
 
-function assertOutsideSystemDrive(path: string): string {
-  if (parse(path).root.toLowerCase() === "c:\\") {
-    throw new Error(`BiliMonitor data must not use the C drive: ${path}`)
+export function assertOutsideSystemDrive(path: string): string {
+  const resolvedPath = absolutePath(path)
+  if (parse(resolvedPath).root.toLowerCase() !== "d:\\") {
+    throw new Error(`BiliMonitor data must stay on the D drive: ${resolvedPath}`)
   }
-  return path
+  return resolvedPath
 }
 
 export function resolveDataDirectory(paths: DataDirectoryPaths): string {
   const dataDirectory = paths.overridePath
     ? absolutePath(paths.overridePath)
     : paths.isPackaged
-      ? resolve(dirname(paths.executablePath), "data")
+      ? resolve(parse(paths.executablePath).root, "BiliMonitor Desktop Data")
       : resolve(paths.appPath, "../../.local-data")
 
   return assertOutsideSystemDrive(dataDirectory)
@@ -30,6 +37,32 @@ export function resolveDataDirectory(paths: DataDirectoryPaths): string {
 
 export function resolveCoreEntry(mainDirectory: string): string {
   return resolve(mainDirectory, "core-process.js")
+}
+
+export function resolveRealtimeWorkerEntry(mainDirectory: string): string {
+  return resolve(mainDirectory, "realtime-worker.js")
+}
+
+export function resolveBrowserWorkerEntry(mainDirectory: string): string {
+  return resolve(mainDirectory, "browser-worker.js")
+}
+
+export function resolvePlaywrightBrowsersPath(paths: PlaywrightBrowserPaths): string {
+  const browsersPath = paths.isPackaged
+    ? resolve(paths.resourcesPath, "playwright-browsers")
+    : resolve(paths.appPath, "../../.tools/playwright-browsers")
+  return assertOutsideSystemDrive(browsersPath)
+}
+
+export function resolvePackagedPythonWorker(resourcesPath: string): {
+  executable: string
+  workerPath: string
+} {
+  const workerPath = assertOutsideSystemDrive(resolve(resourcesPath, "python-worker"))
+  return {
+    executable: resolve(workerPath, "bmd-python-worker.exe"),
+    workerPath
+  }
 }
 
 export function resolvePreloadEntry(mainDirectory: string): string {

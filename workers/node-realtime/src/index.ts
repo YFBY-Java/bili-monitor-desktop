@@ -1,2 +1,5 @@
+export * from "./bilibili-danmaku-event"
+export * from "./bilibili-danmaku-connection"
+export * from "./bilibili-danmaku-packet"
 export * from "./realtime-client"
 export * from "./reconnect-policy"

@@ -56,7 +56,7 @@ async function handleMessage(message: unknown): Promise<void> {
       setImmediate(() => process.exit(0))
       return
     }
-    const result = dispatchBusinessRequest(runtime, request)
+    const result = await dispatchBusinessRequest(runtime, request)
     parentPort.postMessage(response(request, result.responseType, result.payload))
   } catch (error) {
     const details = applicationErrorDetails(error)

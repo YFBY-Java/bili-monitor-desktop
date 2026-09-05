@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bilimonitor.local/schemas/bilibili-follower.v1.schema.json",
+  "title": "BiliMonitor local Bilibili follower contracts v1",
+  "$defs": {
+    "BilibiliUid": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
+    "ObjectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objectId", "relativePath", "sha256", "sizeBytes", "mediaType"],
+      "properties": {
+        "objectId": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "relativePath": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "sizeBytes": { "type": "integer", "minimum": 0 },
+        "mediaType": { "type": "string", "minLength": 1 }
+      }
+    },
+    "BilibiliFollowerPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capturedAt", "followerCount", "sourceEndpoint"],
+      "properties": {
+        "capturedAt": { "type": "string", "format": "date-time" },
+        "followerCount": { "type": "integer", "minimum": 0 },
+        "followingCount": { "type": "integer", "minimum": 0 },
+        "sourceEndpoint": { "type": "string", "minLength": 1 }
+      }
+    },
+    "BilibiliFollowerMonitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "mid", "nickname", "profileUrl", "monitorStatus", "intervalSeconds", "recentTrend", "version"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "mid": { "$ref": "#/$defs/BilibiliUid" },
+        "nickname": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "avatarUrl": { "type": "string", "format": "uri" },
+        "profileUrl": { "type": "string", "format": "uri" },
+        "currentFollowerCount": { "type": "integer", "minimum": 0 },
+        "followingCount": { "type": "integer", "minimum": 0 },
+        "deltaSincePrevious": { "type": "integer" },
+        "growthRateSincePrevious": { "type": "number" },
+        "lastSnapshotAt": { "type": "string", "format": "date-time" },
+        "lastSuccessAt": { "type": "string", "format": "date-time" },
+        "nextCollectAt": { "type": "string", "format": "date-time" },
+        "monitorStatus": { "enum": ["ACTIVE", "PAUSED"] },
+        "intervalSeconds": { "type": "integer", "minimum": 1, "maximum": 2592000 },
+        "lastErrorType": { "type": "string", "minLength": 1 },
+        "lastErrorMessage": { "type": "string", "minLength": 1 },
+        "lastErrorAt": { "type": "string", "format": "date-time" },
+        "sourceEndpoint": { "type": "string", "minLength": 1 },
+        "recentTrend": { "type": "array", "items": { "$ref": "#/$defs/BilibiliFollowerPoint" } },
+        "version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "AddBilibiliFollowerMonitorInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mid"],
+      "properties": {
+        "mid": { "$ref": "#/$defs/BilibiliUid" },
+        "intervalSeconds": { "type": "integer", "minimum": 1, "maximum": 2592000, "default": 3600 }
+      }
+    },
+    "UpdateBilibiliFollowerMonitorSettingsInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["userId", "intervalSeconds"],
+      "properties": {
+        "userId": { "type": "string", "format": "uuid" },
+        "intervalSeconds": { "type": "integer", "minimum": 1, "maximum": 2592000 }
+      }
+    },
+    "BilibiliFollowerFetchRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["taskId", "attempt", "leaseId", "mid"],
+      "properties": {
+        "taskId": { "type": "string", "minLength": 1 },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "leaseId": { "type": "string", "minLength": 1 },
+        "mid": { "$ref": "#/$defs/BilibiliUid" }
+      }
+    },
+    "BilibiliFollowerFetchedSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mid", "profileUrl", "followerCount", "fetchedAt", "sourceEndpoint", "evidenceObject", "statusCode", "durationMs"],
+      "properties": {
+        "mid": { "$ref": "#/$defs/BilibiliUid" },
+        "nickname": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "avatarUrl": { "type": "string", "format": "uri" },
+        "profileUrl": { "type": "string", "format": "uri" },
+        "followerCount": { "type": "integer", "minimum": 0 },
+        "followingCount": { "type": "integer", "minimum": 0 },
+        "fetchedAt": { "type": "string", "format": "date-time" },
+        "sourceEndpoint": { "enum": ["x/web-interface/card", "x/relation/stat"] },
+        "evidenceObject": { "$ref": "#/$defs/ObjectRef" },
+        "statusCode": { "type": "integer", "minimum": 1 },
+        "durationMs": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

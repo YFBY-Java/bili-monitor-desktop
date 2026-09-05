@@ -2,8 +2,8 @@
 
 ## 硬约束
 
-- 仓库必须位于非 C 盘。
-- Node、pnpm、缓存、临时文件、Playwright 浏览器、Python venv、模型缓存、构建物和运行数据不得写入 C 盘。
+- 仓库和所有可变运行数据固定在 D 盘。
+- Node、pnpm、缓存、临时文件、Playwright 浏览器、Python venv、构建物、运行数据和导出只接受 `D:\`；C、E 与 UNC 路径均拒绝。
 - 项目不安装 Cargo、Rustup、LLVM、MSVC 或其他本地原生编译工具链。
 - 不直接调用全局 `node`、`pnpm`、`python`；统一通过仓库脚本激活环境。
 
@@ -19,7 +19,7 @@ bootstrap.cmd
 2. 下载并校验 Node 24 LTS 到 `.tools/node-v*-win-x64`。
 3. 安装 pnpm 到 `.tools/pnpm-runtime`。
 4. 使用 E 盘 Python 创建 D 盘 `.venv`，拒绝 C 盘 base runtime。
-5. 从 `requirements.lock` 安装 PydanticAI、LangGraph、Scrapy、DuckDB/PyArrow 与测试工具，只接受预编译 wheel。
+5. 从 `workers/python/requirements.lock` 安装当前 B站 HTTP、抖音 OAuth 与测试所需依赖，只接受预编译 wheel；未实现的 AI、Agent 和分析依赖不安装。
 6. 根据 `pnpm-lock.yaml` 安装 Electron、React、Crawlee、Playwright 等依赖。
 7. 下载 Chromium、Headless Shell、FFmpeg 和 Winldd 到 `.tools/playwright-browsers`。
 
@@ -45,6 +45,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -UpdateLock
 apps/desktop/out/       Electron 构建
 release/                安装包
 ```
+
+安装版的可变数据位于 `D:\BiliMonitor Desktop Data`。抖音 OAuth 配置模板在其 `config` 子目录；填入一次明文配置并重启后，应用会使用 Electron `safeStorage` 迁移为本机加密文件并移除明文。
 
 `scripts/activate-environment.ps1` 会设置 `BMD_DATA_DIR`、`PLAYWRIGHT_BROWSERS_PATH`、`PIP_CACHE_DIR`、`ELECTRON_CACHE`、`HF_HOME`、`TEMP` 等变量。路径测试会逐项验证。
 

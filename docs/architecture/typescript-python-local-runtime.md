@@ -7,8 +7,8 @@ flowchart LR
   UI[React Renderer] -->|narrow preload IPC| MAIN[Electron Main]
   MAIN -->|utility messaging| CORE[TypeScript Local Core]
   CORE --> SQLITE[(SQLite WAL)]
-  CORE -->|NDJSON stdio| PY[Python Agent / HTTP / Data Worker]
-  CORE -->|NDJSON stdio| BROWSER[Node Crawlee / Playwright Worker]
+  CORE -->|NDJSON stdio| PY[Python HTTP / OAuth Worker]
+  CORE -->|NDJSON stdio| BROWSER[Node Playwright Auth Worker]
   CORE -->|NDJSON stdio| REALTIME[Node WebSocket Worker]
   PY --> PARQUET[Arrow / Parquet / DuckDB]
   CORE --> CAS[Object CAS]
@@ -26,8 +26,8 @@ flowchart LR
 | Control DB | `packages/storage` | SQLite WAL、迁移、任务/事件/审批/Outbox |
 | Task Engine | `packages/task-engine` | 显式状态机、Attempt、Retry、Approval、恢复 |
 | Contracts | `packages/contracts` | JSON Schema、Zod DTO、消息元数据和版本 |
-| Python Worker | `workers/python` | PydanticAI/LangGraph、Scrapy、DuckDB/PyArrow、MCP |
-| Browser Worker | `workers/node-browser` | Crawlee/Playwright、登录 Profile、证据采集 |
+| Python Worker | `workers/python` | B站 HTTP 接口与抖音 OAuth；当前不承担 Agent 业务 |
+| Browser Worker | `workers/node-browser` | Playwright Web 登录、完整会话捕获与全新 Context 复验 |
 | Realtime Worker | `workers/node-realtime` | WebSocket、心跳、重连、乱序缓冲 |
 
 ## 消息协议
@@ -43,15 +43,15 @@ flowchart LR
 - Arrow/Parquet：直播弹幕、指标快照和其他高频不可变事实。
 - DuckDB：查询、压实、导出和派生聚合，不拥有业务事务。
 - 向量/全文索引：属于可重建派生数据，后续由 Knowledge Worker 实现。
-- Secret：后续接 Windows Credential Manager；数据库仅保存 `SecretRef`。
+- Secret：B站登录凭据使用 Electron `safeStorage` 封装本机随机密钥，数据库只保存 AES-256-GCM 密文；后续其他 Secret 也必须通过同一窄化边界接入。
 
-## Agent 体系
+## 当前范围约束
 
-Agent Definition/Version 是产品实体；一次 Run 由 Core 持有稳定状态，Python Worker 保存框架 Checkpoint。PydanticAI 负责默认 Agent、结构化输出和工具调用；LangGraph 只在需要图状态、分叉、长暂停和 time-travel 时使用。所有 Tool/MCP 调用必须经过 Core Policy、预算、出站预览和 Approval，副作用以 Effect ID 去重，崩溃后不自动重复执行。
+当前阶段只复刻原 BiliMonitor 已形成闭环的业务。AI、Agent、通用采集任务和平台扩展均不进入导航，也不作为本轮完成项；预留的进程与表结构不等于产品功能。
 
-## 爬虫体系
+## 当前采集体系
 
-- 静态/接口优先 Scrapy + httpx；浏览器登录、JS 页面和截图使用 Crawlee/Playwright。
+- B站公开/认证接口使用 Python httpx；抖音浏览器登录与截图使用 Node Playwright。
 - 直播长连接独立放入 Realtime Worker，不与 UI 或 HTTP Crawler 共用崩溃域。
 - Frontier、限频、账号 Lease、重试和证据引用由 Core 持久化；Worker 只执行有界任务。
 - 浏览器 Worker 默认只允许公共 HTTPS 目标，Profile、浏览器和缓存都在 D 盘数据目录。
@@ -61,6 +61,6 @@ Agent Definition/Version 是产品实体；一次 Run 由 Core 持有稳定状�
 
 基础运行时已实现桌面 UI、D 盘环境、TypeScript Local Core、SQLite WAL、Durable Task 状态机、跨语言 Envelope、Python Worker、Crawlee/Playwright Worker、Realtime Worker 和完整质量脚本。
 
-Slice 1 的第一个纵切已落地：SQLite schema v2 持久化 `PlatformAccount`、`Subject`、账号绑定和 `follower.snapshot` 策略；Core 在同一事务内提交业务状态与 Outbox；Main/Preload 仅暴露 5 个版本化、经 Zod 校验的业务调用；React Query 驱动账号和对象的加载、错误、空态、创建和刷新状态。业务契约同时发布 Zod 与 JSON Schema v1，并明确排除 Cookie、Token 等 Secret 材料。
+当前已落地原项目的 B站用户工作台、粉丝监控、扫码认证、直播间 REST、WebSocket 弹幕、榜单、场次、事实查询、洞察与导出，以及抖音本人 Web/OAuth 登录态。SQLite schema 为 v11；Python 负责 HTTP/OAuth，Node Worker 负责 B站实时连接和抖音 Playwright，TypeScript Core 独占业务状态与数据库。Electron `safeStorage` 只在 Main 中封装 32 字节本机密钥，Core 使用 AES-256-GCM 加密 B站与抖音凭据；Renderer 仅在用户明确查看时经窄化 IPC 获取原文。
 
-尚未实现的 Slice 1 能力包括 Windows Secret Vault、B站扫码状态机、Bilibili Connector、Object CAS、Parser/Normalizer、粉丝快照与趋势。其余页面在逐个完成纵切前仍保留演示 ViewModel。
+所有 Worker 都通过 `NDJSON stdio` 通信，不开放业务端口。只有非认证采集原始响应进入 SHA-256 Object CAS；Cookie、CSRF、Token 和浏览器存储不进入 CAS、日志或 Outbox。自动测试与公开接口 smoke 之外，B站真人扫码和抖音真人扫码/官方授权仍需人工完成，文档不得把它们标记为已验收。

@@ -1,8 +1,8 @@
-# BiliMonitor Desktop 本地原生业务与技术实现规格
+# BiliMonitor Desktop 本地原生业务与技术实现规格（历史探索稿）
 
-> 历史规格提示：本文的业务分解仍然有效，但其中 Rust Core、Named Pipe 和 Protobuf 实现已由 [ADR-0006](../adr/0006-typescript-python-local-runtime.md) 取代。当前实现映射为 TypeScript Local Core、Electron utility messaging、JSON Schema/Zod/Pydantic、Node Realtime Worker 与 Python Data Worker；请以 [当前运行时蓝图](typescript-python-local-runtime.md) 为技术准绳。
+> 非当前实现：本文包含尚未开发的 AI、Agent、19 个工作区以及已废弃的 Rust 方案，仅保留作历史探索，不能据此判断功能是否完成。当前开发只以 [原 B/S 业务复刻基线](../implementation/original-bs-business-parity.md) 和 [TypeScript/Python 当前运行时](typescript-python-local-runtime.md) 为准。
 
-> 状态：Implementation Baseline
+> 状态：Historical / Not Implemented
 >
 > 本文是当前 UI、业务和功能的权威技术实现基线。系统是无业务服务端的 Windows 本地客户端；允许由客户端直接管理多个本地 Worker，但不部署本地服务集群。
 

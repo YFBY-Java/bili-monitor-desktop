@@ -8,28 +8,8 @@ import {
 } from "./product-model"
 
 describe("product information architecture", () => {
-  it("exposes every first-release workspace exactly once", () => {
-    const expectedPageIds = [
-      "command-center",
-      "subjects",
-      "campaigns",
-      "live-radar",
-      "data-assets",
-      "agent-studio",
-      "agent-runs",
-      "knowledge",
-      "models",
-      "evaluations",
-      "platform-accounts",
-      "connectors",
-      "identity",
-      "tools",
-      "workflows",
-      "extensions",
-      "approvals",
-      "observability",
-      "settings"
-    ]
+  it("exposes only business workspaces that are backed by a real local implementation", () => {
+    const expectedPageIds = ["bilibili-subjects", "bilibili-followers", "bilibili-live", "douyin-auth"]
     const navigationPageIds = navigationGroups.flatMap((group) =>
       group.items.map((item) => item.pageId)
     )
@@ -39,33 +19,78 @@ describe("product information architecture", () => {
     expect(productPages.map((page) => page.id)).toEqual(expectedPageIds)
   })
 
-  it("keeps the implemented BiliMonitor business capabilities visible", () => {
+  it("does not label pending original-project migrations as implemented capabilities", () => {
     const capabilityIds = businessCapabilities.map((capability) => capability.id)
 
-    expect(capabilityIds).toEqual(
-      expect.arrayContaining([
-        "bilibili-qr-auth",
-        "douyin-oauth-auth",
-        "douyin-web-auth",
-        "follower-monitor",
-        "subject-workbench",
-        "live-room-monitor",
-        "live-danmaku",
-        "live-rank",
-        "live-session-insight",
-        "live-session-export",
-        "collect-task",
-        "raw-payload",
-        "analytics",
-        "ai-analysis",
-        "identity-link"
-      ])
-    )
+    expect(capabilityIds).toEqual(["subject-workbench", "follower-monitor", "live-room-monitor", "douyin-self-auth"])
   })
 
   it("maps every capability to a real product page", () => {
     for (const capability of businessCapabilities) {
       expect(findProductPage(capability.pageId)?.id).toBe(capability.pageId)
     }
+  })
+
+  it("exposes the original B/S follower monitor as a first-class workspace", () => {
+    const page = findProductPage("bilibili-followers")
+
+    expect(page).toMatchObject({
+      label: "B站粉丝监控",
+      primaryAction: "添加监控用户",
+      tabs: ["监控用户", "趋势对比"]
+    })
+    expect(
+      navigationGroups.flatMap((group) => group.items).find((item) =>
+        item.pageId === "bilibili-followers"
+      )
+    ).toMatchObject({ label: "粉丝监控", icon: "users" })
+    expect(businessCapabilities.find((capability) => capability.id === "follower-monitor")).toMatchObject({
+      pageId: "bilibili-followers",
+      implementation: "Python httpx Worker + Local Core scheduler + SQLite v3"
+    })
+  })
+
+  it("exposes the original UID-first user workbench as a first-class workspace", () => {
+    expect(findProductPage("bilibili-subjects")).toMatchObject({
+      label: "B站用户监控",
+      primaryAction: "创建用户工作台",
+      tabs: ["监控对象", "用户工作台"]
+    })
+    expect(businessCapabilities.find((capability) => capability.id === "subject-workbench"))
+      .toMatchObject({ pageId: "bilibili-subjects" })
+  })
+
+  it("exposes the original B/S live REST monitor as a first-class workspace", () => {
+    expect(findProductPage("bilibili-live")).toMatchObject({
+      label: "B站直播间监控",
+      primaryAction: "添加直播间",
+      tabs: [
+        "直播间", "趋势对比", "状态事件", "实时弹幕", "观众榜单",
+        "直播场次", "数据中心", "场次分析"
+      ]
+    })
+    expect(
+      navigationGroups.flatMap((group) => group.items).find((item) =>
+        item.pageId === "bilibili-live"
+      )
+    ).toMatchObject({ label: "直播间监控", icon: "radio", badge: "REST" })
+    expect(businessCapabilities.find((capability) => capability.id === "live-room-monitor"))
+      .toMatchObject({
+        pageId: "bilibili-live",
+        implementation: "Python httpx Worker + Node WebSocket Worker + Local Core 场次/主体状态 + SQLite v10"
+      })
+  })
+
+  it("exposes the original independent Douyin Web and OAuth auth workspace", () => {
+    expect(findProductPage("douyin-auth")).toMatchObject({
+      label: "我的抖音登录态",
+      primaryAction: "开始 Web 扫码",
+      tabs: []
+    })
+    expect(
+      navigationGroups.flatMap((group) => group.items).find((item) => item.pageId === "douyin-auth")
+    ).toMatchObject({ label: "抖音登录态", icon: "key" })
+    expect(businessCapabilities.find((capability) => capability.id === "douyin-self-auth"))
+      .toMatchObject({ pageId: "douyin-auth" })
   })
 })
