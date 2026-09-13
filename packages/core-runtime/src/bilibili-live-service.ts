@@ -106,10 +106,13 @@ class LiveFetchFailure extends Error {
 
 export class BilibiliLiveMonitorService {
   private readonly nextRequestAt = new Map<string, number>()
+  private readonly lifetime = new AbortController()
+  private stopPromise: Promise<void> | undefined
 
   constructor(private readonly options: BilibiliLiveMonitorServiceOptions) {}
 
   async addRoom(input: AddBilibiliLiveRoomInput): Promise<BilibiliLiveRoom> {
+    this.ensureRunning()
     const parsed = AddBilibiliLiveRoomInputSchema.parse(input)
     const intervalSeconds = parsed.intervalSeconds ?? 300
     const taskId = this.options.idFactory()
@@ -119,9 +122,11 @@ export class BilibiliLiveMonitorService {
         ? await this.fetchByRoomIdWithDetails(parsed.roomId, taskId)
         : await this.fetchByUidWithDetails(parsed.uid as string, taskId)
     } catch (error) {
+      this.ensureRunning()
       if (error instanceof LiveFetchFailure) throw this.applicationError(error)
       throw error
     }
+    this.ensureRunning()
     const existing = this.options.database.findBilibiliLiveRoomByUid(snapshot.uid)
       ?? this.options.database.findBilibiliLiveRoomByRoomId(snapshot.roomId)
     const monitorId = existing?.monitorId ?? this.options.idFactory()
@@ -151,6 +156,7 @@ export class BilibiliLiveMonitorService {
   }
 
   updateStatus(roomMonitorId: string, enabled: boolean): BilibiliLiveRoom {
+    this.ensureRunning()
     const input = UpdateBilibiliLiveRoomStatusInputSchema.parse({ roomMonitorId, enabled })
     this.requireStoredRoom(input.roomMonitorId)
     const timestamp = this.options.now().toISOString()
@@ -164,6 +170,7 @@ export class BilibiliLiveMonitorService {
   }
 
   updateInterval(roomMonitorId: string, intervalSeconds: number): BilibiliLiveRoom {
+    this.ensureRunning()
     const input = UpdateBilibiliLiveRoomSettingsInputSchema.parse({ roomMonitorId, intervalSeconds })
     this.requireStoredRoom(input.roomMonitorId)
     const timestamp = this.options.now().toISOString()
@@ -180,6 +187,7 @@ export class BilibiliLiveMonitorService {
   }
 
   async refreshNow(roomMonitorId: string): Promise<BilibiliLiveCollectResult> {
+    this.ensureRunning()
     const room = this.requireStoredRoom(roomMonitorId)
     const taskId = this.options.idFactory()
     try {
@@ -194,6 +202,7 @@ export class BilibiliLiveMonitorService {
       )
       return this.collectResult(room.monitorId, snapshot, true, applied ? "ok" : "ignored-stale")
     } catch (error) {
+      this.ensureRunning()
       if (!(error instanceof LiveFetchFailure)) throw error
       this.markFailure(room, error)
       throw this.applicationError(error)
@@ -201,6 +210,7 @@ export class BilibiliLiveMonitorService {
   }
 
   async collectDueRooms(): Promise<BilibiliLiveCollectResult[]> {
+    if (this.lifetime.signal.aborted) return []
     const rooms = this.options.database.findDueBilibiliLiveRooms(
       this.options.now().toISOString(),
       Math.max(1, this.options.dueBatchSize ?? 20)
@@ -208,12 +218,15 @@ export class BilibiliLiveMonitorService {
     const results: BilibiliLiveCollectResult[] = []
     const batchSize = Math.min(30, Math.max(1, this.options.statusBatchSize ?? 30))
     for (let start = 0; start < rooms.length; start += batchSize) {
+      if (this.lifetime.signal.aborted) break
       const batchRooms = rooms.slice(start, start + batchSize)
       const taskId = this.options.idFactory()
       let batch: BilibiliLiveFetchedStatusBatch
       try {
         batch = await this.fetchStatusBatch(batchRooms.map((room) => room.uid), taskId)
       } catch (error) {
+        // Local cancellation is not a platform failure and must preserve the saved due time.
+        if (this.lifetime.signal.aborted) break
         if (!(error instanceof LiveFetchFailure)) throw error
         for (const room of batchRooms) {
           this.markFailure(room, error)
@@ -222,6 +235,7 @@ export class BilibiliLiveMonitorService {
         continue
       }
       for (const room of batchRooms) {
+        if (this.lifetime.signal.aborted) break
         const found = batch.snapshots.find((snapshot) => snapshot.uid === room.uid)
         if (!found) {
           const error = new LiveFetchFailure("BILIBILI_UNKNOWN_ERROR",
@@ -315,6 +329,7 @@ export class BilibiliLiveMonitorService {
   }
 
   deleteRoom(roomMonitorId: string): void {
+    this.ensureRunning()
     const room = this.requireStoredRoom(roomMonitorId)
     const timestamp = this.options.now().toISOString()
     this.options.database.deleteBilibiliLiveRoom(
@@ -328,8 +343,12 @@ export class BilibiliLiveMonitorService {
     )
   }
 
-  async stop(): Promise<void> {
-    await this.options.source.stop?.()
+  stop(): Promise<void> {
+    if (!this.stopPromise) {
+      this.lifetime.abort()
+      this.stopPromise = Promise.resolve().then(() => this.options.source.stop?.())
+    }
+    return this.stopPromise
   }
 
   private async fetchByRoomIdWithDetails(roomId: string, taskId: string): Promise<ResolvedLiveSnapshot> {
@@ -419,16 +438,21 @@ export class BilibiliLiveMonitorService {
   ): Promise<T> {
     const maxAttempts = Math.max(1, this.options.maxAttempts ?? 3)
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      this.ensureRunning()
       await this.acquireRateLimit(endpoint)
+      this.ensureRunning()
       const startedAt = performance.now()
       let result: T
       try {
-        result = validate(await operation({
+        const response = await operation({
           taskId,
           attempt,
           leaseId: this.options.idFactory()
-        }))
+        })
+        this.ensureRunning()
+        result = validate(response)
       } catch (error) {
+        this.ensureRunning()
         const details = this.sourceError(error)
         const sourceEndpoint = BilibiliLiveEndpointSchema.safeParse(
           typeof error === "object" && error !== null && "endpoint" in error ? error.endpoint : undefined
@@ -453,7 +477,7 @@ export class BilibiliLiveMonitorService {
         const backoff = Math.max(100, this.options.retryBackoffMs ?? 1_500)
           * (2 ** Math.min(attempt - 1, 4))
         const jitter = Math.floor((this.options.jitter?.() ?? Math.random()) * 300)
-        await (this.options.sleep ?? delay)(backoff + jitter)
+        await this.wait(backoff + jitter)
         continue
       }
       this.options.database.insertBilibiliApiCall({
@@ -471,7 +495,31 @@ export class BilibiliLiveMonitorService {
     const now = this.options.now().getTime()
     const allowedAt = Math.max(now, this.nextRequestAt.get(endpoint) ?? now)
     this.nextRequestAt.set(endpoint, allowedAt + minimum)
-    if (allowedAt > now) await (this.options.sleep ?? delay)(allowedAt - now)
+    if (allowedAt > now) await this.wait(allowedAt - now)
+  }
+
+  private ensureRunning(): void {
+    if (this.lifetime.signal.aborted) {
+      throw new CoreApplicationError("CORE_STOPPED", "本地直播采集已停止。", false)
+    }
+  }
+
+  private async wait(milliseconds: number): Promise<void> {
+    this.ensureRunning()
+    if (this.options.sleep) {
+      await this.options.sleep(milliseconds)
+    } else {
+      await new Promise<void>(resolveWait => {
+        const finish = () => {
+          clearTimeout(timer)
+          this.lifetime.signal.removeEventListener("abort", finish)
+          resolveWait()
+        }
+        const timer = setTimeout(finish, milliseconds)
+        this.lifetime.signal.addEventListener("abort", finish, { once: true })
+      })
+    }
+    this.ensureRunning()
   }
 
   private enrichStatusSnapshot(
@@ -519,6 +567,7 @@ export class BilibiliLiveMonitorService {
     taskId: string,
     topic: string
   ): boolean {
+    this.ensureRunning()
     // Match the original snapshot application transaction: room, events, snapshot and session.
     return this.options.database.runInTransaction(() => {
       const initializing = topic === "bilibili.live.monitor-added"
@@ -618,6 +667,7 @@ export class BilibiliLiveMonitorService {
   }
 
   private markFailure(room: StoredBilibiliLiveRoomMonitor, error: unknown): void {
+    this.ensureRunning()
     const details = this.sourceError(error)
     const errorAt = this.options.now().toISOString()
     const backoffSeconds = Math.max(60, Math.min(room.intervalSeconds, 900))
@@ -863,8 +913,4 @@ function chinaStartOfDay(now: Date): Date {
 
 function firstText(primary: string | undefined, fallback: string | undefined): string | undefined {
   return hasLiveSnapshotText(primary) ? primary : fallback
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }

@@ -145,9 +145,8 @@ export class LocalCoreRuntime {
   private liveScheduler: NodeJS.Timeout | undefined
   private liveDanmakuScheduler: NodeJS.Timeout | undefined
   private followerCollectionRunning = false
-  private liveCollectionRunning = false
   private schedulerEnabled = true
-  private schedulerDelayMs = 60_000
+  private liveSchedulerDelayMs = 1_000
   private followerSchedulerDelayMs = 1_000
 
   static async start(options: LocalCoreRuntimeOptions): Promise<LocalCoreRuntime> {
@@ -267,12 +266,12 @@ export class LocalCoreRuntime {
       normalized.now().toISOString()
     )
     runtime.schedulerEnabled = options.schedulerEnabled ?? true
-    runtime.schedulerDelayMs = Math.max(1_000, options.schedulerDelayMs ?? 60_000)
+    runtime.liveSchedulerDelayMs = Math.max(1_000, options.schedulerDelayMs ?? 1_000)
     // The original follower page checked due users every second. Core owns that timer locally.
     runtime.followerSchedulerDelayMs = Math.max(1_000, options.schedulerDelayMs ?? 1_000)
     if (runtime.schedulerEnabled) {
       runtime.startFollowerScheduler()
-      runtime.startLiveScheduler()
+      runtime.startLiveScheduler(0)
       runtime.startLiveDanmakuScheduler()
     }
     return runtime
@@ -660,14 +659,13 @@ export class LocalCoreRuntime {
     if (this.stopped) return
     this.stopped = true
     if (this.followerScheduler) clearInterval(this.followerScheduler)
-    if (this.liveScheduler) clearInterval(this.liveScheduler)
+    if (this.liveScheduler) clearTimeout(this.liveScheduler)
     if (this.liveDanmakuScheduler) clearInterval(this.liveDanmakuScheduler)
     this.followerScheduler = undefined
     this.liveScheduler = undefined
     this.liveDanmakuScheduler = undefined
     // Disable writes/queued upgrades before waiting for any worker's shutdown.
-    await Promise.all([this.followers.stop?.(), this.auth.stop(), this.liveDanmaku.stopAll()])
-    await this.live.stop()
+    await Promise.all([this.followers.stop?.(), this.auth.stop(), this.liveDanmaku.stopAll(), this.live.stop()])
     await this.liveRanks.stop()
     await this.douyinAuth.stop()
     this.database.close()
@@ -688,14 +686,19 @@ export class LocalCoreRuntime {
     this.followerScheduler.unref()
   }
 
-  private startLiveScheduler(): void {
-    this.liveScheduler = setInterval(() => {
-      if (this.liveCollectionRunning || this.stopped) return
-      this.liveCollectionRunning = true
-      void this.live.collectDueRooms().finally(() => {
-        this.liveCollectionRunning = false
+  private startLiveScheduler(delayMs = this.liveSchedulerDelayMs): void {
+    // Original @Scheduled(fixedDelay): do not count time spent fetching toward the next delay.
+    this.liveScheduler = setTimeout(() => {
+      this.liveScheduler = undefined
+      if (this.stopped) return
+      void this.live.collectDueRooms().catch(() => {
+        if (!this.stopped) console.warn(JSON.stringify({
+          event: "bilibili.live.scheduler-failed", code: "BILIBILI_LIVE_SCHEDULER_FAILED"
+        }))
+      }).finally(() => {
+        if (!this.stopped) this.startLiveScheduler()
       })
-    }, this.schedulerDelayMs)
+    }, delayMs)
     this.liveScheduler.unref()
   }
 
