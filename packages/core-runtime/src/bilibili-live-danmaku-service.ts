@@ -145,6 +145,11 @@ export class BilibiliLiveDanmakuService {
   private readonly maxConnections: number
   private readonly bucketSeconds: number
   private readonly recentMessageLimit: number
+  private stopped = false
+  private stopPromise: Promise<void> | undefined
+  private operationTail: Promise<void> = Promise.resolve()
+  private pendingOperations = 0
+  private autoSync: Promise<void> | undefined
 
   constructor(private readonly options: BilibiliLiveDanmakuServiceOptions) {
     this.maxConnections = Math.max(1, options.maxConnections ?? 10)
@@ -154,22 +159,28 @@ export class BilibiliLiveDanmakuService {
   }
 
   start(input: StartBilibiliLiveDanmakuInput): Promise<BilibiliLiveDanmakuStatus> {
-    return this.startInternal(StartBilibiliLiveDanmakuInputSchema.parse(input), false)
+    const parsed = StartBilibiliLiveDanmakuInputSchema.parse(input)
+    return this.enqueue(() => this.startInternal(parsed, false))
   }
 
-  async stop(roomMonitorId: string): Promise<BilibiliLiveDanmakuStatus> {
+  stop(roomMonitorId: string): Promise<BilibiliLiveDanmakuStatus> {
+    return this.enqueue(() => this.stopInternal(roomMonitorId))
+  }
+
+  private async stopInternal(roomMonitorId: string): Promise<BilibiliLiveDanmakuStatus> {
     const handle = this.connections.get(roomMonitorId)
     if (!handle) return this.status(roomMonitorId)
     handle.status = "STOPPED"
     this.connections.delete(roomMonitorId)
-    await this.options.source.stop(handle.sessionId)
-    const timestamp = this.options.now().toISOString()
-    this.options.database.markBilibiliLiveDanmakuSessionStatus(
-      handle.sessionId,
-      "STOPPED",
-      timestamp
-    )
-    return this.toStatus(roomMonitorId, handle, false)
+    try {
+      const timestamp = this.options.now().toISOString()
+      this.options.database.markBilibiliLiveDanmakuSessionStatus(handle.sessionId, "STOPPED", timestamp)
+      return this.toStatus(roomMonitorId, handle, false)
+    } finally {
+      // A persistence/projection failure must not leave an untracked socket running.
+      await this.options.source.stop(handle.sessionId)
+      this.ensureRunning()
+    }
   }
 
   status(roomMonitorId: string): BilibiliLiveDanmakuStatus {
@@ -247,7 +258,15 @@ export class BilibiliLiveDanmakuService {
     )
   }
 
-  async syncAutoConnections(): Promise<void> {
+  syncAutoConnections(): Promise<void> {
+    if (this.autoSync) return this.autoSync
+    const pending = this.enqueue(() => this.syncAutoConnectionsInternal())
+    this.autoSync = pending
+    void pending.then(() => { this.autoSync = undefined }, () => { this.autoSync = undefined })
+    return pending
+  }
+
+  private async syncAutoConnectionsInternal(): Promise<void> {
     const desired = this.options.database.listBilibiliLiveDanmakuAutoStartRoomIds(
       this.maxConnections
     )
@@ -255,46 +274,103 @@ export class BilibiliLiveDanmakuService {
     const autoCapacity = Math.max(0, this.maxConnections - manualCount)
     const targets = new Set(desired.slice(0, autoCapacity))
     for (const handle of [...this.connections.values()]) {
-      if (handle.autoManaged && !targets.has(handle.monitorId)) await this.stop(handle.monitorId)
+      if (handle.autoManaged && !targets.has(handle.monitorId)) await this.stopInternal(handle.monitorId)
     }
     for (const roomMonitorId of targets) {
       if (this.connections.has(roomMonitorId)) continue
       try {
         await this.startInternal({ roomMonitorId, protocolVersion: -1 }, true)
       } catch {
+        this.ensureRunning()
+        this.reportConnectionFailure("auto-start", roomMonitorId)
         // The next scheduler pass retries original auto-managed rooms.
       }
     }
   }
 
-  async reconnectAnonymousConnections(): Promise<void> {
+  reconnectAnonymousConnectionsAsync(): void {
+    if (this.stopped) return
+    void this.reconnectAnonymousConnections().catch(() => {
+      if (!this.stopped) this.reportConnectionFailure("login-upgrade")
+    })
+  }
+
+  reconnectAnonymousConnections(): Promise<void> {
+    return this.enqueue(() => this.reconnectAnonymousConnectionsInternal())
+  }
+
+  private async reconnectAnonymousConnectionsInternal(): Promise<void> {
     const anonymous = [...this.connections.values()]
-      .filter((handle) => handle.authMode === "ANONYMOUS")
-      .map((handle) => ({
-        monitorId: handle.monitorId,
-        protocolVersion: handle.protocolVersion,
-        autoManaged: handle.autoManaged
-      }))
+      .filter((handle) => ACTIVE_STATUSES.has(handle.status) && handle.authMode === "ANONYMOUS")
     for (const candidate of anonymous) {
-      await this.stop(candidate.monitorId)
-      await this.startInternal({
-        roomMonitorId: candidate.monitorId,
-        ...(candidate.protocolVersion === undefined
-          ? {}
-          : { protocolVersion: candidate.protocolVersion })
-      }, candidate.autoManaged)
+      this.ensureRunning()
+      if (this.connections.get(candidate.monitorId) !== candidate) continue
+      try {
+        await this.stopInternal(candidate.monitorId)
+        await this.startInternal({
+          roomMonitorId: candidate.monitorId,
+          ...(candidate.protocolVersion === undefined ? {} : { protocolVersion: candidate.protocolVersion })
+        }, candidate.autoManaged)
+      } catch {
+        this.ensureRunning()
+        this.reportConnectionFailure("login-upgrade", candidate.monitorId)
+      }
     }
   }
 
-  async stopAll(): Promise<void> {
-    for (const monitorId of [...this.connections.keys()]) await this.stop(monitorId)
-    await this.options.source.stopAll()
+  stopAll(): Promise<void> {
+    if (!this.stopPromise) {
+      this.stopped = true
+      const handles = [...this.connections.values()]
+      this.connections.clear()
+      this.displayNameCache.clear()
+      this.stopPromise = (async () => {
+        try {
+          const now = this.options.now().toISOString()
+          for (const handle of handles) {
+            handle.status = "STOPPED"
+            this.options.database.markBilibiliLiveDanmakuSessionStatus(handle.sessionId, "STOPPED", now)
+          }
+        } finally {
+          await this.options.source.stopAll()
+        }
+      })()
+    }
+    return this.stopPromise
+  }
+
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.stopped) return Promise.reject(new CoreApplicationError("CORE_STOPPED", "本地弹幕服务已停止。", false))
+    if (this.pendingOperations >= 100) return Promise.reject(new CoreApplicationError(
+      "BILIBILI_DANMAKU_BUSY", "弹幕操作繁忙，请稍后重试。", true
+    ))
+    this.pendingOperations++
+    const pending = this.operationTail.then(() => { this.ensureRunning(); return operation() })
+    this.operationTail = pending.then(() => { this.pendingOperations-- }, () => { this.pendingOperations-- })
+    return pending
+  }
+
+  private ensureRunning(): void {
+    if (this.stopped) throw new CoreApplicationError("CORE_STOPPED", "本地弹幕服务已停止。", false)
+  }
+
+  private ensureCurrent(handle: ConnectionHandle): void {
+    this.ensureRunning()
+    if (this.connections.get(handle.monitorId) !== handle) {
+      throw new CoreApplicationError("BILIBILI_DANMAKU_CONNECTION_ENDED", "弹幕连接已结束，请重新连接。", true)
+    }
+  }
+
+  private reportConnectionFailure(operation: string, monitorId?: string): void {
+    console.warn(JSON.stringify({ event: "bilibili.danmaku.background-failed", operation,
+      code: "BILIBILI_DANMAKU_BACKGROUND_FAILED", ...(monitorId ? { monitorId } : {}) }))
   }
 
   private async startInternal(
     input: StartBilibiliLiveDanmakuInput,
     autoManaged: boolean
   ): Promise<BilibiliLiveDanmakuStatus> {
+    this.ensureRunning()
     const existing = this.connections.get(input.roomMonitorId)
     if (existing && ACTIVE_STATUSES.has(existing.status)) {
       if (
@@ -302,7 +378,7 @@ export class BilibiliLiveDanmakuService {
         || input.protocolVersion === -1
         || input.protocolVersion === existing.protocolVersion
       ) return this.status(input.roomMonitorId)
-      await this.stop(input.roomMonitorId)
+      await this.stopInternal(input.roomMonitorId)
     }
     if (this.connections.size >= this.maxConnections) {
       throw new CoreApplicationError(
@@ -338,6 +414,7 @@ export class BilibiliLiveDanmakuService {
     this.connections.set(input.roomMonitorId, handle)
     try {
       const credential = await this.credential()
+      this.ensureCurrent(handle)
       const result = await this.options.source.start({
         connectionId: sessionId,
         roomId: room.roomId,
@@ -346,6 +423,7 @@ export class BilibiliLiveDanmakuService {
           : { protocolVersion: input.protocolVersion }),
         ...(credential ? { credential } : {})
       }, (event) => this.applySourceEvent(handle, event))
+      this.ensureCurrent(handle)
       handle.connectHost = result.connectHost
       handle.protocolVersion = result.protocolVersion
       handle.authMode = result.authMode
@@ -360,6 +438,7 @@ export class BilibiliLiveDanmakuService {
       this.options.database.markBilibiliLiveDanmakuSessionConnected(sessionId, connectedAt)
       return this.status(input.roomMonitorId)
     } catch (error) {
+      this.ensureCurrent(handle)
       this.connections.delete(input.roomMonitorId)
       const timestamp = this.options.now().toISOString()
       const normalized = normalizeError(error)
@@ -374,7 +453,7 @@ export class BilibiliLiveDanmakuService {
   }
 
   private applySourceEvent(handle: ConnectionHandle, event: BilibiliLiveDanmakuSourceEvent): void {
-    if (this.connections.get(handle.monitorId) !== handle) return
+    if (this.stopped || this.connections.get(handle.monitorId) !== handle) return
     if (event.type === "heartbeat") {
       handle.lastHeartbeatAt = event.receivedAt
       this.options.database.markBilibiliLiveDanmakuSessionHeartbeat(
@@ -431,7 +510,7 @@ export class BilibiliLiveDanmakuService {
   }
 
   private applyCommandEvent(handle: ConnectionHandle, parsed: NormalizedBilibiliDanmakuEvent): void {
-    if (this.connections.get(handle.monitorId) !== handle) return
+    if (this.stopped || this.connections.get(handle.monitorId) !== handle) return
     handle.receiptOrdinal += 1
     const room = this.options.database.findBilibiliLiveRoomById(handle.monitorId)
     try {

@@ -9,7 +9,8 @@ import type { RealtimeWorkerTransport } from "./ndjson-realtime-worker-transport
 
 export class BilibiliLiveDanmakuWorkerSource implements BilibiliLiveDanmakuSource {
   private readonly unsubscribe = new Map<string, () => void>()
-  private transportStarted = false
+  private stopped = false
+  private stopPromise: Promise<void> | undefined
 
   constructor(private readonly transport: RealtimeWorkerTransport) {}
 
@@ -17,13 +18,13 @@ export class BilibiliLiveDanmakuWorkerSource implements BilibiliLiveDanmakuSourc
     input: BilibiliLiveDanmakuSourceStartInput,
     onEvent: (event: BilibiliLiveDanmakuSourceEvent) => void
   ): Promise<BilibiliLiveDanmakuSourceStartResult> {
+    if (this.stopped) throw Object.assign(new Error("Realtime Worker stopped."), { code: "REALTIME_WORKER_STOPPED", retryable: false })
     this.unsubscribe.get(input.connectionId)?.()
     this.unsubscribe.set(input.connectionId, this.transport.subscribe(
       input.connectionId,
       (event) => onEvent(parseSourceEvent(event))
     ))
     try {
-      this.transportStarted = true
       const result = await this.transport.request("start", {
         connectionId: input.connectionId,
         roomId: input.roomId,
@@ -39,6 +40,7 @@ export class BilibiliLiveDanmakuWorkerSource implements BilibiliLiveDanmakuSourc
   }
 
   async stop(connectionId: string): Promise<void> {
+    if (this.stopped) return
     try {
       await this.transport.request("stop", { connectionId })
     } finally {
@@ -47,15 +49,16 @@ export class BilibiliLiveDanmakuWorkerSource implements BilibiliLiveDanmakuSourc
     }
   }
 
-  async stopAll(): Promise<void> {
-    try {
-      if (this.transportStarted) await this.transport.request("stopAll", {})
-    } finally {
+  stopAll(): Promise<void> {
+    if (!this.stopPromise) {
+      this.stopped = true
       for (const unsubscribe of this.unsubscribe.values()) unsubscribe()
       this.unsubscribe.clear()
-      await this.transport.stop()
-      this.transportStarted = false
+      // Terminal shutdown must work even when the child no longer answers NDJSON.
+      // Closing/killing the owned process also releases every socket it owns.
+      this.stopPromise = this.transport.stop()
     }
+    return this.stopPromise
   }
 }
 

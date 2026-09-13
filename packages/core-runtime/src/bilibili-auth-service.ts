@@ -91,6 +91,7 @@ export interface BilibiliAuthServiceOptions {
   qrExpireSeconds?: number
   pollIntervalMillis?: number
   sessionCleanupDelayMs?: number
+  onCredentialActivated?: () => void
 }
 
 export class BilibiliAuthService {
@@ -369,6 +370,13 @@ export class BilibiliAuthService {
       account: nav.account
     })
     session.completed = completed
+    try {
+      this.options.onCredentialActivated?.()
+    } catch {
+      // Activation is already committed; post-commit listeners cannot undo login.
+      console.warn(JSON.stringify({ event: "bilibili.auth.activation-listener-failed", credentialId,
+        code: "BILIBILI_AUTH_LISTENER_FAILED" }))
+    }
     return completed
   }
 

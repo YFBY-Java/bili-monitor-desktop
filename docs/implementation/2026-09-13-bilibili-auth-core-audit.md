@@ -32,6 +32,6 @@
 
 ## 下一项及未完成边界
 
-原 `BilibiliCredentialActivatedListener` 在凭据激活事务提交后调度匿名弹幕连接升级；客户端目前在SUCCESS轮询返回后发起重连。下一项继续对照原DanmakuService/测试，逐项验证重复成功回读、并发升级、当前连接筛选、协议保持、部分失败、撤销与退出窗口，不从本轮登录存储测试推断连接业务已完成。
+本审计结束时，客户端仍在SUCCESS轮询返回后发起重连。后续已按原 `BilibiliCredentialActivatedListener`、DanmakuService/测试补齐首次激活、连接筛选、协议/归属、部分失败、撤销与退出窗口，独立证据见 [登录与弹幕联动审计](2026-09-13-auth-danmaku-link-audit.md)。不从本轮登录存储测试推断后续连接及原生业务全部完成。
 
 本轮没有实现Cookie自动刷新（原项目同样未完成），没有将其伪装为已实现功能。独立HTTP MockTransport、内存Worker替身及手工桥接不等同于真人扫码、真实HTTP或原生Electron端到端验收；这些仍在M07/M18台账中。

@@ -177,7 +177,8 @@ export class LocalCoreRuntime {
       source: authSource,
       cipher: new CredentialCipher(credentialKey),
       now: normalized.now,
-      idFactory: normalized.idFactory
+      idFactory: normalized.idFactory,
+      onCredentialActivated: () => liveDanmaku.reconnectAnonymousConnectionsAsync()
     })
     const liveSessions = new BilibiliLiveSessionService({
       database,
@@ -381,13 +382,9 @@ export class LocalCoreRuntime {
     return this.auth.startQrLogin()
   }
 
-  async pollBilibiliQrLogin(loginId: string): Promise<BilibiliQrLoginStatus> {
+  pollBilibiliQrLogin(loginId: string): Promise<BilibiliQrLoginStatus> {
     this.ensureRunning()
-    const result = await this.auth.pollQrLogin(loginId)
-    if (result.status === "SUCCESS") {
-      void this.liveDanmaku.reconnectAnonymousConnections().catch(() => undefined)
-    }
-    return result
+    return this.auth.pollQrLogin(loginId)
   }
 
   getBilibiliAuthStatus(): Promise<BilibiliAuthStatus> {
@@ -668,11 +665,10 @@ export class LocalCoreRuntime {
     this.followerScheduler = undefined
     this.liveScheduler = undefined
     this.liveDanmakuScheduler = undefined
-    // Propagate both cancellation boundaries before awaiting either worker's shutdown.
-    await Promise.all([this.followers.stop?.(), this.auth.stop()])
+    // Disable writes/queued upgrades before waiting for any worker's shutdown.
+    await Promise.all([this.followers.stop?.(), this.auth.stop(), this.liveDanmaku.stopAll()])
     await this.live.stop()
     await this.liveRanks.stop()
-    await this.liveDanmaku.stopAll()
     await this.douyinAuth.stop()
     this.database.close()
   }

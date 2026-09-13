@@ -28,6 +28,8 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
   private readonly pending = new Map<string, PendingRequest>()
   private readonly listeners = new Map<string, Set<(event: unknown) => void>>()
   private stderrTail = ""
+  private stopped = false
+  private stopPromise: Promise<void> | undefined
 
   constructor(private readonly options: NdjsonRealtimeWorkerTransportOptions) {}
 
@@ -58,23 +60,35 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
     }
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise
+    this.stopped = true
     const child = this.child
     this.child = undefined
-    if (!child) return
-    child.stdin.end()
-    if (child.exitCode === null) child.kill()
-    await new Promise<void>((resolve) => {
-      if (child.exitCode !== null) return resolve()
-      const timeout = setTimeout(resolve, 1_500)
-      child.once("exit", () => {
-        clearTimeout(timeout)
-        resolve()
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout)
+      pending.reject(stoppedError())
+    }
+    this.pending.clear()
+    this.listeners.clear()
+    this.stopPromise = (async () => {
+      if (!child) return
+      child.stdin.end()
+      if (child.exitCode === null) child.kill()
+      await new Promise<void>((resolveStop) => {
+        if (child.exitCode !== null) return resolveStop()
+        const timeout = setTimeout(resolveStop, 1_500)
+        child.once("exit", () => {
+          clearTimeout(timeout)
+          resolveStop()
+        })
       })
-    })
+    })()
+    return this.stopPromise
   }
 
   private ensureStarted(): ChildProcessWithoutNullStreams {
+    if (this.stopped) throw stoppedError()
     if (this.child && this.child.exitCode === null) return this.child
     this.stderrTail = ""
     const child = spawn(this.options.nodeExecutable, [this.options.workerEntry], {
@@ -91,7 +105,7 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
       this.stderrTail = `${this.stderrTail}${chunk.toString()}`.slice(-4_096)
     })
     const lines = createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY })
-    lines.on("line", (line) => this.handleLine(line))
+    lines.on("line", (line) => { if (this.child === child) this.handleLine(line) })
     child.once("exit", (code) => this.handleExit(child, code))
     child.once("error", (error) => this.handleExit(child, null, error))
     return child
@@ -159,6 +173,10 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
     }
     this.listeners.clear()
   }
+}
+
+function stoppedError(): Error & { code: string; retryable: boolean } {
+  return Object.assign(new Error("Realtime Worker stopped."), { code: "REALTIME_WORKER_STOPPED", retryable: false })
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
