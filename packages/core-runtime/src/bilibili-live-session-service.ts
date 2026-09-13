@@ -33,7 +33,7 @@ const FACT_KINDS = new Set(["DANMAKU", "GIFT", "SUPER_CHAT", "GUARD_BUY"])
 const PAID_KINDS = new Set(["GIFT", "SUPER_CHAT", "GUARD_BUY"])
 
 export interface BilibiliLiveRestObservation {
-  liveStatus: number
+  liveStatus: number | null
   liveTime: string | null
   title: string | null
   fetchedAt: string
@@ -56,6 +56,7 @@ export class BilibiliLiveSessionService {
       && active.endSignalAt
       && observation.fetchedAt < active.endSignalAt
     ) return active
+    if (observation.liveStatus === null) return active
     if (observation.liveStatus !== 1) {
       if (active) this.options.database.updateBilibiliLiveSession(
         this.close(active, observation.fetchedAt, "REST_STATUS", observation.title)
@@ -401,32 +402,14 @@ export class BilibiliLiveSessionService {
     if (event.kind === "PREPARING") return this.observePreparing(room, event)
     const active = this.options.database.findActiveBilibiliLiveSession(room.monitorId)
     if (FACT_KINDS.has(event.kind)) {
-      if (!active) {
-        const historical = this.options.database.findBilibiliLiveSessionByEventTime(
-          room.monitorId,
-          event.occurredAt
-        )
-        return historical ?? this.open(
-          room,
-          event.receivedAt,
-          event.occurredAt,
-          null,
-          `activity:${event.occurredAt}`,
-          "WS_EVENT_ACTIVITY",
-          room.title
-        )
-      }
-      if (event.occurredAt < active.startedAt) {
+      // Offline chat/gifts are not proof of a broadcast, even if a connection retained liveStatus=1.
+      if (!active || event.occurredAt < active.startedAt) {
         return this.options.database.findBilibiliLiveSessionByEventTime(
           room.monitorId,
           event.occurredAt
-        ) ?? active
+        )
       }
-      if (
-        active.state === "END_PENDING"
-        && active.endSignalAt
-        && event.occurredAt <= active.endSignalAt
-      ) return active
+      if (active.state === "END_PENDING") return active
       const resumed = this.resume(active, event.receivedAt, null, null, false)
       this.options.database.updateBilibiliLiveSession(resumed)
       return resumed

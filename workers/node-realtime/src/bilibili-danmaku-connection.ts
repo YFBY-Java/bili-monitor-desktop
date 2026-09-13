@@ -2,12 +2,13 @@ import { createHash } from "node:crypto"
 
 import WebSocket, { type RawData } from "ws"
 
-import { parseBilibiliDanmakuEvent, type ParsedBilibiliDanmakuEvent } from "./bilibili-danmaku-event"
+import { parseBilibiliDanmakuEvents, type ParsedBilibiliDanmakuEvent } from "./bilibili-danmaku-event"
 import {
   BILIBILI_DANMAKU_OPERATION,
   buildBilibiliDanmakuAuthPacket,
   buildBilibiliDanmakuHeartbeatPacket,
-  parseBilibiliDanmakuPackets
+  parseBilibiliDanmakuPackets,
+  type ParsedBilibiliDanmakuPacket
 } from "./bilibili-danmaku-packet"
 
 const USER_AGENT = "BiliMonitorDesktop/0.1 (+local Bilibili live danmaku monitor)"
@@ -283,9 +284,14 @@ async function authenticateSocket(input: {
         protocolVersion: input.protocolVersion
       }))
     })
-    socket.on("message", (raw) => {
+    socket.on("message", (raw, isBinary) => {
       const receivedAt = new Date().toISOString()
-      for (const packet of parseBilibiliDanmakuPackets(rawDataBuffer(raw))) {
+      const bytes = rawDataBuffer(raw)
+      const packets: ParsedBilibiliDanmakuPacket[] = isBinary === false
+        ? [{ operation: BILIBILI_DANMAKU_OPERATION.COMMAND, protocolVersion: 0, sequence: 0,
+          bodyText: bytes.toString("utf8") }]
+        : parseBilibiliDanmakuPackets(bytes)
+      for (const packet of packets) {
         if (packet.operation === BILIBILI_DANMAKU_OPERATION.AUTH_REPLY) {
           if (!successfulAuthReply(packet.bodyText)) {
             fail(withCode("Bilibili danmaku authentication failed.", "BILIBILI_DANMAKU_AUTH_FAILED"))
@@ -309,8 +315,9 @@ async function authenticateSocket(input: {
           continue
         }
         if (packet.operation !== BILIBILI_DANMAKU_OPERATION.COMMAND || !packet.bodyText) continue
-        const event = parseBilibiliDanmakuEvent(packet.bodyText, receivedAt)
-        if (event) input.onEvent({ type: "command", event, receivedAt })
+        for (const event of parseBilibiliDanmakuEvents(packet.bodyText, receivedAt)) {
+          input.onEvent({ type: "command", event, receivedAt })
+        }
       }
     })
     socket.once("error", fail)

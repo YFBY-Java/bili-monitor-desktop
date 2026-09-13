@@ -1,3 +1,5 @@
+import { decodeBilibiliGiftV2 } from "./bilibili-gift-v2"
+
 export type BilibiliDanmakuEventKind =
   | "DANMAKU"
   | "GIFT"
@@ -46,6 +48,37 @@ export interface ParsedBilibiliDanmakuEvent {
 }
 
 export function parseBilibiliDanmakuEvent(
+  rawJson: string,
+  receivedAt: string
+): ParsedBilibiliDanmakuEvent | undefined {
+  return parseBilibiliDanmakuEvents(rawJson, receivedAt)[0]
+}
+
+// Transport consumers must use the batch API: V2 can carry several gifts.
+export function parseBilibiliDanmakuEvents(rawJson: string, receivedAt: string): ParsedBilibiliDanmakuEvent[] {
+  if (rawJson.includes("SEND_GIFT_V2")) {
+    try {
+      const root: unknown = JSON.parse(rawJson)
+      if (isRecord(root) && text(root.cmd)?.split(":", 1)[0] === "SEND_GIFT_V2") {
+        const command = String(root.cmd)
+        const safeReceivedAt = validIso(receivedAt) ?? new Date().toISOString()
+        const encoded = record(root.data).pb
+        if (typeof encoded !== "string") return []
+        return decodeBilibiliGiftV2(encoded).map(data => {
+          const decoded = { ...root, data }
+          return gift(decoded, command, rawJson, safeReceivedAt, eventTime(decoded, safeReceivedAt))
+        })
+      }
+    } catch {
+      // Invalid V2 broadcasts produce no partial or invented facts. Never log identity payloads.
+      return []
+    }
+  }
+  const event = parseSingleBilibiliDanmakuEvent(rawJson, receivedAt)
+  return event ? [event] : []
+}
+
+function parseSingleBilibiliDanmakuEvent(
   rawJson: string,
   receivedAt: string
 ): ParsedBilibiliDanmakuEvent | undefined {
@@ -260,10 +293,11 @@ function base(
   occurredAt: string
 ): ParsedBilibiliDanmakuEvent {
   const normalized = command.split(":", 1)[0] ?? command
+  const keyCommand = normalized === "SEND_GIFT_V2" ? "SEND_GIFT" : normalized
   return {
     command,
     kind,
-    ...(sourceEventId ? { sourceEventId, eventKey: `${normalized}:${sourceEventId}` } : {}),
+    ...(sourceEventId ? { sourceEventId, eventKey: `${keyCommand}:${sourceEventId}` } : {}),
     occurredAt,
     receivedAt,
     giftDelta: 0,
@@ -340,6 +374,7 @@ function firstPositiveId(value: Record<string, unknown>, ...keys: string[]): str
 }
 
 function positiveId(value: unknown): string | undefined {
+  if (typeof value === "string" && /^[1-9]\d*$/.test(value.trim())) return value.trim()
   const parsed = number(value)
   return parsed !== undefined && Number.isSafeInteger(parsed) && parsed > 0 ? String(parsed) : undefined
 }
