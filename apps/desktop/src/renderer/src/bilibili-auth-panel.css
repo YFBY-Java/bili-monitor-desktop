@@ -1,0 +1,25 @@
+/* Original Bilibili auth operations, scoped to preserve the rest of the workbench. */
+.bilibili-auth-panel .auth-panel-copy p,
+.bilibili-auth-panel .auth-account-card span,
+.auth-modal .auth-qr-status p,
+.auth-modal .auth-qr-status span { font-size: 13px; }
+.bilibili-auth-panel .auth-panel-actions .button,
+.bilibili-auth-panel .auth-revoke-button,
+.bilibili-credential-drawer .button { min-height: 40px; font-size: 13px; }
+.auth-feedback { margin: 12px 0 0; color: var(--mint); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.auth-feedback.auth-action-error { color: var(--coral); }
+.bilibili-auth-panel > .auth-feedback { grid-column: 1 / -1; }
+.bilibili-credential-field-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.bilibili-credential-field-head strong { min-width: 0; color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
+.bilibili-credential-field-head .button { flex-shrink: 0; }
+.bilibili-credential-drawer .credential-field pre { font-size: 13px; }
+.bilibili-credential-drawer .credential-warning { font-size: 13px; }
+.auth-qr-account { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-soft); }
+.auth-qr-account > div { display: grid; gap: 4px; min-width: 0; }
+.auth-qr-account strong { font-size: 14px; }
+.auth-qr-account span { color: var(--muted); font-size: 13px; }
+.auth-modal { max-height: calc(100dvh - 48px); overflow-y: auto; }
+@media (max-width: 1000px) {
+  .bilibili-auth-panel { grid-template-columns: minmax(0, 1fr); }
+  .bilibili-auth-panel .auth-panel-actions { justify-content: flex-start; }
+}

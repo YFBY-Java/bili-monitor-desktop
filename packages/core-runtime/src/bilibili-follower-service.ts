@@ -48,17 +48,28 @@ export interface BilibiliFollowerMonitorServiceOptions {
 
 export class BilibiliFollowerMonitorService {
   private readonly nextRequestAt = new Map<string, number>()
+  private readonly lifetime = new AbortController()
+  private stopPromise: Promise<void> | undefined
 
   constructor(private readonly options: BilibiliFollowerMonitorServiceOptions) {}
 
   async resolveDisplayName(mid: string): Promise<string | undefined> {
+    this.ensureRunning()
     if (!/^[1-9]\d*$/.test(mid)) return undefined
-    const snapshot = await this.fetchCardWithRetry(mid, this.options.idFactory())
+    let snapshot: BilibiliFollowerFetchedSnapshot
+    try {
+      snapshot = await this.fetchCardWithRetry(mid, this.options.idFactory())
+    } catch (error) {
+      this.ensureRunning()
+      throw error
+    }
+    this.ensureRunning()
     const nickname = snapshot.nickname?.trim()
     return nickname || undefined
   }
 
   async addUser(input: AddBilibiliFollowerMonitorInput): Promise<BilibiliFollowerMonitor> {
+    this.ensureRunning()
     const parsed = AddBilibiliFollowerMonitorInputSchema.parse(input)
     const intervalSeconds = parsed.intervalSeconds ?? 3600
     const proposedMonitorId = this.options.idFactory()
@@ -67,8 +78,10 @@ export class BilibiliFollowerMonitorService {
     try {
       snapshot = await this.fetchCardWithRetry(parsed.mid, taskId)
     } catch (error) {
+      this.ensureRunning()
       throw this.applicationError(error)
     }
+    this.ensureRunning()
     // Another add may have completed while the remote card was being fetched.
     const existing = this.options.database.findBilibiliFollowerMonitorByMid(parsed.mid)
     const monitorId = existing?.monitorId ?? proposedMonitorId
@@ -164,15 +177,18 @@ export class BilibiliFollowerMonitorService {
   }
 
   async refreshNow(userId: string): Promise<BilibiliFollowerCollectResult> {
+    this.ensureRunning()
     const user = this.requireStoredUser(userId)
     const taskId = this.options.idFactory()
     let snapshot: BilibiliFollowerFetchedSnapshot
     try {
       snapshot = await this.fetchForExistingUser(user, taskId)
     } catch (error) {
+      this.ensureRunning()
       this.markFailure(user, error)
       throw this.applicationError(error)
     }
+    this.ensureRunning()
     this.persistSnapshot(user, snapshot, taskId)
     return BilibiliFollowerCollectResultSchema.parse({
       userId: user.monitorId,
@@ -186,15 +202,18 @@ export class BilibiliFollowerMonitorService {
   }
 
   async collectDueUsers(): Promise<BilibiliFollowerCollectResult[]> {
+    if (this.lifetime.signal.aborted) return []
     const users = this.options.database.findDueBilibiliFollowerMonitors(
       this.options.now().toISOString(),
       Math.max(1, this.options.dueBatchSize ?? 10)
     )
     const results: BilibiliFollowerCollectResult[] = []
     for (const user of users) {
+      if (this.lifetime.signal.aborted) break
       const taskId = this.options.idFactory()
       try {
         const snapshot = await this.fetchForExistingUser(user, taskId)
+        this.ensureRunning()
         this.persistSnapshot(user, snapshot, taskId)
         results.push(BilibiliFollowerCollectResultSchema.parse({
           userId: user.monitorId,
@@ -206,6 +225,8 @@ export class BilibiliFollowerMonitorService {
           message: "ok"
         }))
       } catch (error) {
+        // Local shutdown is not a platform failure and must not alter the next due time.
+        if (this.lifetime.signal.aborted) break
         this.markFailure(user, error)
         const details = this.sourceError(error)
         results.push(BilibiliFollowerCollectResultSchema.parse({
@@ -223,8 +244,12 @@ export class BilibiliFollowerMonitorService {
     return results
   }
 
-  async stop(): Promise<void> {
-    await this.options.source.stop?.()
+  stop(): Promise<void> {
+    if (!this.stopPromise) {
+      this.lifetime.abort()
+      this.stopPromise = Promise.resolve().then(() => this.options.source.stop?.())
+    }
+    return this.stopPromise
   }
 
   deleteUser(userId: string): void {
@@ -346,6 +371,7 @@ export class BilibiliFollowerMonitorService {
     try {
       return await this.fetchCardWithRetry(user.mid, taskId)
     } catch (error) {
+      this.ensureRunning()
       const details = this.sourceError(error)
       if (!["BILIBILI_PARSE_ERROR", "BILIBILI_NETWORK_ERROR", "BILIBILI_SERVER_ERROR"].includes(details.code)) {
         throw error
@@ -377,7 +403,9 @@ export class BilibiliFollowerMonitorService {
     const maxAttempts = Math.max(1, this.options.maxAttempts ?? 3)
     let lastError: unknown
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      this.ensureRunning()
       await this.acquireRateLimit(endpoint)
+      this.ensureRunning()
       const startedAt = performance.now()
       try {
         const snapshot = await operation({
@@ -386,6 +414,7 @@ export class BilibiliFollowerMonitorService {
           leaseId: this.options.idFactory(),
           mid
         })
+        this.ensureRunning()
         const parsed = BilibiliFollowerFetchedSnapshotSchema.parse(snapshot)
         this.options.database.insertBilibiliApiCall({
           callId: this.options.idFactory(),
@@ -405,6 +434,7 @@ export class BilibiliFollowerMonitorService {
         })
         return parsed
       } catch (error) {
+        this.ensureRunning()
         lastError = error
         const details = this.sourceError(error)
         this.options.database.insertBilibiliApiCall({
@@ -426,7 +456,7 @@ export class BilibiliFollowerMonitorService {
         const backoff = Math.max(100, this.options.retryBackoffMs ?? 1_500)
           * (2 ** Math.min(attempt - 1, 4))
         const jitter = Math.floor((this.options.jitter?.() ?? Math.random()) * 300)
-        await (this.options.sleep ?? delay)(backoff + jitter)
+        await this.wait(backoff + jitter)
       }
     }
     throw lastError instanceof Error ? lastError : new Error(String(lastError))
@@ -439,8 +469,33 @@ export class BilibiliFollowerMonitorService {
     // Reserve before awaiting, so simultaneous callers cannot share the same slot.
     this.nextRequestAt.set(endpoint, allowedAt + minimum)
     if (allowedAt > now) {
-      await (this.options.sleep ?? delay)(allowedAt - now)
+      await this.wait(allowedAt - now)
     }
+  }
+
+  private ensureRunning(): void {
+    if (this.lifetime.signal.aborted) {
+      throw new CoreApplicationError("CORE_STOPPED", "本地粉丝采集已停止。", false)
+    }
+  }
+
+  private async wait(milliseconds: number): Promise<void> {
+    this.ensureRunning()
+    if (this.options.sleep) {
+      await this.options.sleep(milliseconds)
+    } else {
+      // Cancel our own timers immediately; stop() also closes the source's in-flight I/O.
+      await new Promise<void>(resolveWait => {
+        const finish = () => {
+          clearTimeout(timer)
+          this.lifetime.signal.removeEventListener("abort", finish)
+          resolveWait()
+        }
+        const timer = setTimeout(finish, milliseconds)
+        this.lifetime.signal.addEventListener("abort", finish, { once: true })
+      })
+    }
+    this.ensureRunning()
   }
 
   private markFailure(user: StoredBilibiliFollowerMonitor, error: unknown): void {
@@ -557,8 +612,4 @@ export class BilibiliFollowerMonitorService {
       createdAt: timestamp
     }
   }
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
