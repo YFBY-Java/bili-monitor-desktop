@@ -36,6 +36,7 @@ const client = new QueryClient({ defaultOptions: { queries: { retry: false, stal
 let releaseAction = (): void => undefined
 const fixture = {
   actionError: "", listError: "", trendError: "", summaryError: "", holdAction: false,
+  addResultIndex: undefined as number | undefined,
   calls: [] as string[], addInputs: [] as AddBilibiliLiveRoomInput[], missingTrendIds: [] as string[],
   sessionRequests: [] as ListBilibiliLiveSessionsInput[], sessionEventIds: [] as string[],
   sessionInsightIds: [] as string[],
@@ -51,6 +52,9 @@ const fixture = {
   release: () => releaseAction(),
   updateFirst: (intervalSeconds: number) => {
     rooms = rooms.map((room, index) => index === 0 ? { ...room, intervalSeconds } : room)
+  },
+  updateRoom: (index: number, values: Partial<BilibiliLiveRoom>) => {
+    rooms = rooms.map((room, roomIndex) => roomIndex === index ? { ...room, ...values } : room)
   },
   missingHeat: () => {
     rooms = rooms.map((room) => ({ ...room, recentTrend: room.recentTrend.map((point, index) => {
@@ -89,6 +93,7 @@ bridge.bilibiliLive = {
   add: async (input) => {
     fixture.addInputs.push(input)
     await action("add")
+    if (fixture.addResultIndex !== undefined) return rooms[fixture.addResultIndex]!
     const room: BilibiliLiveRoom = { ...rooms[0]!, id: crypto.randomUUID(), roomId: input.roomId ?? "999",
       uid: input.uid ?? "99", uname: `新主播${rooms.length + 1}`, intervalSeconds: input.intervalSeconds ?? 300 }
     rooms = [...rooms, room]
@@ -161,7 +166,7 @@ bridge.bilibiliLive = {
 function Fixture() {
   const [view, setView] = useState<BilibiliLiveView>("直播间")
   const [creationOpen, setCreationOpen] = useState(false)
-  return <QueryClientProvider client={client}><main className="theme-light" style={{ padding: 24 }}>
+  return <QueryClientProvider client={client}><main className="theme-light" style={{ padding: 24, minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }}>
     <nav aria-label="测试页面导航">
     <button onClick={() => setView("直播间")}>查看直播间</button>
     <button onClick={() => setView("趋势对比")}>查看趋势</button>

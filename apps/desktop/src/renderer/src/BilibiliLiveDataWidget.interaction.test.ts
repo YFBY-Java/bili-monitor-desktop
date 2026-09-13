@@ -100,15 +100,15 @@ describe("shared original live data widget in real desktop pages", () => {
 
   it("exposes the same three modes in live-room details and isolates room selection", async () => {
     await page.getByRole("button", { name: "查看直播间", exact: true }).click()
-    await page.getByRole("button", { name: "展开直播数据", exact: true }).first().click()
+    await page.getByRole("region", { name: "合成房间1房间详情" }).waitFor()
     await page.getByText("房间一消息59-0", { exact: true }).waitFor()
     await page.getByRole("tab", { name: "大航海 舰长" }).click()
     await page.getByRole("tab", { name: "陪伴榜", exact: true }).click()
     expect(await page.locator(".subject-rank-list > div").first().innerText()).toContain("365 天")
-    await page.getByRole("button", { name: "展开直播数据", exact: true }).click()
+    await page.getByRole("button", { name: "展开合成房间2的详情", exact: true }).click()
     await page.getByText("房间二消息59-0", { exact: true }).waitFor()
     expect(await page.getByText("房间一消息59-0", { exact: true }).count()).toBe(0)
-    await page.getByRole("button", { name: "收起直播数据", exact: true }).click()
+    await page.getByRole("button", { name: "收起合成房间2的详情", exact: true }).click()
     expect(await page.getByRole("tablist", { name: "直播间数据视图" }).count()).toBe(0)
   })
 

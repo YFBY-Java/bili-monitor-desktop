@@ -20,22 +20,20 @@ import type {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Activity,
-  Clock3,
   Crown,
   Download,
-  ExternalLink,
   Pause,
   Play,
   Plus,
   Radio,
   RefreshCcw,
-  Trash2,
   TrendingUp,
   UsersRound,
   X
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, type FormEvent, type JSX, type ReactNode } from "react"
 import { ConnectedBilibiliLiveDataWidget } from "./ConnectedBilibiliLiveDataWidget"
+import { BilibiliLiveMonitorPanel, useLiveMonitorPanel } from "./BilibiliLiveMonitorPanel"
 
 export type BilibiliLiveView =
   | "直播间"
@@ -53,6 +51,7 @@ export interface BilibiliLiveWorkspacePresentationProps {
   view: BilibiliLiveView
   creationOpen: boolean
   rooms: BilibiliLiveRoom[]
+  roomsRevision?: number
   summary?: BilibiliLiveSummary
   events: BilibiliLiveStatusEvent[]
   trends: BilibiliLiveRoomTrend[]
@@ -86,12 +85,12 @@ export interface BilibiliLiveWorkspacePresentationProps {
   trendPending?: boolean
   trendError?: string
   onReloadTrends?: () => Promise<unknown>
-  onAdd: (input: AddBilibiliLiveRoomInput) => Promise<void>
+  onAdd: (input: AddBilibiliLiveRoomInput) => Promise<BilibiliLiveRoom | void>
   onRoomAction: (
     action: BilibiliLiveRoomAction,
     room: BilibiliLiveRoom,
     intervalSeconds?: number
-  ) => Promise<void>
+  ) => Promise<boolean | void>
   onCloseCreation: () => void
   onTrendSelectionChange: (ids: string[]) => void
   onRankRoomChange?: (roomMonitorId: string) => void
@@ -114,6 +113,7 @@ export function BilibiliLiveWorkspacePresentation({
   view,
   creationOpen,
   rooms,
+  roomsRevision,
   summary,
   events,
   trends,
@@ -167,11 +167,7 @@ export function BilibiliLiveWorkspacePresentation({
   const [interval, setIntervalValue] = useState("300")
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string>()
-  const [expandedRoomId, setExpandedRoomId] = useState<string>()
-  const expandedRoom = rooms.find(room => room.id === expandedRoomId)
-  useEffect(() => {
-    if (expandedRoomId && !expandedRoom) setExpandedRoomId(undefined)
-  }, [expandedRoomId, expandedRoom])
+  const monitorPanel = useLiveMonitorPanel(rooms, roomsRevision)
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault()
@@ -188,7 +184,8 @@ export function BilibiliLiveWorkspacePresentation({
     setSubmitting(true)
     setFormError(undefined)
     try {
-      await onAdd({ [addMode]: value, intervalSeconds: seconds })
+      const added = await onAdd({ [addMode]: value, intervalSeconds: seconds })
+      if (added) monitorPanel.setExpandedId(added.id)
       setIdentifier("")
       onCloseCreation()
     } catch (error) {
@@ -208,14 +205,14 @@ export function BilibiliLiveWorkspacePresentation({
               <h2>添加直播间监控</h2>
               <p>按原业务填写房间号或主播 UID，二选一；房间号会先解析为真实长房间号。</p>
             </div>
-            <button type="button" className="icon-button" onClick={onCloseCreation} aria-label="关闭添加直播间">
+            <button type="button" className="icon-button" disabled={submitting} onClick={onCloseCreation} aria-label="关闭添加直播间">
               <X size={16} />
             </button>
           </div>
           <div className="live-add-grid">
             <label>
               <span>添加类型</span>
-              <select value={addMode} onChange={(event) => setAddMode(event.target.value as "roomId" | "uid")}>
+              <select value={addMode} disabled={submitting} onChange={(event) => setAddMode(event.target.value as "roomId" | "uid")}>
                 <option value="roomId">房间号</option>
                 <option value="uid">主播 UID</option>
               </select>
@@ -224,6 +221,7 @@ export function BilibiliLiveWorkspacePresentation({
               <span>{addMode === "roomId" ? "房间号" : "主播 UID"}</span>
               <input
                 value={identifier}
+                disabled={submitting}
                 inputMode="numeric"
                 placeholder={addMode === "roomId" ? "例如 6 或 21987615" : "例如 672328094"}
                 onChange={(event) => setIdentifier(event.target.value)}
@@ -236,6 +234,7 @@ export function BilibiliLiveWorkspacePresentation({
                 min={1}
                 max={2_592_000}
                 value={interval}
+                disabled={submitting}
                 onChange={(event) => setIntervalValue(event.target.value)}
               />
             </label>
@@ -243,14 +242,14 @@ export function BilibiliLiveWorkspacePresentation({
               <Plus size={16} />{submitting ? "正在解析并添加" : "添加监控"}
             </button>
           </div>
-          {Number(interval) < 120 && Number(interval) > 0 && (
-            <p className="inline-warning">短间隔会增加 B站接口请求频率，请确认确有需要。</p>
-          )}
           {formError && <p className="inline-error" role="alert">{formError}</p>}
         </form>
       )}
 
       {errorMessage && <div className="business-error" role="alert">{errorMessage}</div>}
+      {((creationOpen && Number(interval) < 120 && Number(interval) > 0)
+        || rooms.some(room => (monitorPanel.drafts[room.id] ?? room.intervalSeconds) < 120)) &&
+        <p className="inline-warning">短间隔会增加 B站接口请求频率，请确认确有需要。</p>}
       {onReload && (
         <div className="live-data-toolbar">
           <span>自动同步本地采集结果；立即采集请使用房间内的“立即刷新”。</span>
@@ -263,25 +262,12 @@ export function BilibiliLiveWorkspacePresentation({
 
       {view === "直播间" && (
         pending
-          ? <LiveState title="正在读取直播间监控" detail="从 Local Core 的 SQLite v6 读取真实房间投影。" />
+          ? <LiveState title="正在读取直播间监控" detail="正在读取本地保存的直播间数据。" />
           : rooms.length === 0
             ? <LiveState title="尚未监控直播间" detail="点击“添加直播间”后，应用会立即请求 B站公开直播接口并保存首个快照。" />
-            : <div className="live-room-grid">
-                {rooms.map((room) => (
-                  <LiveRoomCard
-                    key={room.id}
-                    room={room}
-                    busy={busyRoomIds.includes(room.id)}
-                    actionError={roomActionErrors[room.id]}
-                    trendSelected={selectedTrendIds.includes(room.id)}
-                    trendLocked={!selectedTrendIds.includes(room.id) && selectedTrendIds.length >= 4}
-                    onToggleTrend={() => onTrendSelectionChange(toggleTrendId(selectedTrendIds, room.id))}
-                    onAction={onRoomAction}
-                    expanded={room.id === expandedRoomId}
-                    onToggleData={renderRoomData ? () => setExpandedRoomId(current => current === room.id ? undefined : room.id) : undefined}
-                  />
-                ))}
-              </div>
+            : <BilibiliLiveMonitorPanel rooms={rooms} state={monitorPanel} selectedTrendIds={selectedTrendIds}
+                busyRoomIds={busyRoomIds} roomActionErrors={roomActionErrors} onAction={onRoomAction} renderRoomData={renderRoomData}
+                onToggleTrend={id => onTrendSelectionChange(toggleTrendId(selectedTrendIds, id))} />
       )}
 
       {view === "趋势对比" && (
@@ -295,11 +281,6 @@ export function BilibiliLiveWorkspacePresentation({
           onSelectionChange={onTrendSelectionChange}
         />
       )}
-
-      {view === "直播间" && expandedRoom && renderRoomData && <section className="live-room-data-detail" aria-label={`${expandedRoom.uname}直播数据`}>
-        <h2>{expandedRoom.uname} · 房间 {expandedRoom.roomId}</h2>
-        {renderRoomData(expandedRoom)}
-      </section>}
 
       {view === "状态事件" && <LiveEvents events={events} />}
 
@@ -399,112 +380,6 @@ function LiveSummary({ summary, rooms }: { summary?: BilibiliLiveSummary; rooms:
   )
 }
 
-function LiveRoomCard({
-  expanded,
-  onToggleData,
-  room,
-  busy,
-  actionError,
-  trendSelected,
-  trendLocked,
-  onToggleTrend,
-  onAction
-}: {
-  expanded?: boolean
-  onToggleData?: () => void
-  room: BilibiliLiveRoom
-  busy: boolean
-  actionError?: string
-  trendSelected: boolean
-  trendLocked: boolean
-  onToggleTrend: () => void
-  onAction: BilibiliLiveWorkspacePresentationProps["onRoomAction"]
-}): JSX.Element {
-  const [intervalDraft, setIntervalDraft] = useState<string>()
-  const interval = intervalDraft ?? String(room.intervalSeconds)
-  useEffect(() => {
-    if (intervalDraft !== undefined && Number(intervalDraft) === room.intervalSeconds) setIntervalDraft(undefined)
-  }, [intervalDraft, room.intervalSeconds])
-  const status = liveStatus(room.liveStatus)
-  const deleteRoom = (): void => {
-    if (typeof window === "undefined" || window.confirm(`删除 ${room.uname} 的直播间监控？历史快照与状态事件也会删除。`)) {
-      void onAction("delete", room)
-    }
-  }
-  return (
-    <article className={`live-room-card live-status-${room.liveStatus}`} aria-busy={busy}>
-      <div className="live-room-cover">
-        {room.keyframeUrl || room.coverUrl
-          ? <img src={room.keyframeUrl ?? room.coverUrl} alt="" referrerPolicy="no-referrer" />
-          : <div className="live-cover-placeholder"><Radio size={24} /><span>ROOM {room.roomId}</span></div>}
-        <span className={`live-status-badge is-${status.tone}`}>{status.label}</span>
-      </div>
-      <div className="live-room-body">
-        <div className="live-room-owner">
-          {room.faceUrl ? <img src={room.faceUrl} alt="" referrerPolicy="no-referrer" /> : <span>{room.uname.slice(0, 1)}</span>}
-          <div>
-            <h3>{room.uname}</h3>
-            <p>UID {room.uid} · 房间 {room.roomId}{room.shortId ? ` / 短号 ${room.shortId}` : ""}</p>
-          </div>
-          <a href={`https://live.bilibili.com/${room.roomId}`} target="_blank" rel="noreferrer" aria-label="打开 B站直播间">
-            <ExternalLink size={15} />
-          </a>
-        </div>
-        <h4>{room.title ?? "暂无直播标题"}</h4>
-        <p className="live-area">{[room.parentAreaName, room.areaName].filter(Boolean).join(" / ") || "分区未知"}</p>
-        <div className="live-room-metrics">
-          <span><small>当前热度</small><strong>{formatCount(room.onlineCount)}</strong></span>
-          <span><small>关注</small><strong>{formatCount(room.attentionCount)}</strong></span>
-          <span><small>较上次</small><strong>{formatDelta(room.onlineDelta)}</strong></span>
-        </div>
-        <div className="live-room-timing">
-          <span><Clock3 size={13} />上次成功 {formatTime(room.lastSuccessAt)}</span>
-          <span><Clock3 size={13} />下次采集 {room.monitorStatus === "PAUSED" ? "已暂停" : formatTime(room.nextCollectAt)}</span>
-          <span><Activity size={13} />来源 {room.sourceEndpoint ?? "尚无"}</span>
-        </div>
-        {room.lastErrorMessage && (
-          <div className="live-room-error">
-            <strong>{room.lastErrorType ?? "采集异常"}</strong>
-            <span>{room.lastErrorMessage}</span>
-            {room.backoffUntil && <small>回退至 {formatTime(room.backoffUntil)}</small>}
-          </div>
-        )}
-        {actionError && <p className="inline-error" role="alert">{actionError}</p>}
-        {busy && <p className="live-action-progress" role="status">正在处理，请稍候…</p>}
-        <div className="live-room-actions">
-          {onToggleData && <button type="button" aria-expanded={expanded} onClick={onToggleData}><Radio size={14} />{expanded ? "收起直播数据" : "展开直播数据"}</button>}
-          <button type="button" disabled={busy} onClick={() => void onAction("refresh", room)}><RefreshCcw size={14} />立即刷新</button>
-          <button type="button" disabled={busy} onClick={() => void onAction("toggle", room)}>
-            {room.monitorStatus === "ACTIVE" ? <Pause size={14} /> : <Play size={14} />}
-            {room.monitorStatus === "ACTIVE" ? "暂停监控" : "恢复监控"}
-          </button>
-          <button type="button" className={trendSelected ? "is-selected" : ""} disabled={trendLocked} onClick={onToggleTrend}>
-            <TrendingUp size={14} />{trendSelected ? "已选趋势" : trendLocked ? "趋势已满" : "加入趋势"}
-          </button>
-          <button type="button" className="danger-button" disabled={busy} onClick={deleteRoom}><Trash2 size={14} />删除</button>
-        </div>
-        <div className="live-interval-editor">
-          <label htmlFor={`interval-${room.id}`}>采集间隔</label>
-          <input
-            id={`interval-${room.id}`}
-            type="number"
-            min={1}
-            max={2_592_000}
-            value={interval}
-            disabled={busy}
-            onChange={(event) => setIntervalDraft(event.target.value)}
-          />
-          <span>秒</span>
-          <button
-            type="button"
-            disabled={busy || !Number.isInteger(Number(interval)) || Number(interval) < 1 || Number(interval) > 2_592_000 || Number(interval) === room.intervalSeconds}
-            onClick={() => void onAction("interval", room, Number(interval))}
-          >保存</button>
-        </div>
-      </div>
-    </article>
-  )
-}
 
 function LiveTrendView({
   rooms,
@@ -1492,7 +1367,7 @@ export function ConnectedBilibiliLiveWorkspace({
     })
   }
   const handleRoomAction: BilibiliLiveWorkspacePresentationProps["onRoomAction"] = async (action, room, intervalSeconds) => {
-    if (roomLocks.current.has(room.id)) return
+    if (roomLocks.current.has(room.id)) return false
     roomLocks.current.add(room.id)
     setBusyRoomIds([...roomLocks.current])
     setRoomActionErrors((errors) => ({ ...errors, [room.id]: undefined }))
@@ -1512,8 +1387,10 @@ export function ConnectedBilibiliLiveWorkspace({
         }))
         setSelectedTrendIds((ids) => ids.filter((id) => id !== room.id))
       }
+      return true
     } catch (error) {
       setRoomActionErrors((errors) => ({ ...errors, [room.id]: errorMessageOf(error) }))
+      return false
     } finally {
       try {
         // Failed platform requests also persist error/backoff state that must reach the card.
@@ -1586,6 +1463,7 @@ export function ConnectedBilibiliLiveWorkspace({
       view={view}
       creationOpen={creationOpen}
       rooms={rooms}
+      roomsRevision={roomsQuery.dataUpdatedAt}
       summary={summaryQuery.data}
       events={eventsQuery.data ?? []}
       trends={lastSuccessfulTrends.filter((trend) => validSelection.includes(trend.room.id))}
@@ -1638,11 +1516,14 @@ export function ConnectedBilibiliLiveWorkspace({
         exportMutation.error
       )}
       onAdd={async (input) => {
+        let added: BilibiliLiveRoom | undefined
         await mutation.mutateAsync(async () => {
           const room = await bridge.bilibiliLive.add(input)
+          added = room
           cacheRoom(room)
           setSelectedTrendIds((ids) => ids.includes(room.id) || ids.length >= 4 ? ids : [...ids, room.id])
         })
+        return added
       }}
       onRoomAction={handleRoomAction}
       onCloseCreation={onCloseCreation}
@@ -1686,12 +1567,6 @@ export function ConnectedBilibiliLiveWorkspace({
 function toggleTrendId(ids: string[], id: string): string[] {
   if (ids.includes(id)) return ids.filter((value) => value !== id)
   return ids.length >= 4 ? ids : [...ids, id]
-}
-
-function liveStatus(status: 0 | 1 | 2): { label: string; tone: string } {
-  if (status === 1) return { label: "直播中", tone: "live" }
-  if (status === 2) return { label: "轮播中", tone: "round" }
-  return { label: "未开播", tone: "offline" }
 }
 
 function formatCount(value: number | undefined): string {
