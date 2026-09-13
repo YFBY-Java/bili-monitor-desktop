@@ -352,7 +352,7 @@ export function ConnectedBilibiliFollowerWorkspace({
   const [busyUserIds, setBusyUserIds] = useState<string[]>([])
   const [actionError, setActionError] = useState<string>()
   // Read local projections only; the Core owns platform requests and scheduling.
-  const monitorsQuery = useQuery({ queryKey: ["bilibili-followers"], queryFn: () => bridge.bilibiliFollowers.list({ limit: 500 }), refetchInterval: 2_000 })
+  const monitorsQuery = useQuery({ queryKey: ["bilibili-followers"], queryFn: () => bridge.bilibiliFollowers.list({}), refetchInterval: 2_000 })
   const effectiveUserIds = useMemo(() => {
     return selectedUserIds.filter((id) => monitorsQuery.data?.items.some((user) => user.id === id))
   }, [monitorsQuery.data, selectedUserIds])

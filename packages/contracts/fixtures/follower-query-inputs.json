@@ -1,0 +1,20 @@
+[
+  { "name": "unlimited list by default", "schema": "ListBilibiliFollowerMonitorsInput", "input": {}, "valid": true, "expected": {} },
+  { "name": "bounded caller", "schema": "ListBilibiliFollowerMonitorsInput", "input": {"limit": 20}, "valid": true, "expected": {"limit": 20} },
+  { "name": "history default", "schema": "QueryBilibiliFollowerTrendInput", "input": {"userId": "018f0f39-7b5e-4cc1-862d-000000000001"}, "valid": true, "limit": 500 },
+  { "name": "history zero", "schema": "QueryBilibiliFollowerTrendInput", "input": {"userId": "018f0f39-7b5e-4cc1-862d-000000000001", "limit": 0}, "valid": true, "limit": 500 },
+  { "name": "history negative", "schema": "QueryBilibiliFollowerTrendInput", "input": {"userId": "018f0f39-7b5e-4cc1-862d-000000000001", "limit": -2}, "valid": true, "limit": 500 },
+  { "name": "history cap", "schema": "QueryBilibiliFollowerTrendInput", "input": {"userId": "018f0f39-7b5e-4cc1-862d-000000000001", "limit": 2001}, "valid": true, "limit": 2000 },
+  { "name": "multi all", "schema": "QueryBilibiliFollowerTrendsInput", "input": {}, "valid": true, "limitPerUser": 500 },
+  { "name": "multi cap", "schema": "QueryBilibiliFollowerTrendsInput", "input": {"limitPerUser": 5000}, "valid": true, "limitPerUser": 2000 },
+  { "name": "offset window", "schema": "QueryBilibiliFollowerTrendsInput", "input": {"from": "2026-09-13T12:00:00+08:00", "to": "2026-09-13T04:00:00.000001Z"}, "valid": true, "limitPerUser": 500 },
+  { "name": "invalid fractional limit", "schema": "QueryBilibiliFollowerTrendsInput", "input": {"limitPerUser": 1.5}, "valid": false },
+  { "name": "invalid numeric string", "schema": "QueryBilibiliFollowerTrendsInput", "input": {"limitPerUser": "500"}, "valid": false },
+  { "name": "invalid null", "schema": "QueryBilibiliFollowerTrendsInput", "input": {"limitPerUser": null}, "valid": false },
+  { "name": "invalid timezone-less window", "schema": "QueryBilibiliFollowerTrendsInput", "input": {"from": "2026-09-13T12:00:00"}, "valid": false },
+  { "name": "invalid hour-only offset", "schema": "QueryBilibiliFollowerTrendsInput", "input": {"from": "2026-09-13T12:00:00+08"}, "valid": false },
+  { "name": "invalid compact date", "schema": "QueryBilibiliFollowerTrendsInput", "input": {"from": "20260913T120000+0800"}, "valid": false },
+  { "name": "invalid second offset", "schema": "QueryBilibiliFollowerTrendsInput", "input": {"from": "2026-09-13T12:00:00+08:00:30"}, "valid": false },
+  { "name": "invalid uuid", "schema": "QueryBilibiliFollowerTrendsInput", "input": {"userIds": ["2"]}, "valid": false },
+  { "name": "unknown property", "schema": "QueryBilibiliFollowerTrendsInput", "input": {"unsafeQuery": "select 1"}, "valid": false }
+]

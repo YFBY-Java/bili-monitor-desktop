@@ -441,7 +441,7 @@ export function ConnectedBilibiliSubjectWorkspace({
   const roomMonitorId = workbenchQuery.data?.bilibiliLiveRoom?.monitorId
   const usersQuery = useQuery({
     queryKey: ["bilibili-followers"],
-    queryFn: () => bridge.bilibiliFollowers.list({ limit: 500 }),
+    queryFn: () => bridge.bilibiliFollowers.list({}),
     enabled: bindingOpen
   })
   const roomsQuery = useQuery({

@@ -83,7 +83,7 @@ export class BilibiliFollowerMonitorService {
         monitorId,
         mid: snapshot.mid,
         nickname: snapshot.nickname ?? existing?.nickname ?? `Bilibili UID ${snapshot.mid}`,
-        avatarUrl: snapshot.avatarUrl ?? existing?.avatarUrl ?? null,
+        avatarUrl: snapshot.avatarUrl ?? null,
         profileUrl: snapshot.profileUrl,
         followerCount: snapshot.followerCount,
         followingCount: snapshot.followingCount ?? null,
@@ -214,6 +214,8 @@ export class BilibiliFollowerMonitorService {
           success: false,
           ...(user.currentFollowerCount !== null ? { followerCount: user.currentFollowerCount } : {}),
           capturedAt: this.options.now().toISOString(),
+          ...(typeof error === "object" && error !== null && "endpoint" in error && typeof error.endpoint === "string"
+            ? { sourceEndpoint: error.endpoint } : {}),
           message: details.message
         }))
       }
@@ -269,7 +271,7 @@ export class BilibiliFollowerMonitorService {
   } = {}): BilibiliFollowerTrend[] {
     const query = QueryBilibiliFollowerTrendsInputSchema.parse(input)
     const users = query.userIds.length === 0
-      ? this.options.database.listBilibiliFollowerMonitors(100)
+      ? this.options.database.listBilibiliFollowerMonitors()
       : query.userIds.map((userId) => this.requireStoredUser(userId))
     return users.map((user) => this.trend(user.monitorId, {
       ...(query.from ? { from: query.from } : {}),
@@ -310,8 +312,8 @@ export class BilibiliFollowerMonitorService {
         monitorId: user.monitorId,
         mid: snapshot.mid,
         nickname: snapshot.nickname ?? current.nickname,
-        avatarUrl: snapshot.avatarUrl ?? current.avatarUrl,
-        profileUrl: snapshot.profileUrl,
+        avatarUrl: snapshot.sourceEndpoint === "x/relation/stat" ? current.avatarUrl : snapshot.avatarUrl ?? null,
+        profileUrl: snapshot.sourceEndpoint === "x/relation/stat" ? current.profileUrl : snapshot.profileUrl,
         followerCount: snapshot.followerCount,
         followingCount: snapshot.followingCount ?? null,
         intervalSeconds: current.intervalSeconds,
@@ -418,8 +420,10 @@ export class BilibiliFollowerMonitorService {
           evidenceObjectId: null,
           createdAt: this.options.now().toISOString()
         })
-        if (!details.retryable || attempt >= maxAttempts) break
-        const backoff = Math.max(0, this.options.retryBackoffMs ?? 1_500)
+        // Original RetryPolicy uses the error category, not the API's raw retryable flag.
+        const canRetry = ["BILIBILI_RATE_LIMITED", "BILIBILI_NETWORK_ERROR", "BILIBILI_SERVER_ERROR"].includes(details.code)
+        if (!canRetry || attempt >= maxAttempts || attempt > 3) break
+        const backoff = Math.max(100, this.options.retryBackoffMs ?? 1_500)
           * (2 ** Math.min(attempt - 1, 4))
         const jitter = Math.floor((this.options.jitter?.() ?? Math.random()) * 300)
         await (this.options.sleep ?? delay)(backoff + jitter)

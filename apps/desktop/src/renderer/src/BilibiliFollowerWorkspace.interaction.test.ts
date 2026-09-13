@@ -28,6 +28,17 @@ describe("follower workflow in the renderer", () => {
   })
   afterEach(async () => { await page?.close() })
 
+  it("shows and selects monitors beyond the former 500-user cutoff", async () => {
+    await page.evaluate(() => window.followerFixture.expandList())
+    await page.getByRole("button", { name: "刷新列表", exact: true }).click()
+    await expect.poll(() => page.locator(".follower-card").count(), { timeout: 8000 }).toBe(505)
+    const last = page.locator(".follower-card").filter({ hasText: "测试用户505" })
+    await last.locator('.trend-selector input').check()
+    await page.getByRole("button", { name: "查看趋势", exact: true }).click()
+    await page.locator(".follower-trend-card").filter({ hasText: "测试用户505" }).waitFor()
+    expect(await page.evaluate(() => window.followerFixture.listRequests.every(input => input.limit === undefined))).toBe(true)
+  }, 20_000)
+
   it("starts with no selected users and allows deselecting the last trend", async () => {
     const boxes = page.locator('.trend-selector input')
     expect(await boxes.evaluateAll((nodes) => nodes.filter((node) => (node as HTMLInputElement).checked).length)).toBe(0)

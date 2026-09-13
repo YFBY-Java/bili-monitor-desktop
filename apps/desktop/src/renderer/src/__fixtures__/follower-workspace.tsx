@@ -1,4 +1,4 @@
-import type { BilibiliFollowerMonitor } from "@bmd/contracts"
+import type { BilibiliFollowerMonitor, ListBilibiliFollowerMonitorsInput } from "@bmd/contracts"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useState } from "react"
 import { createRoot } from "react-dom/client"
@@ -20,6 +20,13 @@ let users: BilibiliFollowerMonitor[] = Array.from({ length: 5 }, (_, index) => (
 }))
 const fixture = {
   actionError: "", readError: "", calls: [] as string[],
+  listRequests: [] as ListBilibiliFollowerMonitorsInput[],
+  expandList: () => {
+    const first = users[0]!
+    users = Array.from({ length: 505 }, (_, index) => ({ ...first,
+      id: `018f0f39-7b5e-7cc1-962d-${String(index).padStart(12, "0")}`,
+      mid: String(index + 2), nickname: `测试用户${index + 1}`, profileUrl: `https://space.bilibili.com/${index + 2}` }))
+  },
   updateFirst: (count: number, interval = 3600) => { users = users.map((user, index) => index === 0
     ? { ...user, currentFollowerCount: count, intervalSeconds: interval, version: user.version + 1 } : user) }
 }
@@ -36,10 +43,11 @@ function requireUser(id: string): BilibiliFollowerMonitor {
   return user
 }
 bridge.bilibiliFollowers = {
-  list: async () => {
+  list: async (input = {}) => {
     fixture.calls.push("list")
+    fixture.listRequests.push(input)
     if (fixture.readError) throw new Error(fixture.readError)
-    return { items: users, total: users.length, snapshotAt: timestamp }
+    return { items: input.limit ? users.slice(0, input.limit) : users, total: users.length, snapshotAt: timestamp }
   },
   add: async () => { action("add"); return users[0]! },
   updateStatus: async ({ userId, enabled }) => {

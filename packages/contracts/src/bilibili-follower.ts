@@ -75,7 +75,7 @@ export const AddBilibiliFollowerMonitorInputSchema = z.object({
 }).strict()
 
 export const ListBilibiliFollowerMonitorsInputSchema = z.object({
-  limit: z.number().int().min(1).max(500).default(100)
+  limit: z.number().int().min(1).max(500).optional()
 }).strict()
 
 export const BilibiliFollowerMonitorIdInputSchema = z.object({
@@ -94,18 +94,22 @@ export const UpdateBilibiliFollowerMonitorSettingsInputSchema = z.object({
   intervalSeconds: BilibiliFollowerIntervalSecondsSchema
 }).strict()
 
+// Original service: missing/non-positive -> 500; positive -> at most 2000.
+const FollowerHistoryLimitSchema = z.number().int().default(500)
+  .transform(value => value <= 0 ? 500 : Math.min(value, 2_000))
+
 export const QueryBilibiliFollowerTrendInputSchema = z.object({
   userId: z.uuid(),
-  from: z.iso.datetime().optional(),
-  to: z.iso.datetime().optional(),
-  limit: z.number().int().min(1).max(2_000).default(500)
+  from: z.iso.datetime({ offset: true }).optional(),
+  to: z.iso.datetime({ offset: true }).optional(),
+  limit: FollowerHistoryLimitSchema
 }).strict()
 
 export const QueryBilibiliFollowerTrendsInputSchema = z.object({
-  userIds: z.array(z.uuid()).max(100).default([]),
-  from: z.iso.datetime().optional(),
-  to: z.iso.datetime().optional(),
-  limitPerUser: z.number().int().min(1).max(2_000).default(500)
+  userIds: z.array(z.uuid()).default([]),
+  from: z.iso.datetime({ offset: true }).optional(),
+  to: z.iso.datetime({ offset: true }).optional(),
+  limitPerUser: FollowerHistoryLimitSchema
 }).strict()
 
 export const BilibiliFollowerFetchRequestSchema = z.object({

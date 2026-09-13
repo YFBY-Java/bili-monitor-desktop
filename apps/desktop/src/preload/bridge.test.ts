@@ -3,6 +3,20 @@ import { describe, expect, it, vi } from "vitest"
 import { createDesktopBridge } from "./bridge"
 
 describe("createDesktopBridge", () => {
+  it("keeps complete follower lists and normalizes history counts at the IPC boundary", async () => {
+    const invoke = vi.fn(async (channel: string) => channel === "bilibili-followers:list"
+      ? { items: [], total: 0, snapshotAt: "2026-09-13T04:00:00.000Z" } : [])
+    const bridge = createDesktopBridge(invoke)
+    await bridge.bilibiliFollowers.list()
+    await bridge.bilibiliFollowers.trends({ limitPerUser: 0, from: "2026-09-13T12:00:00+08:00" })
+    await bridge.bilibiliFollowers.trends({ limitPerUser: 2001 })
+    expect(invoke.mock.calls).toEqual([
+      ["bilibili-followers:list", {}],
+      ["bilibili-followers:trends", { userIds: [], limitPerUser: 500, from: "2026-09-13T12:00:00+08:00" }],
+      ["bilibili-followers:trends", { userIds: [], limitPerUser: 2000 }]
+    ])
+  })
+
   it("normalizes recent-session limits before sending the narrow IPC request", async () => {
     const invoke = vi.fn(async () => [])
     const bridge = createDesktopBridge(invoke)
