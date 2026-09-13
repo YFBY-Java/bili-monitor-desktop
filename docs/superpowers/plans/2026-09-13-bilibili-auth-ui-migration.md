@@ -63,3 +63,8 @@ git diff --check
 - 已补状态刷新、二维码刷新与账号展示、分字段/完整复制、操作反馈，以及关闭/重开后的迟到响应隔离和跨二维码单在途轮询。新增13项Connected浏览器回归；原有4项登录组件测试保持通过。
 - 提交前完整 `check.cmd` 退出0：Node391项、Python54项，TypeScript/mypy、Black/isort、Electron生产构建与D盘路径检查通过。首次检查发现浏览器测试对HTMLElement/SVGElement联合类型直接赋值className失败，改为两者共有的setAttribute，不改运行时业务逻辑。
 - 独立只读审查尚未完成；Core/Worker Cookie解析、凭据恢复、连接升级/撤销以及真人扫码、系统剪贴板、原生客户端/安装包验收仍待继续。停止界面轮询不等于取消Core内已经发出的请求。
+
+## 后续执行记录
+
+- UI独立只读审查已完成，17项定向通过；补查SCANNED刷新与缺省字段复制。Minor窄屏单列规则被覆盖已补失败断言（实际188px/464px双列），改局部选择器后通过并复审关闭；主代理检查760px截图。
+- Core/Worker及本地生命周期续作另见 `2026-09-13-bilibili-auth-core-parity.md` 和 `docs/implementation/2026-09-13-bilibili-auth-core-audit.md`。登录与弹幕连接完整联动、真人/原生验收仍未完成。

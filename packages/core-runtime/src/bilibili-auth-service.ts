@@ -44,6 +44,11 @@ const COOKIE_ORDER = [
   "b_nut"
 ] as const
 
+const PLATFORM_VALIDATION_ERRORS = new Set([
+  "BILIBILI_AUTH_EXPIRED", "BILIBILI_AUTH_NETWORK_ERROR", "BILIBILI_AUTH_HTTP_ERROR",
+  "BILIBILI_AUTH_API_ERROR", "BILIBILI_AUTH_PARSE_ERROR"
+])
+
 interface QrLoginSession {
   loginId: string
   qrcodeKey: string
@@ -51,7 +56,9 @@ interface QrLoginSession {
   cookies: BilibiliAuthCookie[]
   createdAt: string
   expiresAt: string
+  generation: number
   completed?: BilibiliQrLoginStatus
+  inFlight?: Promise<BilibiliQrLoginStatus>
 }
 
 interface PersistedCredentialPayload {
@@ -83,20 +90,40 @@ export interface BilibiliAuthServiceOptions {
   idFactory: () => string
   qrExpireSeconds?: number
   pollIntervalMillis?: number
+  sessionCleanupDelayMs?: number
 }
 
 export class BilibiliAuthService {
   private readonly sessions = new Map<string, QrLoginSession>()
+  private readonly sessionCleanup: ReturnType<typeof setInterval>
+  private readonly qrExpireSeconds: number
+  private generation = 0
+  private stopped = false
+  private stopPromise: Promise<void> | undefined
 
-  constructor(private readonly options: BilibiliAuthServiceOptions) {}
+  constructor(private readonly options: BilibiliAuthServiceOptions) {
+    this.qrExpireSeconds = Math.max(1, options.qrExpireSeconds ?? 180)
+    this.sessionCleanup = setInterval(() => {
+      const now = this.options.now().getTime()
+      for (const [id, session] of this.sessions) {
+        if (Date.parse(session.expiresAt) + this.qrExpireSeconds * 1000 < now) this.sessions.delete(id)
+      }
+    }, Math.max(1, options.sessionCleanupDelayMs ?? 60_000))
+    this.sessionCleanup.unref()
+  }
 
   async startQrLogin(): Promise<BilibiliQrLoginStart> {
-    const generated = BilibiliAuthWorkerGenerateResultSchema.parse(
-      await this.options.source.generate()
-    )
-    const loginId = this.options.idFactory()
+    this.ensureRunning()
+    const generation = this.generation
     const createdAt = this.options.now()
-    const expiresInSeconds = Math.max(1, this.options.qrExpireSeconds ?? 180)
+    let generated: BilibiliAuthWorkerGenerateResult
+    try {
+      generated = BilibiliAuthWorkerGenerateResultSchema.parse(await this.options.source.generate())
+    } finally {
+      this.ensureGeneration(generation)
+    }
+    const loginId = this.options.idFactory()
+    const expiresInSeconds = this.qrExpireSeconds
     const pollIntervalMillis = Math.min(
       10_000,
       Math.max(1_000, this.options.pollIntervalMillis ?? 1_500)
@@ -106,6 +133,7 @@ export class BilibiliAuthService {
       qrcodeKey: generated.qrcodeKey,
       qrUrl: generated.qrUrl,
       cookies: generated.cookies,
+      generation,
       createdAt: createdAt.toISOString(),
       expiresAt: new Date(createdAt.getTime() + expiresInSeconds * 1_000).toISOString()
     })
@@ -118,18 +146,36 @@ export class BilibiliAuthService {
   }
 
   async pollQrLogin(loginId: string): Promise<BilibiliQrLoginStatus> {
+    this.ensureRunning()
     const session = this.sessions.get(loginId)
     if (!session) {
       throw new CoreApplicationError("BILIBILI_QR_SESSION_NOT_FOUND", "QR login session not found.")
     }
     if (session.completed) return session.completed
+    if (session.inFlight) return session.inFlight
+    const pending = this.pollSession(session)
+    session.inFlight = pending
+    try {
+      return await pending
+    } finally {
+      if (session.inFlight === pending) delete session.inFlight
+    }
+  }
+
+  private async pollSession(session: QrLoginSession): Promise<BilibiliQrLoginStatus> {
     const expiresInSeconds = this.expiresInSeconds(session)
     if (expiresInSeconds <= 0) return this.completeExpired(session)
 
-    const result = BilibiliAuthWorkerPollResultSchema.parse(
-      await this.options.source.poll({ qrcodeKey: session.qrcodeKey, cookies: session.cookies })
-    )
-    session.cookies = mergeCookies(session.cookies, result.cookies)
+    let result: BilibiliAuthWorkerPollResult
+    try {
+      result = BilibiliAuthWorkerPollResultSchema.parse(
+        await this.options.source.poll({ qrcodeKey: session.qrcodeKey, cookies: session.cookies })
+      )
+    } finally {
+      this.ensureSession(session)
+    }
+    // Preserve the HTTP jar's effective scope/removals, not raw display or callback cookies.
+    session.cookies = result.jarCookies ?? result.cookies
     if (result.code === 86101) {
       return BilibiliQrLoginStatusSchema.parse({
         status: "WAITING",
@@ -154,12 +200,14 @@ export class BilibiliAuthService {
   }
 
   async currentStatus(): Promise<BilibiliAuthStatus> {
+    this.ensureRunning()
     const stored = this.options.database.findActiveBilibiliCredential()
     if (!stored) return BilibiliAuthStatusSchema.parse({ loggedIn: false, status: "NONE" })
     let previous: PersistedCredentialPayload | undefined
     try {
       previous = this.readPayload(stored)
       const validated = await this.validateAndPersist(stored, previous)
+      this.ensureActiveCredential(stored.credentialId)
       return BilibiliAuthStatusSchema.parse({
         loggedIn: true,
         credentialId: stored.credentialId,
@@ -171,7 +219,11 @@ export class BilibiliAuthService {
         ...(validated.expiresAt ? { expiresAt: validated.expiresAt } : {}),
         status: "ACTIVE"
       })
-    } catch {
+    } catch (error) {
+      this.ensureActiveCredential(stored.credentialId)
+      if (previous && !(isRecord(error) && typeof error.code === "string" && PLATFORM_VALIDATION_ERRORS.has(error.code))) {
+        throw new CoreApplicationError("BILIBILI_AUTH_VALIDATION_FAILED", "暂时无法校验登录态，请稍后重试。", true)
+      }
       const timestamp = this.options.now().toISOString()
       this.options.database.markBilibiliCredentialStatus(
         stored.credentialId,
@@ -200,8 +252,12 @@ export class BilibiliAuthService {
 
   async currentCredential(): Promise<BilibiliCredential> {
     const stored = this.requireActiveCredential()
-    const validated = await this.validateAndPersist(stored, this.readPayload(stored))
-    return this.toCredential(stored.credentialId, validated)
+    try {
+      const validated = await this.validateAndPersist(stored, this.readPayload(stored))
+      return this.toCredential(stored.credentialId, validated)
+    } finally {
+      this.ensureActiveCredential(stored.credentialId)
+    }
   }
 
   connectionCredential(): BilibiliCredential {
@@ -211,16 +267,23 @@ export class BilibiliAuthService {
 
   async refreshCurrentCredential(): Promise<BilibiliAuthRefreshResult> {
     const stored = this.requireActiveCredential()
-    const validated = await this.validateAndPersist(stored, this.readPayload(stored))
-    return BilibiliAuthRefreshResultSchema.parse({
-      refreshed: false,
-      loggedIn: true,
-      message: "登录态已重新校验；此操作不会刷新 Cookie。",
-      account: validated.account
-    })
+    try {
+      const validated = await this.validateAndPersist(stored, this.readPayload(stored))
+      return BilibiliAuthRefreshResultSchema.parse({
+        refreshed: false,
+        loggedIn: true,
+        message: "登录态已重新校验；此操作不会刷新 Cookie。",
+        account: validated.account
+      })
+    } finally {
+      this.ensureActiveCredential(stored.credentialId)
+    }
   }
 
   async revokeCurrentCredential(): Promise<RevokeBilibiliAuthResult> {
+    this.ensureRunning()
+    this.generation++
+    this.sessions.clear()
     const timestamp = this.options.now().toISOString()
     this.options.database.revokeActiveBilibiliCredential(
       timestamp,
@@ -234,19 +297,34 @@ export class BilibiliAuthService {
     return { revoked: true }
   }
 
-  async stop(): Promise<void> {
-    await this.options.source.stop?.()
+  stop(): Promise<void> {
+    if (!this.stopPromise) {
+      this.stopped = true
+      clearInterval(this.sessionCleanup)
+      this.sessions.clear()
+      this.stopPromise = Promise.resolve().then(() => this.options.source.stop?.())
+    }
+    return this.stopPromise
   }
 
   private async completeLogin(
     session: QrLoginSession,
     result: BilibiliAuthWorkerPollResult
   ): Promise<BilibiliQrLoginStatus> {
-    const cookies = mergeCookies(session.cookies, result.cookies)
+    const cookies = result.cookies
+    if (cookies.length === 0) {
+      return BilibiliQrLoginStatusSchema.parse({
+        status: "FAILED", message: "登录成功但未收到 Bilibili Cookie，请重试",
+        expiresInSeconds: this.expiresInSeconds(session)
+      })
+    }
     requireMinimumCookies(cookies)
-    const nav = BilibiliAuthWorkerNavResultSchema.parse(
-      await this.options.source.validate({ cookies })
-    )
+    let nav: BilibiliAuthWorkerNavResult
+    try {
+      nav = BilibiliAuthWorkerNavResultSchema.parse(await this.options.source.validate({ cookies }))
+    } finally {
+      this.ensureSession(session)
+    }
     const timestamp = this.options.now().toISOString()
     const credentialId = this.options.idFactory()
     const accountId = this.options.database.findPlatformAccountByExternalId(
@@ -308,9 +386,13 @@ export class BilibiliAuthService {
     stored: StoredBilibiliAuthCredential,
     previous: PersistedCredentialPayload
   ): Promise<PersistedCredentialPayload> {
-    const nav = BilibiliAuthWorkerNavResultSchema.parse(
-      await this.options.source.validate({ cookies: previous.cookies })
-    )
+    this.ensureActiveCredential(stored.credentialId)
+    let nav: BilibiliAuthWorkerNavResult
+    try {
+      nav = BilibiliAuthWorkerNavResultSchema.parse(await this.options.source.validate({ cookies: previous.cookies }))
+    } finally {
+      this.ensureActiveCredential(stored.credentialId)
+    }
     const timestamp = this.options.now().toISOString()
     const validated: PersistedCredentialPayload = {
       ...previous,
@@ -343,11 +425,35 @@ export class BilibiliAuthService {
   }
 
   private requireActiveCredential(): StoredBilibiliAuthCredential {
+    this.ensureRunning()
     const stored = this.options.database.findActiveBilibiliCredential()
     if (!stored) {
       throw new CoreApplicationError("BILIBILI_AUTH_NOT_FOUND", "No active Bilibili credential.")
     }
     return stored
+  }
+
+  private ensureRunning(): void {
+    if (this.stopped) throw new CoreApplicationError("CORE_STOPPED", "本地登录服务已停止。", false)
+  }
+
+  private ensureGeneration(generation: number): void {
+    this.ensureRunning()
+    if (generation !== this.generation) this.authChanged()
+  }
+
+  private ensureSession(session: QrLoginSession): void {
+    this.ensureGeneration(session.generation)
+    if (this.sessions.get(session.loginId) !== session) this.authChanged()
+  }
+
+  private ensureActiveCredential(credentialId: string): void {
+    this.ensureRunning()
+    if (this.options.database.findActiveBilibiliCredential()?.credentialId !== credentialId) this.authChanged()
+  }
+
+  private authChanged(): never {
+    throw new CoreApplicationError("BILIBILI_AUTH_CHANGED", "登录态已变更，请重新读取当前状态。", false)
   }
 
   private readPayload(stored: StoredBilibiliAuthCredential): PersistedCredentialPayload {
@@ -425,17 +531,6 @@ export class BilibiliAuthService {
   }
 }
 
-function mergeCookies(
-  current: BilibiliAuthCookie[],
-  incoming: BilibiliAuthCookie[]
-): BilibiliAuthCookie[] {
-  const merged = new Map<string, BilibiliAuthCookie>()
-  for (const item of [...current, ...incoming]) {
-    if (item.name && item.value) merged.set(item.name, item)
-  }
-  return [...merged.values()]
-}
-
 function cookieHeader(cookies: BilibiliAuthCookie[]): string {
   const order = new Map<string, number>(COOKIE_ORDER.map((name, index) => [name, index]))
   return [...cookies]
@@ -465,7 +560,7 @@ function earliestCookieExpiry(cookies: BilibiliAuthCookie[]): string | undefined
   return cookies
     .map((item) => item.expiresAt)
     .filter((value): value is string => Boolean(value))
-    .sort()
+    .sort((left, right) => Date.parse(left) - Date.parse(right))
     .at(0)
 }
 

@@ -668,8 +668,8 @@ export class LocalCoreRuntime {
     this.followerScheduler = undefined
     this.liveScheduler = undefined
     this.liveDanmakuScheduler = undefined
-    await this.followers.stop?.()
-    await this.auth.stop()
+    // Propagate both cancellation boundaries before awaiting either worker's shutdown.
+    await Promise.all([this.followers.stop?.(), this.auth.stop()])
     await this.live.stop()
     await this.liveRanks.stop()
     await this.liveDanmaku.stopAll()

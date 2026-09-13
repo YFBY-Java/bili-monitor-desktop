@@ -20,6 +20,6 @@
 .auth-qr-account span { color: var(--muted); font-size: 13px; }
 .auth-modal { max-height: calc(100dvh - 48px); overflow-y: auto; }
 @media (max-width: 1000px) {
-  .bilibili-auth-panel { grid-template-columns: minmax(0, 1fr); }
+  section.bilibili-auth-panel { grid-template-columns: minmax(0, 1fr); }
   .bilibili-auth-panel .auth-panel-actions { justify-content: flex-start; }
 }

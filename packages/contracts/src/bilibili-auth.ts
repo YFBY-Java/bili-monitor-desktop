@@ -102,7 +102,10 @@ export const BilibiliAuthWorkerPollResultSchema = z.object({
   code: z.number().int(),
   message: z.string(),
   refreshToken: z.string().optional(),
-  cookies: z.array(BilibiliAuthCookieSchema)
+  cookies: z.array(BilibiliAuthCookieSchema),
+  // Effective HTTP session state is distinct from credential/display cookies.
+  // Optional for v1 workers predating this addition; an empty array clears the jar.
+  jarCookies: z.array(BilibiliAuthCookieSchema).optional()
 }).strict()
 
 export const BilibiliAuthWorkerValidateInputSchema = z.object({

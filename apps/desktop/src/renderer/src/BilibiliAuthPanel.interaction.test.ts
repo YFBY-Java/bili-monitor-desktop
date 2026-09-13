@@ -164,6 +164,11 @@ describe("original Bilibili auth actions in the Connected renderer", () => {
   })
 
   it("keeps auth actions and credential copy controls readable in light, dark and narrow layouts", async () => {
+    await page.setViewportSize({ width: 760, height: 1050 })
+    const columns = await page.locator(".bilibili-auth-panel").evaluate(element => getComputedStyle(element).gridTemplateColumns)
+    expect(columns.trim().split(/\s+/)).toHaveLength(1)
+    await page.screenshot({ path: resolve(process.env.TEMP!, "m07-auth-narrow-panel.png") })
+    await page.setViewportSize({ width: 1440, height: 1050 })
     await page.getByRole("button", { name: "查看完整登录态" }).click()
     const copy = page.getByRole("button", { name: "复制 Cookie Header", exact: true })
     await copy.waitFor()

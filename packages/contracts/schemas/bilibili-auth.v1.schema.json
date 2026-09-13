@@ -76,7 +76,8 @@
         "code": { "type": "integer" },
         "message": { "type": "string" },
         "refreshToken": { "type": "string" },
-        "cookies": { "type": "array", "items": { "$ref": "#/$defs/BilibiliAuthCookie" } }
+        "cookies": { "type": "array", "items": { "$ref": "#/$defs/BilibiliAuthCookie" } },
+        "jarCookies": { "type": "array", "items": { "$ref": "#/$defs/BilibiliAuthCookie" }, "description": "Effective HTTP CookieJar for the next poll; separate from display cookies. Empty clears prior state; absent permits legacy v1 workers." }
       }
     }
   }

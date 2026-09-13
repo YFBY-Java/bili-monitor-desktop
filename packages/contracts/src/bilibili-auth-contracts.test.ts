@@ -6,6 +6,11 @@ import { describe, expect, it } from "vitest"
 import * as contracts from "./index"
 
 describe("Bilibili auth contracts", () => {
+  const fixtures = JSON.parse(readFileSync(new URL("../fixtures/auth-poll-cookies.json", import.meta.url), "utf8")) as Array<{ name: string; valid: boolean; value: unknown }>
+  it.each(fixtures)("validates shared worker cookie fixture: $name", fixture => {
+    expect(contracts.BilibiliAuthWorkerPollResultSchema.safeParse(fixture.value).success).toBe(fixture.valid)
+  })
+
   it("publishes the original B/S QR login and credential contract surface", () => {
     expect(contracts).toEqual(expect.objectContaining({
       BilibiliAuthStatusSchema: expect.any(Object),

@@ -1,0 +1,11 @@
+[
+  { "name": "legacy response without jar", "valid": true, "value": { "code": 86101, "message": "waiting", "cookies": [] } },
+  { "name": "separate effective jar and display cookies", "valid": true, "value": {
+    "code": 86101, "message": "waiting",
+    "cookies": [{ "name": "SESSDATA", "value": "SYNTHETIC_RAW" }],
+    "jarCookies": [{ "name": "SESSDATA", "value": "SYNTHETIC_RAW", "domain": "passport.bilibili.com", "path": "/x/passport-login/web/qrcode", "expiresAt": "2027-01-01T00:00:00Z", "httpOnly": true, "secure": true }]
+  } },
+  { "name": "empty jar is authoritative after deletion", "valid": true, "value": { "code": 86101, "message": "waiting", "cookies": [{ "name": "SESSDATA", "value": "SYNTHETIC_EXPIRED" }], "jarCookies": [] } },
+  { "name": "reject invalid jar cookie name", "valid": false, "value": { "code": 86101, "message": "waiting", "cookies": [], "jarCookies": [{ "name": "", "value": "SYNTHETIC" }] } },
+  { "name": "reject invalid jar collection", "valid": false, "value": { "code": 86101, "message": "waiting", "cookies": [], "jarCookies": {} } }
+]
