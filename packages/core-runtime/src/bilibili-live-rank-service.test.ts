@@ -103,6 +103,30 @@ describe("BilibiliLiveRankService", () => {
     }
   })
 
+  it.each([
+    ["AUDIENCE", "today_rank", "daily_rank"],
+    ["GUARD", "guard_accompany", "guard_accompany"]
+  ] as const)("serves the shared widget's four-page %s/%s command from real SQLite", async (family, type, rankType) => {
+    const database = await seededDatabase()
+    const source = rankSource(async request => fetched(request, Array.from({ length: 30 }, (_, index) => {
+      const rankNo = (request.page - 1) * 30 + index + 1
+      return { userUid: String(rankNo + 1000), rankNo, entryKind: "LIST", displayName: `合成排行${rankNo}`,
+        score: 1000 - rankNo, ...(family === "GUARD" ? { accompanyDays: rankNo, guardLevel: 3 } : {}) }
+    }), 120))
+    const service = createService(database, source)
+    try {
+      const result = await service.refresh({ roomMonitorId: MONITOR_ID, families: [family], types: [type], maxPages: 4, force: true })
+      expect(source.calls.map(request => request.page)).toEqual([1, 2, 3, 4])
+      expect(source.calls.every(request => request.family === family && request.type === rankType)).toBe(true)
+      expect(result.successCount).toBe(4)
+      expect(result.errors).toEqual([])
+      expect(result.summary.snapshots).toHaveLength(1)
+      expect(service.summary(MONITOR_ID).snapshots[0]?.entries).toHaveLength(100)
+      expect(service.summary(MONITOR_ID).snapshots[0]?.entries.at(-1)).toMatchObject({ userUid: "1100", rankNo: 100 })
+      if (family === "GUARD") expect(result.summary.snapshots[0]?.entries[0]).toMatchObject({ accompanyDays: 1, guardLevel: 3 })
+    } finally { await service.stop(); database.close() }
+  })
+
   async function seededDatabase(): Promise<ControlDatabase> {
     directory = await mkdtemp(resolve(tmpdir(), "bmd-live-rank-service-"))
     const database = await ControlDatabase.open(directory)

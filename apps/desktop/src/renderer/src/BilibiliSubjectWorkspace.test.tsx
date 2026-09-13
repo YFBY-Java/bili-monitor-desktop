@@ -1,7 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import type {
-  BilibiliLiveRankSummary,
   BilibiliSubject,
   BilibiliSubjectTrend,
   BilibiliSubjectWorkbench
@@ -107,31 +106,6 @@ const trend: BilibiliSubjectTrend = {
   points: [{ bucketAt: timestamp, followerCount: 1_000, liveOnlineCount: 200 }]
 }
 
-const rankSummary: BilibiliLiveRankSummary = {
-  roomMonitorId,
-  roomId: "33",
-  ruid: "22",
-  audienceCount: 1,
-  guardCount: 1,
-  updatedAt: timestamp,
-  snapshots: [{
-    id: "018f0f39-7b5e-4cc1-862d-9a208b3d0b04",
-    roomMonitorId,
-    roomId: "33",
-    ruid: "22",
-    rankFamily: "AUDIENCE",
-    rankType: "online_rank",
-    rankSwitch: "contribution_rank",
-    pageNo: 1,
-    pageSize: 50,
-    totalCount: 1,
-    sourceEndpoint: "xlive/general-interface/v1/rank/getOnlineGoldRank",
-    signedRequired: false,
-    capturedAt: timestamp,
-    entries: [{ userUid: "44", rankNo: 1, entryKind: "online", displayName: "榜一用户", score: 888 }]
-  }]
-}
-
 describe("BilibiliSubjectWorkspace", () => {
   it("renders the original UID-first subject list instead of invented agent features", () => {
     const html = renderToStaticMarkup(
@@ -155,8 +129,6 @@ describe("BilibiliSubjectWorkspace", () => {
       <BilibiliSubjectWorkbenchView
         workbench={workbench}
         trend={trend}
-        rankSummary={rankSummary}
-        rankPending={false}
         loading={false}
         error={null}
         onBack={() => undefined}
@@ -164,9 +136,6 @@ describe("BilibiliSubjectWorkspace", () => {
         onToggleStatus={() => undefined}
         onOpenBinding={() => undefined}
         onResetLayout={() => undefined}
-        onDanmakuStart={() => undefined}
-        onDanmakuStop={() => undefined}
-        onRankRefresh={() => undefined}
       />
     )
     expect(html).toContain("总粉丝数")

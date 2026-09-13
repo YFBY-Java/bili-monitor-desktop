@@ -1,8 +1,5 @@
 import type {
   BilibiliFollowerMonitor,
-  BilibiliLiveRankFamily,
-  BilibiliLiveRankSnapshot,
-  BilibiliLiveRankSummary,
   BilibiliLiveRoom,
   BilibiliSubject,
   BilibiliSubjectTrend,
@@ -30,7 +27,9 @@ import {
   UsersRound,
   X
 } from "lucide-react"
-import { useMemo, useState, type FormEvent, type JSX } from "react"
+import { useMemo, useState, type FormEvent, type JSX, type ReactNode } from "react"
+import { BilibiliLiveDataWidget } from "./BilibiliLiveDataWidget"
+import { ConnectedBilibiliLiveDataWidget } from "./ConnectedBilibiliLiveDataWidget"
 
 export interface BilibiliSubjectListViewProps {
   subjects: BilibiliSubject[]
@@ -44,8 +43,7 @@ export interface BilibiliSubjectListViewProps {
 export interface BilibiliSubjectWorkbenchViewProps {
   workbench?: BilibiliSubjectWorkbench
   trend?: BilibiliSubjectTrend
-  rankSummary?: BilibiliLiveRankSummary
-  rankPending: boolean
+  liveDataWidget?: ReactNode
   loading: boolean
   error: string | null
   onBack: () => void
@@ -53,9 +51,6 @@ export interface BilibiliSubjectWorkbenchViewProps {
   onToggleStatus: () => void
   onOpenBinding: () => void
   onResetLayout: () => void
-  onDanmakuStart: (protocolVersion: number) => void
-  onDanmakuStop: () => void
-  onRankRefresh: (family: BilibiliLiveRankFamily) => void
 }
 
 function formatCount(value: number | undefined): string {
@@ -85,104 +80,6 @@ function danmuText(status: string): string {
   if (status === "missing_live_room") return "未绑定直播间"
   if (status === "disabled") return "未启用"
   return status
-}
-
-function rankSnapshotKey(snapshot: BilibiliLiveRankSnapshot): string {
-  return [snapshot.rankType, snapshot.rankSwitch, snapshot.periodScope].filter(Boolean).join(":")
-}
-
-function rankSnapshotLabel(snapshot: BilibiliLiveRankSnapshot): string {
-  const key = rankSnapshotKey(snapshot)
-  const labels: Record<string, string> = {
-    "online_rank:contribution_rank": "在线贡献",
-    "online_rank:online_rank": "在线榜",
-    "entry_rank": "进房榜",
-    "contribution_rank:day": "日榜",
-    "contribution_rank:week": "周榜",
-    "contribution_rank:month": "月榜",
-    guard_weekly: "大航海周榜",
-    guard_monthly: "大航海月榜"
-  }
-  return labels[key] ?? labels[snapshot.rankType] ?? snapshot.rankType
-}
-
-function SubjectDanmakuWidget({
-  workbench,
-  rankSummary,
-  rankPending,
-  onDanmakuStart,
-  onDanmakuStop,
-  onRankRefresh
-}: {
-  workbench: BilibiliSubjectWorkbench
-  rankSummary?: BilibiliLiveRankSummary
-  rankPending: boolean
-  onDanmakuStart: (protocolVersion: number) => void
-  onDanmakuStop: () => void
-  onRankRefresh: (family: BilibiliLiveRankFamily) => void
-}): JSX.Element {
-  const [mode, setMode] = useState<"danmu" | "audience" | "guard">("danmu")
-  const [protocolVersion, setProtocolVersion] = useState(-1)
-  const [selectedRankKey, setSelectedRankKey] = useState<string>()
-  const family: BilibiliLiveRankFamily = mode === "guard" ? "GUARD" : "AUDIENCE"
-  const snapshots = rankSummary?.snapshots.filter((item) => item.rankFamily === family) ?? []
-  const activeSnapshot = snapshots.find((item) => rankSnapshotKey(item) === selectedRankKey)
-    ?? snapshots[0]
-  const count = family === "GUARD"
-    ? rankSummary?.guardCountText ?? rankSummary?.guardCount
-    : rankSummary?.audienceCountText ?? rankSummary?.audienceCount
-
-  return (
-    <article className="panel subject-widget subject-live-data-widget">
-      <div className="panel-header compact">
-        <div><p>LIVE ROOM DATA</p><h2>{mode === "danmu" ? "直播弹幕" : mode === "guard" ? "大航海榜单" : "房间观众榜单"}</h2></div>
-        <span className={`subject-status ${workbench.danmu.status === "connected" ? "is-active" : ""}`}>{danmuText(workbench.danmu.status)}</span>
-      </div>
-      <div className="subject-data-modes" role="tablist" aria-label="直播间数据视图">
-        {([[
-          "danmu", "弹幕", "实时流"
-        ], ["audience", "房间观众", "榜单"], ["guard", "大航海", "舰长"]] as const).map(([value, label, hint]) => (
-          <button key={value} type="button" className={mode === value ? "is-active" : ""} aria-selected={mode === value} onClick={() => { setMode(value); setSelectedRankKey(undefined) }}>
-            <strong>{label}</strong><span>{hint}</span>
-          </button>
-        ))}
-      </div>
-
-      {mode === "danmu" ? <>
-        <div className="subject-danmu-metrics">
-          <div><span>每分钟</span><strong>{workbench.danmu.ratePerMinute ?? "—"}</strong></div>
-          <div><span>近 5 分钟</span><strong>{workbench.danmu.last5MinutesCount ?? "—"}</strong></div>
-          <div><span>点赞增量</span><strong>{workbench.danmu.likeIncrement ?? "—"}</strong></div>
-        </div>
-        {workbench.danmu.enabled && workbench.bilibiliLiveRoom && (
-          <div className="subject-danmu-actions">
-            <select aria-label="弹幕协议版本" value={protocolVersion} onChange={(event) => setProtocolVersion(Number(event.target.value))}>
-              <option value={-1}>自动兼容</option><option value={3}>protover=3</option><option value={2}>protover=2</option><option value={1}>protover=1</option><option value={0}>protover=0</option>
-            </select>
-            {workbench.danmu.status === "connected"
-              ? <button className="button button-secondary" type="button" onClick={onDanmakuStop}>停止弹幕监控</button>
-              : <button className="button button-primary" type="button" onClick={() => onDanmakuStart(protocolVersion)}>手动开启弹幕监控</button>}
-          </div>
-        )}
-        <div className="subject-danmu-list">
-          {workbench.danmu.recentMessages.length === 0 ? <span>暂无实时弹幕</span> : workbench.danmu.recentMessages.map((message, index) => (
-            <div key={`${message.sentAt}-${index}`}><strong>{message.displayName || "匿名用户"}</strong><span>{message.messageText}</span><time>{new Date(message.sentAt).toLocaleTimeString("zh-CN", { hour12: false })}</time></div>
-          ))}
-        </div>
-      </> : <div className="subject-rank-panel">
-        <div className="subject-rank-summary"><span>{family === "GUARD" ? "大航海人数" : "房间观众"}</span><strong>{count ?? "—"}</strong><button className="button button-secondary" type="button" disabled={rankPending || !workbench.bilibiliLiveRoom} onClick={() => onRankRefresh(family)}>{rankPending ? "读取中…" : "刷新榜单"}</button></div>
-        {!workbench.bilibiliLiveRoom ? <div className="subject-rank-empty"><strong>需要先绑定直播间监控</strong><span>绑定直播间后才能读取真实榜单。</span></div> : snapshots.length === 0 ? <div className="subject-rank-empty"><strong>暂无榜单快照</strong><span>点击刷新榜单后读取 B站真实数据。</span></div> : <>
-          <div className="subject-rank-tabs">{snapshots.map((snapshot) => {
-            const key = rankSnapshotKey(snapshot)
-            return <button key={snapshot.id} type="button" className={activeSnapshot?.id === snapshot.id ? "is-active" : ""} onClick={() => setSelectedRankKey(key)}>{rankSnapshotLabel(snapshot)}</button>
-          })}</div>
-          <div className="subject-rank-list">{activeSnapshot?.entries.length ? activeSnapshot.entries.slice().sort((left, right) => (left.rankNo ?? 9999) - (right.rankNo ?? 9999)).slice(0, 100).map((entry, index) => (
-            <div key={`${entry.userUid ?? "anonymous"}-${entry.rankNo ?? index}`}><em>{entry.rankNo ?? index + 1}</em><span>{entry.faceUrl ? <img src={entry.faceUrl} alt="" referrerPolicy="no-referrer" /> : (entry.displayName || "匿").slice(0, 1)}</span><strong>{entry.displayName || "匿名用户"}</strong><small>{entry.guardLevel ? `大航海等级 ${entry.guardLevel}` : entry.medalName ? `${entry.medalName} ${entry.medalLevel ?? ""}` : `UID ${entry.userUid ?? "—"}`}</small><b>{entry.score === undefined ? "—" : formatCount(entry.score)}</b></div>
-          )) : <span>这个榜单暂无明细</span>}</div>
-        </>}
-      </div>}
-    </article>
-  )
 }
 
 function SubjectAvatar({ subject }: { subject: BilibiliSubject }): JSX.Element {
@@ -315,18 +212,14 @@ function SubjectTrendChart({ trend }: { trend?: BilibiliSubjectTrend }): JSX.Ele
 export function BilibiliSubjectWorkbenchView({
   workbench,
   trend,
-  rankSummary,
-  rankPending,
+  liveDataWidget,
   loading,
   error,
   onBack,
   onRefresh,
   onToggleStatus,
   onOpenBinding,
-  onResetLayout,
-  onDanmakuStart,
-  onDanmakuStop,
-  onRankRefresh
+  onResetLayout
 }: BilibiliSubjectWorkbenchViewProps): JSX.Element {
   if (loading) return (
     <div className="follower-state" role="status">
@@ -392,7 +285,7 @@ export function BilibiliSubjectWorkbenchView({
           </div>
         </article>
 
-        <SubjectDanmakuWidget workbench={workbench} rankSummary={rankSummary} rankPending={rankPending} onDanmakuStart={onDanmakuStart} onDanmakuStop={onDanmakuStop} onRankRefresh={onRankRefresh} />
+        {liveDataWidget ?? <BilibiliLiveDataWidget room={workbench.bilibiliLiveRoom} danmu={workbench.danmu} />}
 
         <article className="panel subject-widget subject-widget-wide">
           <div className="panel-header compact"><div><p>COLLECTION HEALTH</p><h2>采集健康与事件</h2></div><span className="business-safety"><Activity size={14} />{Math.round(workbench.summary.healthScore)}</span></div>
@@ -546,12 +439,6 @@ export function ConnectedBilibiliSubjectWorkspace({
     refetchInterval: 30_000
   })
   const roomMonitorId = workbenchQuery.data?.bilibiliLiveRoom?.monitorId
-  const rankQuery = useQuery({
-    queryKey: ["bilibili-subject-ranks", roomMonitorId],
-    queryFn: () => bridge.bilibiliLive.rankSummary({ roomMonitorId: roomMonitorId! }),
-    enabled: view === "用户工作台" && Boolean(roomMonitorId),
-    refetchInterval: 60_000
-  })
   const usersQuery = useQuery({
     queryKey: ["bilibili-followers"],
     queryFn: () => bridge.bilibiliFollowers.list({ limit: 500 }),
@@ -567,7 +454,7 @@ export function ConnectedBilibiliSubjectWorkspace({
       queryClient.invalidateQueries({ queryKey: ["bilibili-subjects"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-subject-workbench"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-subject-trends"] }),
-      queryClient.invalidateQueries({ queryKey: ["bilibili-subject-ranks"] }),
+      queryClient.invalidateQueries({ queryKey: ["bilibili-live-widget"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-followers"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live-rooms"] })
     ])
@@ -595,24 +482,6 @@ export function ConnectedBilibiliSubjectWorkspace({
   })
   const layoutMutation = useMutation({
     mutationFn: (subjectId: string) => bridge.bilibiliSubjects.updateLayout({ subjectId, items: [] }),
-    onSuccess: invalidate
-  })
-  const danmakuStartMutation = useMutation({
-    mutationFn: (input: { roomMonitorId: string; protocolVersion: number }) => bridge.bilibiliLive.danmakuStart(input),
-    onSuccess: invalidate
-  })
-  const danmakuStopMutation = useMutation({
-    mutationFn: (roomMonitorId: string) => bridge.bilibiliLive.danmakuStop({ roomMonitorId }),
-    onSuccess: invalidate
-  })
-  const rankRefreshMutation = useMutation({
-    mutationFn: (input: { roomMonitorId: string; family: BilibiliLiveRankFamily }) => bridge.bilibiliLive.rankRefresh({
-      roomMonitorId: input.roomMonitorId,
-      families: [input.family],
-      types: [],
-      maxPages: 1,
-      force: true
-    }),
     onSuccess: invalidate
   })
   const workbench = workbenchQuery.data
@@ -644,12 +513,14 @@ export function ConnectedBilibiliSubjectWorkspace({
         <BilibiliSubjectWorkbenchView
           workbench={workbench}
           trend={trendQuery.data}
-          rankSummary={rankQuery.data}
-          rankPending={rankQuery.isPending || rankRefreshMutation.isPending}
+          liveDataWidget={workbench && <ConnectedBilibiliLiveDataWidget
+            key={`${workbench.subject.id}-${roomMonitorId ?? "none"}-${workbench.danmu.enabled}`}
+            bridge={bridge} room={workbench.bilibiliLiveRoom} initialDanmu={workbench.danmu} />}
           loading={Boolean(effectiveSubjectId) && workbenchQuery.isPending}
           error={workbenchQuery.error instanceof Error ? workbenchQuery.error.message : null}
           onBack={onBackToList}
-          onRefresh={() => { void Promise.all([workbenchQuery.refetch(), trendQuery.refetch(), rankQuery.refetch()]) }}
+          onRefresh={() => { void Promise.all([workbenchQuery.refetch(), trendQuery.refetch(),
+            queryClient.invalidateQueries({ queryKey: ["bilibili-live-widget"] })]) }}
           onToggleStatus={() => {
             if (workbench) updateMutation.mutate({
               subjectId: workbench.subject.id,
@@ -658,13 +529,6 @@ export function ConnectedBilibiliSubjectWorkspace({
           }}
           onOpenBinding={() => setBindingOpen(true)}
           onResetLayout={() => { if (workbench) layoutMutation.mutate(workbench.subject.id) }}
-          onDanmakuStart={(protocolVersion) => {
-            if (roomMonitorId) danmakuStartMutation.mutate({ roomMonitorId, protocolVersion })
-          }}
-          onDanmakuStop={() => { if (roomMonitorId) danmakuStopMutation.mutate(roomMonitorId) }}
-          onRankRefresh={(family) => {
-            if (roomMonitorId) rankRefreshMutation.mutate({ roomMonitorId, family })
-          }}
         />
       )}
 

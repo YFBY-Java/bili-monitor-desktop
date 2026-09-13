@@ -34,7 +34,8 @@ import {
   UsersRound,
   X
 } from "lucide-react"
-import { useEffect, useMemo, useRef, useState, type FormEvent, type JSX } from "react"
+import { useEffect, useMemo, useRef, useState, type FormEvent, type JSX, type ReactNode } from "react"
+import { ConnectedBilibiliLiveDataWidget } from "./ConnectedBilibiliLiveDataWidget"
 
 export type BilibiliLiveView =
   | "直播间"
@@ -48,6 +49,7 @@ export type BilibiliLiveView =
 export type BilibiliLiveRoomAction = "refresh" | "toggle" | "interval" | "delete"
 
 export interface BilibiliLiveWorkspacePresentationProps {
+  renderRoomData?: (room: BilibiliLiveRoom) => ReactNode
   view: BilibiliLiveView
   creationOpen: boolean
   rooms: BilibiliLiveRoom[]
@@ -108,6 +110,7 @@ export interface BilibiliLiveWorkspacePresentationProps {
 }
 
 export function BilibiliLiveWorkspacePresentation({
+  renderRoomData,
   view,
   creationOpen,
   rooms,
@@ -164,6 +167,11 @@ export function BilibiliLiveWorkspacePresentation({
   const [interval, setIntervalValue] = useState("300")
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string>()
+  const [expandedRoomId, setExpandedRoomId] = useState<string>()
+  const expandedRoom = rooms.find(room => room.id === expandedRoomId)
+  useEffect(() => {
+    if (expandedRoomId && !expandedRoom) setExpandedRoomId(undefined)
+  }, [expandedRoomId, expandedRoom])
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault()
@@ -269,6 +277,8 @@ export function BilibiliLiveWorkspacePresentation({
                     trendLocked={!selectedTrendIds.includes(room.id) && selectedTrendIds.length >= 4}
                     onToggleTrend={() => onTrendSelectionChange(toggleTrendId(selectedTrendIds, room.id))}
                     onAction={onRoomAction}
+                    expanded={room.id === expandedRoomId}
+                    onToggleData={renderRoomData ? () => setExpandedRoomId(current => current === room.id ? undefined : room.id) : undefined}
                   />
                 ))}
               </div>
@@ -285,6 +295,11 @@ export function BilibiliLiveWorkspacePresentation({
           onSelectionChange={onTrendSelectionChange}
         />
       )}
+
+      {view === "直播间" && expandedRoom && renderRoomData && <section className="live-room-data-detail" aria-label={`${expandedRoom.uname}直播数据`}>
+        <h2>{expandedRoom.uname} · 房间 {expandedRoom.roomId}</h2>
+        {renderRoomData(expandedRoom)}
+      </section>}
 
       {view === "状态事件" && <LiveEvents events={events} />}
 
@@ -385,6 +400,8 @@ function LiveSummary({ summary, rooms }: { summary?: BilibiliLiveSummary; rooms:
 }
 
 function LiveRoomCard({
+  expanded,
+  onToggleData,
   room,
   busy,
   actionError,
@@ -393,6 +410,8 @@ function LiveRoomCard({
   onToggleTrend,
   onAction
 }: {
+  expanded?: boolean
+  onToggleData?: () => void
   room: BilibiliLiveRoom
   busy: boolean
   actionError?: string
@@ -453,6 +472,7 @@ function LiveRoomCard({
         {actionError && <p className="inline-error" role="alert">{actionError}</p>}
         {busy && <p className="live-action-progress" role="status">正在处理，请稍候…</p>}
         <div className="live-room-actions">
+          {onToggleData && <button type="button" aria-expanded={expanded} onClick={onToggleData}><Radio size={14} />{expanded ? "收起直播数据" : "展开直播数据"}</button>}
           <button type="button" disabled={busy} onClick={() => void onAction("refresh", room)}><RefreshCcw size={14} />立即刷新</button>
           <button type="button" disabled={busy} onClick={() => void onAction("toggle", room)}>
             {room.monitorStatus === "ACTIVE" ? <Pause size={14} /> : <Play size={14} />}
@@ -1561,6 +1581,8 @@ export function ConnectedBilibiliLiveWorkspace({
 
   return (
     <BilibiliLiveWorkspacePresentation
+      renderRoomData={room => <ConnectedBilibiliLiveDataWidget key={room.id} bridge={bridge}
+        room={{ monitorId: room.id, liveStatus: room.liveStatus }} />}
       view={view}
       creationOpen={creationOpen}
       rooms={rooms}
