@@ -16,14 +16,16 @@ import {
   RefreshCcw,
   Settings2,
   Trash2,
-  TrendingUp,
   UserRoundPlus,
   UsersRound,
   X
 } from "lucide-react"
-import { useEffect, useMemo, useState, type FormEvent, type JSX } from "react"
+import { useEffect, useMemo, useRef, useState, type FormEvent, type JSX } from "react"
 import { FollowerCollectionSummary, FollowerRhythm, FollowerUserStrip, useFollowerClock } from "./BilibiliFollowerMonitorPanel"
 import { followerSchedule } from "./follower-monitor-presentation"
+import { BilibiliFollowerTrendBoard } from "./BilibiliFollowerTrendBoard"
+import { swapFollowerTrends } from "./follower-trend-presentation"
+import { useFollowerTrends, type FollowerTrendIndicator } from "./use-follower-trends"
 
 export type FollowerResourceState<T> =
   | { phase: "loading" }
@@ -40,6 +42,9 @@ export interface BilibiliFollowerWorkspaceProps {
   busyUserIds: string[]
   collectingUserIds?: string[]
   selectedUserIds?: string[]
+  trendIndicator?: FollowerTrendIndicator
+  onSwapTrends?: (source: string, target: string) => void
+  onReloadTrends?: () => void
   onCloseCreation: () => void
   onAdd: (input: AddBilibiliFollowerMonitorInput) => Promise<void>
   onRefreshUser: (userId: string) => Promise<void>
@@ -236,67 +241,19 @@ function MonitorDetail({
   )
 }
 
-function TrendChart({ trend, colorIndex }: { trend: BilibiliFollowerTrend; colorIndex: number }): JSX.Element {
-  const width = 720
-  const height = 180
-  const values = trend.points.map((point) => point.followerCount)
-  const minimum = Math.min(...values)
-  const maximum = Math.max(...values)
-  const span = Math.max(1, maximum - minimum)
-  const first = trend.points[0]
-  const last = trend.points.at(-1)
-  const firstTime = first ? Date.parse(first.capturedAt) : 0
-  const timeSpan = last ? Date.parse(last.capturedAt) - firstTime : 0
-  const coordinates = trend.points.map((point) => ({
-    x: timeSpan === 0 ? width / 2 : ((Date.parse(point.capturedAt) - firstTime) / timeSpan) * width,
-    y: maximum === minimum ? height / 2 : height - 18 - ((point.followerCount - minimum) / span) * (height - 36)
-  }))
-  const path = coordinates.map(({ x, y }, index) => {
-    return `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`
-  }).join(" ")
-
-  return (
-    <article className={`follower-trend-card trend-color-${colorIndex % 4}`}>
-      <div><strong>{trend.user.nickname}</strong><span>UID {trend.user.mid} · {trend.points.length} 个快照</span></div>
-      {trend.points.length === 0 ? (
-        <p className="trend-empty">暂无历史快照</p>
-      ) : (
-        <>
-          <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${trend.user.nickname}粉丝趋势`}>
-            <path className="trend-grid-line" d={`M0 ${height - 18} H${width}`} />
-            <path className="trend-data-line" d={path} />
-            {trend.points.map((point, index) => {
-              const { x, y } = coordinates[index]!
-              const label = `${formatTime(point.capturedAt)} · 粉丝 ${formatCount(point.followerCount)}`
-              return <circle key={point.capturedAt} cx={x} cy={y} r="4" tabIndex={0} aria-label={label}><title>{label}</title></circle>
-            })}
-          </svg>
-          <div className="trend-time-range"><time dateTime={first?.capturedAt}>{formatTime(first?.capturedAt)}</time><time dateTime={last?.capturedAt}>{formatTime(last?.capturedAt)}</time></div>
-          <div className="trend-range"><span>最低 {formatCount(minimum)}</span><strong className={(last?.followerCount ?? 0) < (first?.followerCount ?? 0) ? "is-negative" : "is-positive"}>区间净变化 {first && last ? formatDelta(last.followerCount - first.followerCount) : "—"}</strong><span>最高 {formatCount(maximum)}</span></div>
-        </>
-      )}
-    </article>
-  )
-}
-
-function TrendWorkspace({ trends }: { trends: FollowerResourceState<BilibiliFollowerTrend[]> }): JSX.Element {
-  if (trends.phase === "loading") return <div className="follower-state" role="status"><LoaderCircle className="spin" size={20} /><div><strong>正在读取粉丝历史趋势</strong><span>历史快照来自本机 SQLite。</span></div></div>
-  if (trends.phase === "error") return <div className="follower-state is-error" role="alert"><CircleAlert size={20} /><div><strong>趋势数据暂时不可用</strong><span>{trends.message}</span></div></div>
-  return (
-    <section className="panel follower-trends">
-      <div className="panel-header compact"><div><p>FOLLOWER HISTORY</p><h2>粉丝历史趋势</h2></div><span className="follower-limit">最多选择 4 个用户</span></div>
-      {trends.staleMessage && <p className="form-error" role="alert">趋势更新失败，保留上次数据：{trends.staleMessage}</p>}
-      {trends.data.length === 0
-        ? <div className="business-empty"><TrendingUp size={25} /><strong>请选择监控用户</strong><span>在“监控用户”页勾选最多 4 个用户进行历史趋势对比。</span></div>
-        : <div className="follower-trend-list">{trends.data.map((trend, index) => <TrendChart key={trend.user.id} trend={trend} colorIndex={index} />)}</div>}
-    </section>
-  )
-}
-
 export function BilibiliFollowerWorkspace(props: BilibiliFollowerWorkspaceProps): JSX.Element {
   const now = useFollowerClock()
   const [expandedId, setExpandedId] = useState<string>()
   const [intervalDrafts, setIntervalDrafts] = useState<Record<string, number>>({})
+  const trendAnchor = useRef<HTMLDivElement>(null)
+  const monitorAnchor = useRef<HTMLDivElement>(null)
+  const previousView = useRef(props.view)
+  useEffect(() => {
+    if (previousView.current === props.view) return
+    previousView.current = props.view
+    if (props.view === "趋势对比") trendAnchor.current?.scrollIntoView({ block: "start" })
+    else monitorAnchor.current?.scrollIntoView({ block: "start" })
+  }, [props.view])
   const users = props.monitors.phase === "success" ? props.monitors.data : []
   const expanded = users.find(user => user.id === expandedId)
   useEffect(() => {
@@ -317,13 +274,10 @@ export function BilibiliFollowerWorkspace(props: BilibiliFollowerWorkspaceProps)
     <>
       {props.actionError && <div className="follower-state is-error" role="alert"><CircleAlert size={20} /><span>{props.actionError}</span></div>}
       {props.monitors.phase === "success" && props.monitors.staleMessage && <div className="follower-state is-error" role="alert"><CircleAlert size={20} /><span>更新失败，保留上次数据：{props.monitors.staleMessage}</span><button className="button button-secondary" onClick={props.onReload}>重新加载</button></div>}
-      <FollowerCollectionSummary users={users} available={props.monitors.phase === "success"} />
+      <div ref={monitorAnchor}><FollowerCollectionSummary users={users} available={props.monitors.phase === "success"} /></div>
       {users.some(user => (intervalDrafts[user.id] ?? user.intervalSeconds) < 60) && <p className="follower-short-notice" role="note">已允许 1 秒采集间隔；短间隔会受全局请求节流和失败退避保护，建议只用于少量用户的临时观察。</p>}
 
-      {props.view === "趋势对比" ? (
-        <TrendWorkspace trends={props.trends} />
-      ) : (
-        <>
+        <div>
           <MonitorState monitors={props.monitors} onReload={props.onReload} />
           {props.monitors.phase === "success" && (
             <section className="panel follower-directory">
@@ -338,8 +292,11 @@ export function BilibiliFollowerWorkspace(props: BilibiliFollowerWorkspaceProps)
                 onRefreshUser={props.onRefreshUser} onUpdateStatus={props.onUpdateStatus} onUpdateSettings={props.onUpdateSettings} onDelete={props.onDelete} />}
             </section>
           )}
-        </>
-      )}
+        </div>
+      <div ref={trendAnchor}><BilibiliFollowerTrendBoard users={selected.flatMap(id => {
+        const user = users.find(item => item.id === id)
+        return user ? [user] : []
+      })} trends={props.trends} indicator={props.trendIndicator} now={now} onSwap={props.onSwapTrends} onReload={props.onReloadTrends} /></div>
 
       {props.creationOpen && (
         <div className="creation-backdrop" role="presentation">
@@ -377,12 +334,7 @@ export function ConnectedBilibiliFollowerWorkspace({
   useEffect(() => {
     if (monitorsQuery.data) setSelectedUserIds((ids) => ids.filter((id) => monitorsQuery.data.items.some((user) => user.id === id)))
   }, [monitorsQuery.data])
-  const trendsQuery = useQuery({
-    queryKey: ["bilibili-follower-trends", effectiveUserIds],
-    queryFn: () => bridge.bilibiliFollowers.trends({ userIds: effectiveUserIds, limitPerUser: 500 }),
-    enabled: view === "趋势对比" && effectiveUserIds.length > 0,
-    refetchInterval: view === "趋势对比" ? 2_000 : false
-  })
+  const trendsQuery = useFollowerTrends(bridge, effectiveUserIds, monitorsQuery.dataUpdatedAt)
   const invalidate = async (): Promise<void> => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["bilibili-followers"] }),
@@ -417,9 +369,9 @@ export function ConnectedBilibiliFollowerWorkspace({
     ? { phase: "success", data: [] }
     : trendsQuery.data
       ? { phase: "success", data: trendsQuery.data, refreshing: trendsQuery.isFetching,
-          ...(trendsQuery.isError ? { staleMessage: trendsQuery.error.message } : {}) }
-      : trendsQuery.isError
-        ? { phase: "error", message: trendsQuery.error.message }
+          ...(trendsQuery.currentError ? { staleMessage: trendsQuery.currentError } : {}) }
+      : trendsQuery.currentError
+        ? { phase: "error", message: trendsQuery.currentError }
         : { phase: "loading" }
   const toggleTrendUser = (userId: string): void => {
     setSelectedUserIds((ids) => ids.includes(userId) ? ids.filter((id) => id !== userId) : ids.length < 4 ? [...ids, userId] : ids)
@@ -436,6 +388,9 @@ export function ConnectedBilibiliFollowerWorkspace({
       busyUserIds={busyUserIds}
       collectingUserIds={collectingUserIds}
       selectedUserIds={effectiveUserIds}
+      trendIndicator={trendsQuery.indicator}
+      onSwapTrends={(source, target) => setSelectedUserIds(ids => swapFollowerTrends(ids, source, target))}
+      onReloadTrends={trendsQuery.reload}
       onCloseCreation={onCloseCreation}
       onAdd={async (input) => { await addMutation.mutateAsync(input) }}
       onRefreshUser={userId => runUserAction(userId, async () => {

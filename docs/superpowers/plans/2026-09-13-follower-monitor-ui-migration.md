@@ -53,11 +53,13 @@ const progress = user.monitorStatus === 'PAUSED' ? 0 : collecting || user.lastEr
 
 ## Task 2: 同页趋势、1/2/3/4布局与拖动
 
-**Files:** Create `apps/desktop/src/renderer/src/BilibiliFollowerTrendBoard.tsx`, `follower-trend-presentation.ts`, `follower-trend-presentation.test.ts`; Modify workspace、interaction tests、样式。
+**Files:** Create `apps/desktop/src/renderer/src/BilibiliFollowerTrendBoard.tsx`, `FollowerTrendChart.tsx`, `use-follower-trends.ts`, `use-follower-trend-drag.ts`, `follower-trend-board.css`, `follower-trend-presentation.ts`, `follower-trend-presentation.test.ts`, `BilibiliFollowerTrendBoard.interaction.test.ts`; Modify workspace、既有interaction tests、fixture、旧样式和README/台账。
 
 **Interfaces:** TrendBoard 接收所选完整 Monitor、按ID映射的 Trend、refreshing/error及`onSwap(sourceId,targetId)`；选中ID顺序是唯一布局依据，刷新不更改顺序。折叠详情不改变趋势选择。
 
-- [ ] 原组件先复现同页选中未请求趋势、布局缺失、拖动缺失、恒定/微幅数据纵轴误导。测试 1/2/3/4 的实际 bounding boxes，高度分别440、360、440/204、248；拖动只交换源/目标，忽略 button/a/input，8px阈值，取消/卸载清理。键盘提供等价交换操作。
+**接入细化（监控UI已提交为9a024cd后）：** 新增 `use-follower-trends.ts` 封装180ms合并、单请求在途、120ms补读以及700/900ms提示，业务数据仍在TanStack Query缓存中，按当前选中ID裁剪，不另建业务状态仓库。列表本地重读完成触发趋势读取，Renderer没有平台采集定时器。原有“趋势对比”入口作为同页定位，用户选择区不再卸载。图表用现有React/SVG适配时间/数值轴及提示，不引入新的图表依赖；`follower-trend-board.css`沿用已有浅粉白token、13px以上坐标文字和40px交换按钮，三人时首图主视图、侧边两图用于对照。仅合成浏览器fixture提供延迟/失败响应，不进入生产包。
+
+- [x] 原客户端先复现同页选中不请求趋势、坐标轴缺失，再以10项纯函数RED/GREEN校验布局高度、交换/回退与轴规则。真实浏览器验证1/2/3/4 bounding boxes，高度440、360、440/204、248；拖动只交换源/目标，忽略button/a/input，8px阈值，取消/卸载清理；键盘等价交换。
 
 ```ts
 const next = [...ids]
@@ -67,9 +69,9 @@ const magnitude = Math.max(Math.abs(min), Math.abs(max), 1)
 const span = Math.max((max-min)*2.2, magnitude*.000035, magnitude >= 1e6 ? 400 : magnitude >= 1e4 ? 80 : 8)*1.18
 ```
 
-- [ ] 按源码迁移点回退（非空500点→recentTrend→当前值单点）、时间padding（单点±30min，其他max(跨度4%,30/60秒)）、数值轴padding与0下限、中文万/亿刻度和实际时间/数值tooltip。首次空/失败、刷新失败保留、选择快速变化不串用户，图表与选择同页。
-- [ ] 选择变更180ms合并查询，忙时保留有效图，未选用户不展示迟到数据；刷新提示至少700ms、结果900ms且取消旧timer。本地轮询与原平台调度责任不混淆。
-- [ ] 目标回归、完整 `check.cmd`、独立只读审查、生产包fixture排查及原仓库状态验证；更新README/台账。不据此把M07登录或整个迁移勾完成，不自动提交。
+- [x] 按源码迁移点回退（非空500点→recentTrend→当前值单点）、时间padding（单点±30min，其他max(跨度4%,30/60秒)）、数值轴padding与0下限、中文万/亿刻度和实际时间/数值tooltip。首次空/失败、刷新失败保留、选择快速变化不串用户，图表与选择同页。
+- [x] 选择变更180ms合并查询，忙时保留有效图，未选用户不展示迟到数据；刷新提示至少700ms、结果900ms且取消旧timer。本地轮询与原平台调度责任不混淆。
+- [x] 目标回归、完整 `check.cmd`、独立只读审查、生产包fixture排查及原仓库状态验证；更新README/台账。不据此把M07登录或整个迁移勾完成，不自动提交。
 
 ## Task 1 执行证据
 
@@ -79,3 +81,13 @@ const span = Math.max((max-min)*2.2, magnitude*.000035, magnitude >= 1e6 ? 400 :
 - 只读审查发现1处P2：采集中标志覆盖了采集后的本地投影重读；新增 pending-list 回归先真实失败，再将标志限制到 bridge.refresh promise，复查确认关闭。零增长/未知值中性样式也先复现后修复。无遗留 Critical/Important。
 - 最终 `check.cmd` 退出0：Node344项、Python54项，TypeScript/mypy、Black/isort、Electron生产构建及D盘路径验证通过；目标31项通过，`git diff --check`通过，生产包没有本轮fixture。没有更改契约/数据库/Worker。
 - 原B/S仍为`fa2faa6`且工作区干净；本轮没有重启已安装应用、打安装包、真人平台验收、提交或推送。Task2趋势同页/布局/拖动/轴与提示继续保留，M06整体和全量迁移均未完成。
+
+## Task 2 执行证据
+
+- Task1 已按用户明确要求提交到本地 `9a024cd`；本轮在其后继续，无自动提交/推送。重新只读核对原 BilibiliView.vue 的选择/布局/拖动/队列/点回退及完整 TrendChart.vue；不扩充平台查询、日期筛选或模拟业务。
+- 真实浏览器先复现监控页勾选不读取趋势、缺失坐标轴；纯计算10项从初始实现RED到GREEN，校验原值域/时间域padding、万/亿刻度、1/2/3/4高度、两槽交换和包含0的点回退。新13项真实Connected页面回归覆盖同页布局、原Tab定位/草稿、快速选择/单在途/120ms补读、数据/错误迟到隔离、700/900ms提示、清空/卸载、4×500点和键盘Home/End/左右/Escape。
+- 调试修正：旧图表测试把Grip图标圆点算作数据点，已限定真实SVG数据点；旧CSS将说明压为10px，先失败后移除重复的旧TrendCard样式，保留现有主题token、13px以上说明/坐标与40px按钮。窄窗口初次挂载滚走汇总（scrollTop324）先复现，再仅在Tab变化时定位；清空用户后提示短暂残留先复现，再按空选择立即派生idle。
+- 独立只读审查复现P2：新请求发起时把Query旧error错误归属给新选择。回归先失败后改为失败时记录请求key、成功清空；原路径复测及主回归通过，审查复查关闭。另实测恰好8px拖动和拖动中卸载的监听器清理；没有遗留Critical/Important。
+- 完整 `check.cmd` 退出0：Node367项（desktop153）、Python54项，TypeScript/mypy、Black/isort、Electron生产构建及D盘路径验证通过。随后仅完善视觉用例的稳定状态等待/截图高度，单项重跑通过；没有再改生产实现。浅色/深色/760px窄宽截图已实际查看，均为合成fixture；截图位于 `.tools/temp/m06-trends-*.png`，不进入Git。
+- `git diff --check`及生产包fixture排查通过；原项目仍`fa2faa6`且干净，没有更改契约、Worker、数据库或依赖。未重启已安装客户端、打安装包、访问真人平台或真实数据库；不能将这些列为已验收。
+- 本计划两个UI子项已实现并自动验证。下一步对M06新增/状态/间隔/删除/调度链路做最终逐操作源码复核，再进入M07登录；M07–M18和全量目标仍保持，不能据本轮完成整个迁移。

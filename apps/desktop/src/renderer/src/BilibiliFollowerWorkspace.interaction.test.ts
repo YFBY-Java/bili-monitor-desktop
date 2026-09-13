@@ -216,10 +216,10 @@ describe("follower workflow in the renderer", () => {
   it("plots actual timestamps and a declining range as a loss", async () => {
     await page.locator('.trend-selector input').first().check()
     await page.getByRole("button", { name: "查看趋势", exact: true }).click()
-    await page.locator(".follower-trend-card circle").first().waitFor()
-    const x = await page.locator(".follower-trend-card circle").evaluateAll((nodes) => nodes.map((node) => Number(node.getAttribute("cx"))))
+    await page.locator(".follower-history-svg circle").first().waitFor()
+    const x = await page.locator(".follower-history-svg circle").evaluateAll((nodes) => nodes.map((node) => Number(node.getAttribute("cx"))))
     expect((x[1]! - x[0]!) / (x[2]! - x[0]!)).toBeCloseTo(0.1, 2)
     await page.getByText("区间净变化 -20", { exact: true }).waitFor()
-    expect(await page.locator(".follower-trend-card circle title").first().textContent()).toContain("120")
+    expect(await page.locator(".follower-history-svg circle title").first().textContent()).toContain("120")
   })
 })

@@ -1,4 +1,4 @@
-import type { BilibiliFollowerMonitor, ListBilibiliFollowerMonitorsInput } from "@bmd/contracts"
+import type { BilibiliFollowerMonitor, BilibiliFollowerPoint, ListBilibiliFollowerMonitorsInput, QueryBilibiliFollowerTrendsInput } from "@bmd/contracts"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useState } from "react"
 import { createRoot } from "react-dom/client"
@@ -26,6 +26,15 @@ const fixture = {
   holdList: false,
   listWaiting: false,
   releaseList: () => {},
+  holdTrends: false,
+  trendError: "",
+  trendRequests: [] as QueryBilibiliFollowerTrendsInput[],
+  trendStartedAt: [] as number[],
+  trendFinishedAt: [] as number[],
+  trendReleases: [] as (() => void)[],
+  activeTrends: 0,
+  maxActiveTrends: 0,
+  history: {} as Record<string, BilibiliFollowerPoint[]>,
   patchUser: (index: number, patch: Partial<BilibiliFollowerMonitor>) => {
     users = users.map((user, position) => position === index ? { ...user, ...patch } : user)
   },
@@ -82,21 +91,32 @@ bridge.bilibiliFollowers = {
   },
   remove: async ({ userId }) => { action("delete"); users = users.filter((user) => user.id !== userId); return { deleted: true } },
   trend: async ({ userId }) => { const user = requireUser(userId); return { user, points: user.recentTrend } },
-  trends: async ({ userIds = [] }) => {
+  trends: async (input) => {
     fixture.calls.push("trends")
-    if (fixture.readError) throw new Error(fixture.readError)
-    return userIds.map((id) => { const user = requireUser(id); return { user, points: user.recentTrend } })
+    fixture.trendRequests.push(input)
+    fixture.trendStartedAt.push(performance.now())
+    fixture.activeTrends++
+    fixture.maxActiveTrends = Math.max(fixture.maxActiveTrends, fixture.activeTrends)
+    const failure = fixture.trendError || fixture.readError
+    const result = (input.userIds ?? []).map(id => { const user = requireUser(id); return { user, points: fixture.history[user.mid] ?? user.recentTrend } })
+    try {
+      if (fixture.holdTrends) await new Promise<void>(resolve => { fixture.trendReleases.push(resolve) })
+      if (failure) throw new Error(failure)
+      return result
+    } finally { fixture.activeTrends--; fixture.trendFinishedAt.push(performance.now()) }
   }
 }
 const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 0 } } })
 function Fixture() {
   const [view, setView] = useState<"监控用户" | "趋势对比">("监控用户")
   const [creationOpen, setCreationOpen] = useState(false)
+  const [mounted, setMounted] = useState(true)
   return <QueryClientProvider client={client}><main className="theme-light" style={{ padding: 24, height: "100vh", overflow: "auto", color: "var(--text)", background: "var(--bg)" }}>
     <button className="button button-secondary" onClick={() => setView("监控用户")}>查看用户列表</button>
     <button className="button button-secondary" onClick={() => setView("趋势对比")}>查看趋势</button>
     <button className="button button-secondary" onClick={() => setCreationOpen(true)}>添加用户</button>
-    <ConnectedBilibiliFollowerWorkspace bridge={bridge} view={view} creationOpen={creationOpen} onCloseCreation={() => setCreationOpen(false)} />
+    <button className="button button-secondary" onClick={() => setMounted(value => !value)}>挂载或卸载粉丝页</button>
+    {mounted && <ConnectedBilibiliFollowerWorkspace bridge={bridge} view={view} creationOpen={creationOpen} onCloseCreation={() => setCreationOpen(false)} />}
   </main></QueryClientProvider>
 }
 createRoot(document.getElementById("root")!).render(<Fixture />)

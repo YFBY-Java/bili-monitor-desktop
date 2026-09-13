@@ -1141,17 +1141,6 @@ kbd {
 
 .follower-limit { color: var(--muted); font-size: 11px; }
 .follower-trend-list { display: grid; gap: 16px; padding: 20px; }
-.follower-trend-card { padding: 18px 20px 14px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel-soft); }
-.follower-trend-card > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 15px; }
-.follower-trend-card strong { color: var(--text); font-size: 14px; }
-.follower-trend-card span { color: var(--muted); font-size: 10px; }
-.follower-trend-card svg { width: 100%; height: 160px; margin-top: 12px; overflow: visible; }
-.follower-trend-card .trend-grid-line { fill: none; stroke: var(--line-bright); stroke-width: 1; }
-.follower-trend-card .trend-data-line { fill: none; stroke: var(--coral); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
-.follower-trend-card circle { fill: var(--panel); stroke: var(--coral); stroke-width: 3; }
-.follower-trend-card.trend-color-1 .trend-data-line, .follower-trend-card.trend-color-1 circle { stroke: var(--cyan); }
-.follower-trend-card.trend-color-2 .trend-data-line, .follower-trend-card.trend-color-2 circle { stroke: var(--violet); }
-.follower-trend-card.trend-color-3 .trend-data-line, .follower-trend-card.trend-color-3 circle { stroke: var(--mint); }
 .trend-range { display: flex; align-items: center; justify-content: space-between; padding-top: 8px; border-top: 1px solid var(--line); }
 .trend-range strong { color: var(--mint); font-size: 11px; }
 .trend-range strong.is-negative { color: var(--coral); }
@@ -1159,12 +1148,11 @@ kbd {
 .trend-selector:has(input:disabled) { opacity: 0.6; cursor: not-allowed; }
 .trend-empty { margin: 28px 0 10px; color: var(--muted); font-size: 12px; text-align: center; }
 
-.theme-light .follower-card, .theme-light .follower-counts > div, .theme-light .trend-selector, .theme-light .follower-settings summary, .theme-light .follower-trend-card { background: #fffafb; }
+.theme-light .follower-card, .theme-light .follower-counts > div, .theme-light .trend-selector, .theme-light .follower-settings summary { background: #fffafb; }
 .theme-light .follower-card:hover { border-color: #e8bdcc; box-shadow: 0 14px 34px rgba(126, 66, 88, 0.08); }
-.theme-light .follower-profile a, .theme-light .follower-counts strong, .theme-light .follower-trend-card strong { color: #493740; }
+.theme-light .follower-profile a, .theme-light .follower-counts strong { color: #493740; }
 .theme-light .follower-settings[open] > div { border-color: #e3cbd4; background: #ffffff; box-shadow: 0 18px 48px rgba(113, 53, 75, 0.15); }
 .theme-light .follower-settings input { color: #4d3942; background: #fff7fa; }
-.theme-light .follower-trend-card circle { fill: #fffafb; }
 
 /* Original B/S business: Bilibili live room REST monitoring. */
 .live-workspace { display: grid; gap: 22px; margin-top: 22px; }
