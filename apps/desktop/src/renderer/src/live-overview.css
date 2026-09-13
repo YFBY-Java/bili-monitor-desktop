@@ -1,0 +1,23 @@
+.live-overview-summary .live-summary-card { min-width: 0; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; padding: 18px 20px; }
+.live-overview-summary .live-summary-card span { font-size: 14px; line-height: 1.6; }
+.live-overview-summary .live-summary-card strong { grid-column: 1 / -1; font-size: 20px; line-height: 1.5; text-align: left; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.live-overview-toolbar { display: flex; flex-wrap: wrap; gap: 10px 22px; margin: -2px 0 18px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.live-overview-stale { margin: 0; padding: 12px 16px; border: 1px solid var(--line-bright); border-radius: 10px; color: var(--muted); background: var(--panel); font-size: 14px; line-height: 1.7; }
+.live-overview-events { min-width: 0; padding: 24px; }
+.live-overview-events > header h2 { margin: 0; font-size: 18px; line-height: 1.5; }
+.live-overview-events > header p, .live-overview-events > p { font-size: 14px; line-height: 1.7; color: var(--muted); }
+.live-overview-events > header p { margin: 8px 0 0; }
+.live-overview-events .live-event-list article { gap: 12px 16px; padding: 20px 0; }
+.live-overview-events .live-event-list article > div { min-width: 0; overflow-wrap: anywhere; }
+.live-overview-events .live-event-list strong { font-size: 16px; line-height: 1.6; font-weight: 600; }
+.live-overview-events .live-event-list span, .live-overview-events .live-event-list small { color: var(--muted); font-size: 14px; line-height: 1.6; }
+.live-overview-events .live-event-list time { font-family: inherit; font-size: 14px; line-height: 1.8; font-variant-numeric: tabular-nums; }
+.live-overview-events .live-event-list i { margin-top: 8px; box-shadow: none; }
+.live-overview-empty { padding: 18px 0; text-align: center; }
+@media (max-width: 1000px) { .live-overview-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) {
+  .live-overview-summary { grid-template-columns: minmax(0, 1fr); }
+  .live-overview-events { padding: 18px; }
+  .live-overview-events .live-event-list article { grid-template-columns: 8px minmax(0, 1fr); }
+  .live-overview-events .live-event-list time { grid-column: 2; white-space: normal; }
+}

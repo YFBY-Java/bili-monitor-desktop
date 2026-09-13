@@ -396,7 +396,7 @@ describe("original live-room renderer workflows", () => {
     await page.getByRole("button", { name: "查看事件", exact: true }).click()
     await page.getByText("暂无状态事件", { exact: true }).waitFor()
     await page.getByRole("button", { name: "注入测试事件" }).click()
-    await page.getByText("标题变化", { exact: true }).waitFor()
+    await page.getByText("测试主播1 · 标题变化", { exact: true }).waitFor()
     await page.getByText("旧标题 → 新标题", { exact: true }).waitFor()
     await page.getByRole("button", { name: "查看直播间", exact: true }).click()
     await page.evaluate(async () => { window.liveFixture.listError = "暂时无法读取房间"; await window.liveFixture.reload() })

@@ -1,7 +1,6 @@
 import type {
   AddBilibiliLiveRoomInput,
   BilibiliLiveRoom,
-  BilibiliLiveRoomList,
   BilibiliLiveRoomTrend,
   BilibiliLiveRankSummary,
   BilibiliLiveDanmakuMetricBucket,
@@ -36,6 +35,10 @@ import { ConnectedBilibiliLiveDataWidget } from "./ConnectedBilibiliLiveDataWidg
 import { BilibiliLiveMonitorPanel, useLiveMonitorPanel } from "./BilibiliLiveMonitorPanel"
 import { BilibiliLiveTrendBoard } from "./BilibiliLiveTrendBoard"
 import { useLiveTrendQuery } from "./useLiveTrendQuery"
+import { useLiveOverviewQuery } from "./useLiveOverviewQuery"
+import { LiveOverviewSummary, LiveStatusEvents } from "./BilibiliLiveOverview"
+
+const emptyLiveRooms: BilibiliLiveRoom[] = []
 
 export type BilibiliLiveView =
   | "直播间"
@@ -79,6 +82,8 @@ export interface BilibiliLiveWorkspacePresentationProps {
   exportMessage?: string
   rankErrors?: string[]
   pending: boolean
+  overviewAvailable?: boolean
+  overviewStale?: boolean
   errorMessage?: string
   busyRoomIds?: string[]
   roomActionErrors?: Record<string, string | undefined>
@@ -91,7 +96,8 @@ export interface BilibiliLiveWorkspacePresentationProps {
   onRoomAction: (
     action: BilibiliLiveRoomAction,
     room: BilibiliLiveRoom,
-    intervalSeconds?: number
+    intervalSeconds?: number,
+    onCommitted?: () => void
   ) => Promise<boolean | void>
   onCloseCreation: () => void
   onTrendSelectionChange: (ids: string[]) => void
@@ -141,6 +147,8 @@ export function BilibiliLiveWorkspacePresentation({
   exportMessage,
   rankErrors = [],
   pending,
+  overviewAvailable = !pending,
+  overviewStale = false,
   errorMessage,
   busyRoomIds = [],
   roomActionErrors = {},
@@ -249,22 +257,31 @@ export function BilibiliLiveWorkspacePresentation({
       )}
 
       {errorMessage && <div className="business-error" role="alert">{errorMessage}</div>}
+      {overviewStale && <p className="live-overview-stale" role="status">本次读取未完成，保留上次完整读取的数据；房间、汇总和事件均未更新。请刷新监控数据重试。</p>}
       {((creationOpen && Number(interval) < 120 && Number(interval) > 0)
         || rooms.some(room => (monitorPanel.drafts[room.id] ?? room.intervalSeconds) < 120)) &&
         <p className="inline-warning">短间隔会增加 B站接口请求频率，请确认确有需要。</p>}
       {onReload && (
         <div className="live-data-toolbar">
           <span>自动同步本地采集结果；立即采集请使用房间内的“立即刷新”。</span>
-          <button type="button" className="button" disabled={refreshing} onClick={() => void onReload()}>
+          <button type="button" className="button button-secondary" disabled={refreshing} onClick={() => void onReload()}>
             <RefreshCcw size={15} />刷新监控数据
           </button>
         </div>
       )}
-      <LiveSummary summary={summary} rooms={rooms} />
+      <div className="live-overview-toolbar" aria-label="房间统计">
+        <span>{overviewAvailable ? summary?.totalRooms ?? rooms.length : "—"} 个房间</span>
+        <span>{overviewAvailable ? summary?.liveRooms ?? rooms.filter(room => room.liveStatus === 1).length : "—"} 个直播中</span>
+        <span>{overviewAvailable ? summary?.errorRooms ?? rooms.filter(room => room.lastErrorType).length : "—"} 个异常</span>
+        <span>{overviewAvailable ? summary?.todayLiveStarts ?? 0 : "—"} 个今日开播</span>
+      </div>
+      <LiveOverviewSummary summary={summary} rooms={rooms} events={events} now={monitorPanel.now} available={overviewAvailable} pending={pending} />
 
       {view === "直播间" && (
         pending
           ? <LiveState title="正在读取直播间监控" detail="正在读取本地保存的直播间数据。" />
+          : !overviewAvailable
+            ? <LiveState title="未能读取直播监控数据" detail="请刷新监控数据重试；当前无法确定房间、汇总和事件。" />
           : rooms.length === 0
             ? <LiveState title="尚未监控直播间" detail="点击“添加直播间”后，应用会立即请求 B站公开直播接口并保存首个快照。" />
             : <BilibiliLiveMonitorPanel rooms={rooms} state={monitorPanel} selectedTrendIds={selectedTrendIds}
@@ -272,7 +289,7 @@ export function BilibiliLiveWorkspacePresentation({
                 onToggleTrend={id => onTrendSelectionChange(toggleTrendId(selectedTrendIds, id))} />
       )}
 
-      {(view === "趋势对比" || (view === "直播间" && !pending)) && (
+      {overviewAvailable && (view === "趋势对比" || (view === "直播间" && !pending)) && (
         <BilibiliLiveTrendBoard
           showSelector={view === "趋势对比"}
           rooms={rooms}
@@ -285,7 +302,8 @@ export function BilibiliLiveWorkspacePresentation({
         />
       )}
 
-      {view === "状态事件" && <LiveEvents events={events} />}
+      {(view === "状态事件" || (view === "直播间" && overviewAvailable && rooms.length > 0)) &&
+        <LiveStatusEvents events={events} rooms={rooms} now={monitorPanel.now} available={overviewAvailable} pending={pending} />}
 
       {view === "实时弹幕" && (
         <LiveDanmakuView
@@ -362,52 +380,6 @@ export function BilibiliLiveWorkspacePresentation({
   )
 }
 
-function LiveSummary({ summary, rooms }: { summary?: BilibiliLiveSummary; rooms: BilibiliLiveRoom[] }): JSX.Element {
-  const fallbackLive = rooms.filter((room) => room.liveStatus === 1)
-  const values = [
-    ["直播中", summary?.liveRooms ?? fallbackLive.length, Radio],
-    ["总热度", formatCount(summary?.totalOnlineCount ?? fallbackLive.reduce((sum, room) => sum + (room.onlineCount ?? 0), 0)), UsersRound],
-    ["今日开播", summary?.todayLiveStarts ?? 0, TrendingUp],
-    ["采集异常", summary?.errorRooms ?? rooms.filter((room) => room.lastErrorType).length, Activity]
-  ] as const
-  return (
-    <div className="live-summary-grid">
-      {values.map(([label, value, Icon]) => (
-        <article className="live-summary-card" key={label}>
-          <Icon size={17} />
-          <span>{label}</span>
-          <strong>{value}</strong>
-        </article>
-      ))}
-    </div>
-  )
-}
-
-
-
-function LiveEvents({ events }: { events: BilibiliLiveStatusEvent[] }): JSX.Element {
-  if (events.length === 0) return <LiveState title="暂无状态事件" detail="开播、下播、轮播、标题变化、错误与恢复会在真实变化后写入。" />
-  return (
-    <div className="live-event-panel">
-      <header><span>STATUS EVENTS</span><h2>最近状态事件</h2></header>
-      <div className="live-event-list">
-        {events.map((event) => (
-          <article key={event.id}>
-            <i className={`event-${event.eventType.toLowerCase()}`} />
-            <div>
-              <strong>{eventLabel(event.eventType)}</strong>
-              <span>UID {event.uid} · 房间 {event.roomId}</span>
-              {event.titleBefore !== event.titleAfter && event.titleAfter && (
-                <small>{event.titleBefore ?? "无标题"} → {event.titleAfter}</small>
-              )}
-            </div>
-            <time>{formatTime(event.occurredAt)}</time>
-          </article>
-        ))}
-      </div>
-    </div>
-  )
-}
 
 function LiveDanmakuView({
   rooms,
@@ -1135,6 +1107,7 @@ export function ConnectedBilibiliLiveWorkspace({
   const queryClient = useQueryClient()
   const [selectedTrendIds, setSelectedTrendIds] = useState<string[]>([])
   const roomLocks = useRef(new Set<string>())
+  const deletedRoomIds = useRef(new Set<string>())
   const [busyRoomIds, setBusyRoomIds] = useState<string[]>([])
   const [roomActionErrors, setRoomActionErrors] = useState<Record<string, string | undefined>>({})
   const [selectedRankRoomId, setSelectedRankRoomId] = useState<string>()
@@ -1149,27 +1122,13 @@ export function ConnectedBilibiliLiveWorkspace({
   const [insightBucketSeconds, setInsightBucketSeconds] = useState<60 | 300 | 900>(300)
   const [exportMessage, setExportMessage] = useState<string>()
   const [rankErrors, setRankErrors] = useState<string[]>([])
-  const roomsQuery = useQuery({
-    queryKey: ["bilibili-live", "rooms"],
-    queryFn: () => bridge.bilibiliLive.list({}),
-    refetchInterval: 15_000
-  })
-  const rooms = roomsQuery.data?.items ?? []
+  const overviewQuery = useLiveOverviewQuery(bridge)
+  const rooms = overviewQuery.data?.roomList.items ?? emptyLiveRooms
   const validSelection = useMemo(
-    () => selectedTrendIds.filter((id) => rooms.some((room) => room.id === id)).slice(0, 4),
+    () => selectedTrendIds.filter((id) => !deletedRoomIds.current.has(id) && rooms.some((room) => room.id === id)).slice(0, 4),
     [rooms, selectedTrendIds]
   )
-  const summaryQuery = useQuery({
-    queryKey: ["bilibili-live", "summary"],
-    queryFn: () => bridge.bilibiliLive.summary(),
-    refetchInterval: 15_000
-  })
-  const eventsQuery = useQuery({
-    queryKey: ["bilibili-live", "events"],
-    queryFn: () => bridge.bilibiliLive.events({ limit: 20 }),
-    refetchInterval: 15_000
-  })
-  const trendsQuery = useLiveTrendQuery(bridge, rooms, roomsQuery.dataUpdatedAt, validSelection)
+  const trendsQuery = useLiveTrendQuery(bridge, rooms, overviewQuery.dataUpdatedAt, validSelection, deletedRoomIds.current)
   const lastSuccessfulTrends = useLastSuccessfulLiveTrends(rooms, trendsQuery.data, trendsQuery.dataUpdatedAt)
   const rankQuery = useQuery({
     queryKey: ["bilibili-live", "rank", selectedRankRoomId],
@@ -1247,10 +1206,9 @@ export function ConnectedBilibiliLiveWorkspace({
     refetchInterval: view === "场次分析" ? 10_000 : false
   })
   const refreshQueries = async (): Promise<void> => {
+    const result = await overviewQuery.reload()
+    if (!result.isSuccess || result.isFetching) return
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["bilibili-live", "rooms"] }),
-      queryClient.invalidateQueries({ queryKey: ["bilibili-live", "summary"] }),
-      queryClient.invalidateQueries({ queryKey: ["bilibili-live", "events"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "rank"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "danmaku"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "sessions"] }),
@@ -1263,15 +1221,7 @@ export function ConnectedBilibiliLiveWorkspace({
     mutationFn: async (operation: () => Promise<unknown>) => operation(),
     onSuccess: refreshQueries
   })
-  const cacheRoom = (room: BilibiliLiveRoom): void => {
-    queryClient.setQueryData<BilibiliLiveRoomList>(["bilibili-live", "rooms"], (current) => {
-      if (!current) return { items: [room], total: 1, snapshotAt: new Date().toISOString() }
-      const exists = current.items.some((item) => item.id === room.id)
-      return { ...current, items: exists ? current.items.map((item) => item.id === room.id ? room : item) : [...current.items, room],
-        total: current.total + (exists ? 0 : 1) }
-    })
-  }
-  const handleRoomAction: BilibiliLiveWorkspacePresentationProps["onRoomAction"] = async (action, room, intervalSeconds) => {
+  const handleRoomAction: BilibiliLiveWorkspacePresentationProps["onRoomAction"] = async (action, room, intervalSeconds, onCommitted) => {
     if (roomLocks.current.has(room.id)) return false
     roomLocks.current.add(room.id)
     setBusyRoomIds([...roomLocks.current])
@@ -1281,17 +1231,17 @@ export function ConnectedBilibiliLiveWorkspace({
         const result = await bridge.bilibiliLive.refresh({ roomMonitorId: room.id })
         if (!result.success) throw new Error(result.message)
       } else if (action === "toggle") {
-        cacheRoom(await bridge.bilibiliLive.updateStatus({ roomMonitorId: room.id, enabled: room.monitorStatus !== "ACTIVE" }))
+        await bridge.bilibiliLive.updateStatus({ roomMonitorId: room.id, enabled: room.monitorStatus !== "ACTIVE" })
       } else if (action === "interval") {
-        cacheRoom(await bridge.bilibiliLive.updateSettings({ roomMonitorId: room.id, intervalSeconds: intervalSeconds ?? room.intervalSeconds }))
+        await bridge.bilibiliLive.updateSettings({ roomMonitorId: room.id, intervalSeconds: intervalSeconds ?? room.intervalSeconds })
       } else {
         await bridge.bilibiliLive.remove({ roomMonitorId: room.id })
-        queryClient.setQueryData<BilibiliLiveRoomList>(["bilibili-live", "rooms"], (current) => current && ({
-          ...current, items: current.items.filter((item) => item.id !== room.id),
-          total: Math.max(0, current.total - Number(current.items.some((item) => item.id === room.id)))
-        }))
+        deletedRoomIds.current.add(room.id)
+        await queryClient.cancelQueries({ queryKey: ["bilibili-live", "trends"] })
         setSelectedTrendIds((ids) => ids.filter((id) => id !== room.id))
       }
+      // Original actions acknowledge local interaction state before awaiting loadAll.
+      onCommitted?.()
       return true
     } catch (error) {
       setRoomActionErrors((errors) => ({ ...errors, [room.id]: errorMessageOf(error) }))
@@ -1330,7 +1280,8 @@ export function ConnectedBilibiliLiveWorkspace({
     onError: (error) => setExportMessage(errorMessageOf(error))
   })
   useEffect(() => {
-    if (!roomsQuery.isSuccess) return
+    if (!overviewQuery.isSuccess) return
+    for (const id of deletedRoomIds.current) if (!rooms.some(room => room.id === id)) deletedRoomIds.current.delete(id)
     // normalizeSelection belongs to a successful reread, never to a user's clear click.
     setSelectedTrendIds(current => {
       const valid = current.filter(id => rooms.some(room => room.id === id)).slice(0, 4)
@@ -1338,7 +1289,7 @@ export function ConnectedBilibiliLiveWorkspace({
       const next = valid.length || !initial ? valid : [initial.id]
       return next.length === current.length && next.every((id, index) => id === current[index]) ? current : next
     })
-  }, [roomsQuery.isSuccess, roomsQuery.dataUpdatedAt, rooms])
+  }, [overviewQuery.isSuccess, overviewQuery.dataUpdatedAt, rooms])
   useEffect(() => {
     if (rooms.length === 0) {
       if (selectedRankRoomId !== undefined) setSelectedRankRoomId(undefined)
@@ -1369,9 +1320,9 @@ export function ConnectedBilibiliLiveWorkspace({
       view={view}
       creationOpen={creationOpen}
       rooms={rooms}
-      roomsRevision={roomsQuery.dataUpdatedAt}
-      summary={summaryQuery.data}
-      events={eventsQuery.data ?? []}
+      roomsRevision={overviewQuery.dataUpdatedAt}
+      summary={overviewQuery.data?.summary}
+      events={overviewQuery.data?.events ?? []}
       trends={lastSuccessfulTrends.filter((trend) => validSelection.includes(trend.room.id))}
       rankSummary={rankQuery.data}
       danmakuStatus={danmakuStatusQuery.data}
@@ -1396,18 +1347,18 @@ export function ConnectedBilibiliLiveWorkspace({
       exportPending={exportMutation.isPending}
       exportMessage={exportMessage}
       rankErrors={rankErrors}
-      pending={roomsQuery.isPending}
+      pending={overviewQuery.isPending && overviewQuery.isFetching}
+      overviewAvailable={Boolean(overviewQuery.data)}
+      overviewStale={Boolean(overviewQuery.data && overviewQuery.error) && !overviewQuery.isFetching}
       busyRoomIds={busyRoomIds}
       roomActionErrors={roomActionErrors}
-      refreshing={roomsQuery.isFetching || summaryQuery.isFetching || eventsQuery.isFetching}
+      refreshing={overviewQuery.isFetching}
       onReload={refreshQueries}
       trendPending={trendsQuery.pending}
       trendError={trendsQuery.error ? errorMessageOf(trendsQuery.error) : undefined}
       onReloadTrends={() => trendsQuery.refetch()}
       errorMessage={firstErrorMessage(
-        roomsQuery.error,
-        summaryQuery.error,
-        eventsQuery.error,
+        overviewQuery.isFetching ? null : overviewQuery.error,
         mutation.error,
         rankQuery.error,
         rankMutation.error,
@@ -1426,9 +1377,11 @@ export function ConnectedBilibiliLiveWorkspace({
         await mutation.mutateAsync(async () => {
           const room = await bridge.bilibiliLive.add(input)
           added = room
-          cacheRoom(room)
-          setSelectedTrendIds((ids) => ids.includes(room.id) || ids.length >= 4 ? ids : [...ids, room.id])
         })
+        if (added) {
+          const roomId = added.id
+          setSelectedTrendIds((ids) => ids.includes(roomId) || ids.length >= 4 ? ids : [...ids, roomId])
+        }
         return added
       }}
       onRoomAction={handleRoomAction}
@@ -1490,16 +1443,6 @@ function formatTime(value: string | undefined): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false })
 }
 
-function eventLabel(type: string): string {
-  return ({
-    LIVE_STARTED: "直播开始",
-    LIVE_ENDED: "直播结束",
-    ROUND_STARTED: "轮播开始",
-    TITLE_CHANGED: "标题变化",
-    ERROR_OCCURRED: "采集异常",
-    ERROR_RECOVERED: "采集恢复"
-  } as Record<string, string>)[type] ?? type
-}
 
 function sessionStateLabel(state: BilibiliLiveSessionSummary["state"]): string {
   return ({

@@ -1,5 +1,5 @@
 import type { AddBilibiliLiveRoomInput, BilibiliLiveRoom, BilibiliLiveSessionSummary,
-  BilibiliLiveStatusEvent, ListBilibiliLiveSessionsInput, BilibiliLiveTrendPoint, QueryBilibiliLiveTrendsInput } from "@bmd/contracts"
+  BilibiliLiveStatusEvent, BilibiliLiveSummary, ListBilibiliLiveSessionsInput, BilibiliLiveTrendPoint, QueryBilibiliLiveTrendsInput } from "@bmd/contracts"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useState } from "react"
 import { createRoot } from "react-dom/client"
@@ -36,8 +36,16 @@ const sessions: BilibiliLiveSessionSummary[] = rooms.flatMap((room, roomIndex) =
 const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 15_000 } } })
 let releaseAction = (): void => undefined
 const heldTrends: (() => void)[] = []
+const heldOverview: (() => void)[] = []
 const fixture = {
-  actionError: "", listError: "", trendError: "", summaryError: "", holdAction: false,
+  actionError: "", listError: "", trendError: "", summaryError: new URLSearchParams(location.search).has("summary-failure") ? "首次汇总读取失败" : "", holdAction: false,
+  eventsError: "",
+  holdOverview: undefined as "rooms" | "summary" | "events" | undefined,
+  overviewHeldCount: 0,
+  releaseOverview: (index: number) => heldOverview[index]?.(),
+  summaryValues: {} as Partial<BilibiliLiveSummary>,
+  eventLimits: [] as (number | undefined)[],
+  setEvents: (values: BilibiliLiveStatusEvent[]) => { events = values },
   addResultIndex: undefined as number | undefined,
   calls: [] as string[], addInputs: [] as AddBilibiliLiveRoomInput[], missingTrendIds: [] as string[],
   sessionRequests: [] as ListBilibiliLiveSessionsInput[], sessionEventIds: [] as string[],
@@ -73,6 +81,14 @@ const fixture = {
 declare global { interface Window { liveFixture: typeof fixture } }
 window.liveFixture = fixture
 const bridge = createBrowserPreviewBridge()
+async function overviewRead<T>(kind: "rooms" | "summary" | "events", result: T, error: string): Promise<T> {
+  fixture.calls.push(kind)
+  if (fixture.holdOverview === kind) {
+    await new Promise<void>(resolve => { heldOverview.push(resolve); fixture.overviewHeldCount++ })
+  }
+  if (error) throw new Error(error)
+  return result
+}
 function requireRoom(id: string): BilibiliLiveRoom {
   const room = rooms.find((room) => room.id === id)
   if (!room) throw new Error("监控直播间不存在")
@@ -92,9 +108,8 @@ bridge.bilibiliLive = {
   ...bridge.bilibiliLive,
   list: async (input) => {
     fixture.calls.push("list")
-    if (fixture.listError) throw new Error(fixture.listError)
     const items = input?.limit === undefined ? rooms : rooms.slice(0, input.limit)
-    return { items, total: items.length, snapshotAt: timestamp }
+    return overviewRead("rooms", { items, total: items.length, snapshotAt: timestamp }, fixture.listError)
   },
   add: async (input) => {
     fixture.addInputs.push(input)
@@ -127,10 +142,10 @@ bridge.bilibiliLive = {
     return { deleted: true }
   },
   summary: async () => {
-    if (fixture.summaryError) throw new Error(fixture.summaryError)
-    return { totalRooms: rooms.length, activeRooms: rooms.filter((room) => room.monitorStatus === "ACTIVE").length,
+    return overviewRead("summary", { totalRooms: rooms.length, activeRooms: rooms.filter((room) => room.monitorStatus === "ACTIVE").length,
       liveRooms: rooms.filter((room) => room.liveStatus === 1).length, roundRooms: 0, offlineRooms: rooms.length - 1,
-      errorRooms: rooms.filter((room) => room.lastErrorType).length, totalOnlineCount: 1234, todayLiveStarts: 2 }
+      errorRooms: rooms.filter((room) => room.lastErrorType).length, totalOnlineCount: 1234, todayLiveStarts: 2,
+      ...fixture.summaryValues }, fixture.summaryError)
   },
   trends: async (input) => {
     const { roomMonitorIds = [] } = input
@@ -145,7 +160,10 @@ bridge.bilibiliLive = {
     if (fixture.holdTrends) await new Promise<void>(resolve => heldTrends.push(resolve))
     return result
   },
-  events: async () => events,
+  events: async (input) => {
+    fixture.eventLimits.push(input?.limit)
+    return overviewRead("events", events, fixture.eventsError)
+  },
   sessions: async (input) => {
     fixture.sessionRequests.push(input)
     return sessions.filter(session => session.monitorId === input.roomMonitorId).slice(0, input.limit ?? 20)

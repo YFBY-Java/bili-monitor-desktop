@@ -11,6 +11,7 @@ export function useLiveMonitorPanel(rooms: BilibiliLiveRoom[], revision: number 
   const [now, setNow] = useState(Date.now)
   const [expandedId, setExpandedId] = useState<string | undefined>(rooms[0]?.id)
   const [drafts, setDrafts] = useState<Record<string, number>>({})
+  const [savedDrafts, setSavedDrafts] = useState<Record<string, number>>({})
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
@@ -18,6 +19,7 @@ export function useLiveMonitorPanel(rooms: BilibiliLiveRoom[], revision: number 
   useEffect(() => {
     // Original normalizeSelection runs on successful loadAll, not on each toggle.
     setExpandedId(current => rooms.some(room => room.id === current) ? current : rooms[0]?.id)
+    setSavedDrafts({})
     setDrafts(current => {
       const retained = Object.entries(current).filter(([id, value]) => {
         const room = rooms.find(item => item.id === id)
@@ -33,10 +35,17 @@ export function useLiveMonitorPanel(rooms: BilibiliLiveRoom[], revision: number 
   })
   const editInterval = (room: BilibiliLiveRoom, value: number) => {
     const next = clampLiveInterval(value)
-    if (next === room.intervalSeconds) clearDraft(room.id)
+    if (next === (savedDrafts[room.id] ?? room.intervalSeconds)) clearDraft(room.id)
     else setDrafts(current => ({ ...current, [room.id]: next }))
   }
-  return { now, expandedId, setExpandedId, drafts, clearDraft, editInterval }
+  const markSaved = (id: string, value: number) => {
+    clearDraft(id)
+    // A successful command is not undone by a failed overview read.
+    setSavedDrafts(current => ({ ...current, [id]: value }))
+  }
+  const isDirty = (room: BilibiliLiveRoom) => (drafts[room.id] ?? savedDrafts[room.id] ?? room.intervalSeconds)
+    !== (savedDrafts[room.id] ?? room.intervalSeconds)
+  return { now, expandedId, setExpandedId, drafts: { ...savedDrafts, ...drafts }, clearDraft, editInterval, markSaved, isDirty }
 }
 
 export function BilibiliLiveMonitorPanel({ rooms, state, selectedTrendIds, busyRoomIds, roomActionErrors,
@@ -60,8 +69,10 @@ export function BilibiliLiveMonitorPanel({ rooms, state, selectedTrendIds, busyR
         onToggleTrend={() => onToggleTrend(item.id)} />)}
     </div>
     {room && <LiveRoomDetail key={room.id} room={room} now={state.now} draft={state.drafts[room.id] ?? room.intervalSeconds}
+      dirty={state.isDirty(room)}
       busy={busyRoomIds.includes(room.id)} actionError={roomActionErrors[room.id]} onAction={onAction}
-      onEdit={value => state.editInterval(room, value)} onSaved={() => state.clearDraft(room.id)} />}
+      onEdit={value => state.editInterval(room, value)} onSaved={value => state.markSaved(room.id, value)}
+      onDeleted={() => state.setExpandedId(current => current === room.id ? undefined : current)} />}
     {room && renderRoomData && <section className="live-room-data-detail" aria-label={`${room.uname}直播数据`}>
       <h2>{room.uname} · 直播数据</h2>{renderRoomData(room)}
     </section>}
@@ -94,11 +105,11 @@ function LiveRoomTile({ room, now, expanded, selected, locked, busy, onExpand, o
   </article>
 }
 
-function LiveRoomDetail({ room, now, draft, busy, actionError, onAction, onEdit, onSaved }: {
-  room: BilibiliLiveRoom; now: number; draft: number; busy: boolean; actionError: string | undefined
-  onAction: BilibiliLiveWorkspacePresentationProps["onRoomAction"]; onEdit: (value: number) => void; onSaved: () => void
+function LiveRoomDetail({ room, now, draft, dirty, busy, actionError, onAction, onEdit, onSaved, onDeleted }: {
+  room: BilibiliLiveRoom; now: number; draft: number; dirty: boolean; busy: boolean; actionError: string | undefined
+  onAction: BilibiliLiveWorkspacePresentationProps["onRoomAction"]; onEdit: (value: number) => void; onSaved: (value: number) => void; onDeleted: () => void
 }) {
-  const dirty = draft !== room.intervalSeconds, status = liveMonitorStatus(room)
+  const status = liveMonitorStatus(room)
   const preview = room.keyframeUrl || room.coverUrl
   const facts = [
     ["在线/热度", formatLiveShortCount(room.onlineCount)], ["关注数", formatLiveShortCount(room.attentionCount)],
@@ -106,9 +117,11 @@ function LiveRoomDetail({ room, now, draft, busy, actionError, onAction, onEdit,
     ["最后成功", formatLiveDateTime(room.lastSuccessAt)], ["下次采集", room.monitorStatus === "PAUSED" ? "已停用" : formatLiveDateTime(room.nextCollectAt)],
     ["来源接口", room.sourceEndpoint || "—"], ["退避到期", formatLiveDateTime(room.backoffUntil)]
   ]
-  const save = async () => { if (await onAction("interval", room, draft) !== false) onSaved() }
-  const remove = () => {
-    if (window.confirm(`删除 ${room.uname} 的直播间监控？关联的历史快照、状态事件与场次数据也会删除。`)) void onAction("delete", room)
+  const save = async () => { await onAction("interval", room, draft, () => onSaved(draft)) }
+  const remove = async () => {
+    if (window.confirm(`删除 ${room.uname} 的直播间监控？关联的历史快照、状态事件与场次数据也会删除。`)) {
+      await onAction("delete", room, undefined, onDeleted)
+    }
   }
   return <section className="live-monitor-detail" id={`live-detail-${room.id}`} aria-label={`${room.uname}房间详情`} aria-busy={busy}>
     <header className="live-monitor-detail-heading">
