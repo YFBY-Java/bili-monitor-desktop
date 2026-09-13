@@ -2614,11 +2614,11 @@ export class ControlDatabase {
     })
   }
 
-  listBilibiliLiveRooms(limit: number): StoredBilibiliLiveRoomMonitor[] {
+  listBilibiliLiveRooms(limit?: number): StoredBilibiliLiveRoomMonitor[] {
     return this.database.prepare(`${bilibiliLiveRoomSelect()}
-      ORDER BY monitor_status ASC, live_status DESC, online_count DESC, monitor_id ASC
-      LIMIT ?
-    `).all(limit) as unknown as StoredBilibiliLiveRoomMonitor[]
+      ORDER BY monitor_status ASC, live_status DESC, online_count DESC, rowid ASC
+      ${limit === undefined ? "" : "LIMIT ?"}
+    `).all(...(limit === undefined ? [] : [limit])) as unknown as StoredBilibiliLiveRoomMonitor[]
   }
 
   findBilibiliLiveRoomById(monitorId: string): StoredBilibiliLiveRoomMonitor | undefined {
@@ -2642,13 +2642,24 @@ export class ControlDatabase {
   ): StoredBilibiliLiveRoomSnapshot[] {
     const where = ["monitor_id = ?"]
     const parameters: Array<string | number> = [monitorId]
+    // Python emits UTC with microseconds; Electron may emit milliseconds or whole seconds.
+    // Keep the indexed coarse second range, then compare exact fractional instants.
+    const instant = `(substr(captured_at, 1, 19) || '.' || substr(
+      (CASE WHEN substr(captured_at, 20, 1) = '.' THEN substr(captured_at, 21, length(captured_at) - 21) ELSE '' END)
+      || '000000000', 1, 9))`
+    const boundary = (value: string): string => {
+      const fraction = value.match(/\.(\d+)/)?.[1] ?? ""
+      return `${new Date(value).toISOString().slice(0, 19)}.${fraction.padEnd(9, "0").slice(0, 9)}`
+    }
     if (input.from) {
-      where.push("captured_at >= ?")
-      parameters.push(input.from)
+      const from = boundary(input.from)
+      where.push(`captured_at >= ? AND ${instant} >= ?`)
+      parameters.push(from.slice(0, 19), from)
     }
     if (input.to) {
-      where.push("captured_at <= ?")
-      parameters.push(input.to)
+      const to = boundary(input.to)
+      where.push(`captured_at <= ? AND ${instant} <= ?`)
+      parameters.push(`${to.slice(0, 19)}Z`, to)
     }
     parameters.push(input.limit)
     return this.database.prepare(`

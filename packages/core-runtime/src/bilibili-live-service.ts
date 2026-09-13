@@ -236,7 +236,7 @@ export class BilibiliLiveMonitorService {
   }
 
   summary(): BilibiliLiveSummary {
-    const rooms = this.options.database.listBilibiliLiveRooms(500)
+    const rooms = this.options.database.listBilibiliLiveRooms()
     const events = this.options.database.listBilibiliLiveStatusEvents(1)
     const liveRooms = rooms.filter((room) => room.liveStatus === 1)
     const roundRooms = rooms.filter((room) => room.liveStatus === 2)
@@ -300,7 +300,7 @@ export class BilibiliLiveMonitorService {
   } = {}): BilibiliLiveRoomTrend[] {
     const query = QueryBilibiliLiveTrendsInputSchema.parse(input)
     const rooms = query.roomMonitorIds.length === 0
-      ? this.options.database.listBilibiliLiveRooms(100)
+      ? this.options.database.listBilibiliLiveRooms()
       : query.roomMonitorIds.map((id) => this.requireStoredRoom(id))
     return rooms.map((room) => this.trend({
       roomMonitorId: room.monitorId,

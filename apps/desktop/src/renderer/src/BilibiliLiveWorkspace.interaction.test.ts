@@ -31,6 +31,17 @@ describe("original live-room renderer workflows", () => {
   })
   afterEach(async () => { await page?.close() })
 
+  it("displays and selects the 505th room without a renderer list cap", async () => {
+    await page.evaluate(async () => { window.liveFixture.expandRoomList(); await window.liveFixture.reload() })
+    await expect.poll(() => page.locator(".live-room-card").count()).toBe(505)
+    const last = page.locator(".live-room-card").filter({ has: page.getByRole("heading", { name: "测试主播505", exact: true }) })
+    await last.getByRole("button", { name: "加入趋势", exact: true }).click()
+    // Scope the fixture navigation: a full-page role scan traverses ~40k nodes at 505 rooms.
+    await page.locator('nav[aria-label="测试页面导航"]').getByRole("button", { name: "查看趋势", exact: true }).click()
+    await page.locator(".live-chart-card").filter({ hasText: "测试主播505" }).waitFor()
+    expect(await page.getByRole("checkbox", { name: "测试主播505", exact: true }).isChecked()).toBe(true)
+  }, 20_000)
+
   it("loads 20 boundary sessions but lets data and analysis select the 200th session", async () => {
     await page.getByRole("button", { name: "查看场次", exact: true }).click()
     await expect.poll(() => page.locator(".live-session-list > button").count()).toBe(20)

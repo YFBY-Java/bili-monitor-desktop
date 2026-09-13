@@ -53,6 +53,6 @@ describe("Bilibili live contracts", () => {
     })
     expect(room.liveStatus).toBe(1)
     expect(QueryBilibiliLiveEventsInputSchema.parse({})).toEqual({ limit: 20 })
-    expect(() => QueryBilibiliLiveEventsInputSchema.parse({ limit: 201 })).toThrow()
+    expect(QueryBilibiliLiveEventsInputSchema.parse({ limit: 201 })).toEqual({ limit: 200 })
   })
 })

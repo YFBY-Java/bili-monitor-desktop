@@ -27,6 +27,15 @@ describe("shared original live data widget in real desktop pages", () => {
   })
   afterEach(async () => { await page?.close() })
 
+  it("offers the 505th live room in the actual subject binding drawer", async () => {
+    await page.evaluate(() => window.widgetFixture.expandRoomList())
+    await page.getByRole("button", { name: "绑定资源", exact: true }).click()
+    const selector = page.getByRole("dialog", { name: "绑定 B站监控资源" }).getByRole("combobox", { name: "直播间监控", exact: true })
+    await expect.poll(() => selector.locator("option").count()).toBe(506)
+    await selector.selectOption({ label: "合成房间505 · 房间 537" })
+    expect(await selector.inputValue()).toBe("018f0f39-7b5e-4cc1-862d-000000000504")
+  })
+
   it("polls 60 real messages with sender UID, watched count and preserves them across metadata refresh", async () => {
     await expect.poll(() => page.locator(".subject-danmu-list > div").count()).toBe(60)
     expect(await page.locator(".subject-danmu-list").innerText()).toContain("游客 · UID 100")

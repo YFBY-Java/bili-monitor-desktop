@@ -131,7 +131,7 @@ export const AddBilibiliLiveRoomInputSchema = z.object({
 })
 
 export const ListBilibiliLiveRoomsInputSchema = z.object({
-  limit: z.number().int().min(1).max(500).default(100)
+  limit: z.number().int().min(1).max(500).optional()
 }).strict()
 
 export const BilibiliLiveRoomIdInputSchema = z.object({ roomMonitorId: z.uuid() }).strict()
@@ -143,20 +143,24 @@ export const UpdateBilibiliLiveRoomSettingsInputSchema = z.object({
   roomMonitorId: z.uuid(),
   intervalSeconds: BilibiliLiveIntervalSecondsSchema
 }).strict()
+// Original service: non-positive/missing history counts become 500, positive counts cap at 2000.
+const LiveHistoryLimitSchema = z.number().int().default(500)
+  .transform(value => value <= 0 ? 500 : Math.min(value, 2_000))
+
 export const QueryBilibiliLiveTrendInputSchema = z.object({
   roomMonitorId: z.uuid(),
-  from: z.iso.datetime().optional(),
-  to: z.iso.datetime().optional(),
-  limit: z.number().int().min(1).max(2_000).default(500)
+  from: z.iso.datetime({ offset: true }).optional(),
+  to: z.iso.datetime({ offset: true }).optional(),
+  limit: LiveHistoryLimitSchema
 }).strict()
 export const QueryBilibiliLiveTrendsInputSchema = z.object({
-  roomMonitorIds: z.array(z.uuid()).max(100).default([]),
-  from: z.iso.datetime().optional(),
-  to: z.iso.datetime().optional(),
-  limitPerRoom: z.number().int().min(1).max(2_000).default(500)
+  roomMonitorIds: z.array(z.uuid()).default([]),
+  from: z.iso.datetime({ offset: true }).optional(),
+  to: z.iso.datetime({ offset: true }).optional(),
+  limitPerRoom: LiveHistoryLimitSchema
 }).strict()
 export const QueryBilibiliLiveEventsInputSchema = z.object({
-  limit: z.number().int().min(1).max(200).default(20)
+  limit: z.number().int().default(20).transform(value => Math.min(Math.max(value, 1), 200))
 }).strict()
 
 const BilibiliLiveWorkerRequestBaseSchema = z.object({

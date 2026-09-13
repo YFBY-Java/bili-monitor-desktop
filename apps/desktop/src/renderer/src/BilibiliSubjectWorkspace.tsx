@@ -446,7 +446,7 @@ export function ConnectedBilibiliSubjectWorkspace({
   })
   const roomsQuery = useQuery({
     queryKey: ["bilibili-live-rooms"],
-    queryFn: () => bridge.bilibiliLive.list({ limit: 500 }),
+    queryFn: () => bridge.bilibiliLive.list({}),
     enabled: bindingOpen
   })
   const invalidate = async (): Promise<void> => {

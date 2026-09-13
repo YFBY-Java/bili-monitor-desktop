@@ -10,6 +10,8 @@ BiliMonitor Desktop 是把原 BiliMonitor B/S 项目的真实业务改造成完�
 
 直播间卡片的“展开直播数据”与用户工作台共用弹幕/观众/大航海组件：每 2 秒读取最近 60 条弹幕并展示 UID，支持未开播监听、协议选择、阅读时暂停自动滚动。榜单按类型保留排序与选择，只刷新当前选中榜单（最多 4 页），显示陪伴天数/大航海等级；读取失败保留组件内上次数据，重新打开时读取最新本地快照。此项不代表独立弹幕页、全部榜单采集规则及全量业务已验收。
 
+直播间列表、汇总、全部房间趋势及用户资源绑定不再隐含截断为 100/500 间；显式列表 limit 仍保留兼容。历史未传或非正数取最近 500 点，正数最大 2000 点，按时间升序返回；起止包含边界，支持时区偏移和微秒。事件缺省取最近 20 条，请求数限制在 1..200。详见[直播查询迁移审计](docs/implementation/2026-09-13-live-query-audit.md)；本项仅覆盖查询，采集、Worker 和直播监控/趋势完整交互仍在 M08 待办中。
+
 粉丝查询默认返回全部监控用户，不再默默截断为 100/500 人；界面仍最多选 4 人对比。历史查询未传/非正数取最近 500 点，最大 2000 点，按时间升序返回；`from/to` 包含边界并支持时区和微秒精度。页面沿用原项目的最近 500 点查询，不是固定小时范围。采集仅重试网络、HTTP 限流与服务端错误；卡片成功但无头像时清掉旧值，relation/stat 回退保留原资料。
 
 粉丝页现按原业务展示总粉丝、最近净增、最早排程及间隔汇总；横向用户块显示每秒更新的采集节奏，点击或键盘展开一位用户的详情。切换/收起保留各用户未保存的间隔草稿，后台重读不覆盖草稿，删除仍需确认。界面倒计时不发起采集，只有实际手动刷新请求在途显示“采集中”，本地投影重读仍由独立忙碌状态保护。
@@ -101,9 +103,9 @@ D:\BiliMonitor Desktop Data\config\douyin-oauth.env.example
 
 ## 当前边界
 
-原仓库 commit `01200f3c21c264963f2ad92a23b991ced5b0c9c0` 是当前业务事实源。System overview、CollectTask run-once、AI mock、Analytics summary placeholder 和 Platform adapter 骨架不是可用业务，因此不会在桌面端导航中冒充已实现功能。当前只迁移原项目已经形成闭环的 B站与抖音本人登录态业务；AI、Agent 和通用平台扩展暂不开发。
+当前业务事实源为原仓库 `fa2faa6`，按全量迁移台账逐项核对真实功能。Mock/占位页面不在桌面导航中冒充已实现业务；Platform adapter、CollectTask run-once 等已有接口继续按 M16/M17 核实可执行行为，不能仅因相邻页面使用 Mock 就整体排除。新的 AI、Agent 扩展暂不开发，不缩减原项目真实功能的迁移范围。
 
-逐控制器、Service、状态机和本地映射见 [原 B/S 业务复刻基线](docs/implementation/original-bs-business-parity.md)。
+历史控制器、Service、状态机和本地映射见 [原 B/S 业务复刻基线](docs/implementation/original-bs-business-parity.md)；当前状态以[全量迁移台账](docs/implementation/2026-09-13-full-migration-tracker.md)为准。
 
 ## 文档
 

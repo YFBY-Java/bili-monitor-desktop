@@ -1360,7 +1360,7 @@ export function ConnectedBilibiliLiveWorkspace({
   const [rankErrors, setRankErrors] = useState<string[]>([])
   const roomsQuery = useQuery({
     queryKey: ["bilibili-live", "rooms"],
-    queryFn: () => bridge.bilibiliLive.list({ limit: 100 }),
+    queryFn: () => bridge.bilibiliLive.list({}),
     refetchInterval: 15_000
   })
   const rooms = roomsQuery.data?.items ?? []

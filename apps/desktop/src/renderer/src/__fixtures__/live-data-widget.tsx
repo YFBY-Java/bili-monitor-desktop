@@ -24,6 +24,13 @@ const fixture = {
   rankRequests: [] as BilibiliLiveRankRefreshInput[], starts: [] as StartBilibiliLiveDanmakuInput[], stops: [] as string[],
   recentRequests: [] as QueryBilibiliLiveDanmakuRecentInput[],
   release: () => release(), reload: () => client.invalidateQueries(),
+  expandRoomList: () => {
+    const template = rooms[0]!
+    for (let index = rooms.length; index < 505; index++) rooms.push({ ...template,
+      id: `018f0f39-7b5e-4cc1-862d-${String(index).padStart(12, "0")}`,
+      uid: String(22 + index), roomId: String(33 + index), uname: `合成房间${index + 1}`
+    })
+  },
   metadata: () => client.invalidateQueries({ queryKey: ["bilibili-subject-workbench"] })
 }
 declare global { interface Window { widgetFixture: typeof fixture } }
@@ -81,7 +88,10 @@ bridge.bilibiliSubjects = { ...bridge.bilibiliSubjects,
   list: async () => [workbench().subject], workbench: async () => workbench(),
   trends: async ({ subjectId }) => ({ subjectId, metrics: ["follower"], range: "24h", bucket: "5m", points: [] }) }
 bridge.bilibiliLive = { ...bridge.bilibiliLive,
-  list: async () => ({ items: rooms, total: rooms.length, snapshotAt: timestamp }),
+  list: async input => {
+    const items = input?.limit === undefined ? rooms : rooms.slice(0, input.limit)
+    return { items, total: items.length, snapshotAt: timestamp }
+  },
   summary: async () => ({ totalRooms: 2, activeRooms: 2, roundRooms: 0, offlineRooms: 2, liveRooms: 0, errorRooms: 0,
     totalOnlineCount: 0, todayLiveStarts: 0 }), events: async () => [],
   rankSummary: async ({ roomMonitorId }) => {

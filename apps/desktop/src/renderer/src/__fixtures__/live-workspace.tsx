@@ -39,6 +39,14 @@ const fixture = {
   calls: [] as string[], addInputs: [] as AddBilibiliLiveRoomInput[], missingTrendIds: [] as string[],
   sessionRequests: [] as ListBilibiliLiveSessionsInput[], sessionEventIds: [] as string[],
   sessionInsightIds: [] as string[],
+  expandRoomList: () => {
+    const template = rooms[0]!
+    rooms = Array.from({ length: 505 }, (_, index) => ({ ...template,
+      id: `018f0f39-7b5e-7cc1-962d-${String(index).padStart(12, "0")}`,
+      uid: String(index + 20), roomId: String(index + 120), uname: `测试主播${index + 1}`,
+      recentTrend: template.recentTrend.map(point => ({ ...point, uid: String(index + 20), roomId: String(index + 120) }))
+    }))
+  },
   reload: () => client.invalidateQueries({ queryKey: ["bilibili-live"] }),
   release: () => releaseAction(),
   updateFirst: (intervalSeconds: number) => {
@@ -72,10 +80,11 @@ async function action(name: string, roomId?: string): Promise<void> {
 }
 bridge.bilibiliLive = {
   ...bridge.bilibiliLive,
-  list: async () => {
+  list: async (input) => {
     fixture.calls.push("list")
     if (fixture.listError) throw new Error(fixture.listError)
-    return { items: rooms, total: rooms.length, snapshotAt: timestamp }
+    const items = input?.limit === undefined ? rooms : rooms.slice(0, input.limit)
+    return { items, total: items.length, snapshotAt: timestamp }
   },
   add: async (input) => {
     fixture.addInputs.push(input)
@@ -153,6 +162,7 @@ function Fixture() {
   const [view, setView] = useState<BilibiliLiveView>("直播间")
   const [creationOpen, setCreationOpen] = useState(false)
   return <QueryClientProvider client={client}><main className="theme-light" style={{ padding: 24 }}>
+    <nav aria-label="测试页面导航">
     <button onClick={() => setView("直播间")}>查看直播间</button>
     <button onClick={() => setView("趋势对比")}>查看趋势</button>
     <button onClick={() => setView("状态事件")}>查看事件</button>
@@ -163,6 +173,7 @@ function Fixture() {
     <button onClick={() => { events = [{ id: crypto.randomUUID(), monitorId: rooms[0]!.id,
       uid: rooms[0]!.uid, roomId: rooms[0]!.roomId, eventType: "TITLE_CHANGED",
       titleBefore: "旧标题", titleAfter: "新标题", occurredAt: timestamp }]; void fixture.reload() }}>注入测试事件</button>
+    </nav>
     <ConnectedBilibiliLiveWorkspace bridge={bridge} view={view} creationOpen={creationOpen} onCloseCreation={() => setCreationOpen(false)} />
   </main></QueryClientProvider>
 }

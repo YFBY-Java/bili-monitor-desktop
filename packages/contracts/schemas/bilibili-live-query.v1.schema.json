@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bilimonitor.local/schemas/bilibili-live-query.v1.schema.json",
+  "title": "BiliMonitor local live monitor query inputs v1",
+  "$defs": {
+    "RoomMonitorId": {
+      "type": "string",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+    },
+    "OffsetDateTime": {
+      "type": "string",
+      "description": "ISO date/time with timezone, matching Zod including optional seconds and year zero. Pattern is authoritative (not RFC3339 format=date-time). ASCII digits keep acceptance equal in JavaScript and Python.",
+      "pattern": "^(?:(?:[0-9][0-9][2468][048]|[0-9][0-9][13579][26]|[0-9][0-9]0[48]|[02468][048]00|[13579][26]00)-02-29|[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|(?:02)-(?:0[1-9]|1[0-9]|2[0-8])))T(?:(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\\.[0-9]+)?)?(?:Z|([+-](?:[01][0-9]|2[0-3]):[0-5][0-9])))$"
+    },
+    "ListBilibiliLiveRoomsInput": {
+      "type": "object", "additionalProperties": false,
+      "description": "Omit limit to return every monitored room. Explicit bounded callers remain supported.",
+      "properties": { "limit": { "type": "integer", "minimum": 1, "maximum": 500 } }
+    },
+    "LiveHistoryLimit": {
+      "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991, "default": 500,
+      "description": "Core normalization: missing or <=0 becomes 500; positive counts cap at 2000. Normalization is idempotent across Preload and Core."
+    },
+    "QueryBilibiliLiveTrendInput": {
+      "type": "object", "additionalProperties": false, "required": ["roomMonitorId"],
+      "properties": {
+        "roomMonitorId": { "$ref": "#/$defs/RoomMonitorId" },
+        "from": { "$ref": "#/$defs/OffsetDateTime" },
+        "to": { "$ref": "#/$defs/OffsetDateTime" },
+        "limit": { "$ref": "#/$defs/LiveHistoryLimit" }
+      }
+    },
+    "QueryBilibiliLiveTrendsInput": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "roomMonitorIds": { "type": "array", "items": { "$ref": "#/$defs/RoomMonitorId" }, "default": [] },
+        "from": { "$ref": "#/$defs/OffsetDateTime" },
+        "to": { "$ref": "#/$defs/OffsetDateTime" },
+        "limitPerRoom": { "$ref": "#/$defs/LiveHistoryLimit" }
+      }
+    },
+    "QueryBilibiliLiveEventsInput": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "limit": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991, "default": 20,
+        "description": "Core normalization: clamp the requested count to 1..200. Missing uses 20." } }
+    }
+  }
+}
