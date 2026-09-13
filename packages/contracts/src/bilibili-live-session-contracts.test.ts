@@ -2,11 +2,28 @@ import { describe, expect, it } from "vitest"
 
 import {
   BilibiliLiveSessionSummarySchema,
+  ListBilibiliLiveSessionsInputSchema,
   QueryBilibiliLiveSessionEventsInputSchema,
   QueryBilibiliLiveSessionInsightInputSchema
 } from "./bilibili-live-session"
 
 describe("Bilibili live session contracts", () => {
+  it.each([[undefined, 20], [0, 20], [-5, 20], [1, 1], [150, 150], [200, 200], [201, 200]])(
+    "normalizes recent-session limit %s to %s like the original query service", (limit, expected) => {
+      const roomMonitorId = "018f0f39-7b5e-4cc1-862d-9a208b3d0801"
+      expect(ListBilibiliLiveSessionsInputSchema.parse({ roomMonitorId, limit })).toEqual({ roomMonitorId, limit: expected })
+    }
+  )
+
+  it("rejects invalid session-list inputs instead of coercing IPC values", () => {
+    const roomMonitorId = "018f0f39-7b5e-4cc1-862d-9a208b3d0801"
+    for (const limit of [1.5, "200", null, NaN, Infinity]) {
+      expect(ListBilibiliLiveSessionsInputSchema.safeParse({ roomMonitorId, limit }).success).toBe(false)
+    }
+    expect(ListBilibiliLiveSessionsInputSchema.safeParse({ roomMonitorId: "22" }).success).toBe(false)
+    expect(ListBilibiliLiveSessionsInputSchema.safeParse({ roomMonitorId, extra: true }).success).toBe(false)
+  })
+
   it("keeps original event filters and insight bucket defaults", () => {
     const sessionId = "018f0f39-7b5e-4cc1-862d-9a208b3d0800"
     expect(QueryBilibiliLiveSessionEventsInputSchema.parse({ sessionId })).toEqual({

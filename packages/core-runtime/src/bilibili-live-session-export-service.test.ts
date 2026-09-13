@@ -92,7 +92,7 @@ describe("BilibiliLiveSessionExportService", () => {
       expect(csv).toMatchObject({
         category: "danmaku",
         schemaVersion: "2",
-        suggestedFileName: `bilibili-live-session-${session.sessionId}-danmaku.csv`,
+        suggestedFileName: "anchor-2026-08-29-第1次导出-弹幕.csv",
         mediaType: "text/csv;charset=UTF-8"
       })
       const csvBytes = await readFile(csv.temporaryPath)

@@ -14,6 +14,7 @@ import type { ControlDatabase, StoredBilibiliLiveSessionEvent } from "@bmd/stora
 import ExcelJS from "exceljs"
 import { strToU8, zipSync } from "fflate"
 
+import { bilibiliLiveExportDate, bilibiliLiveExportFileName } from "./bilibili-live-export-name"
 import type { BilibiliLiveSessionService } from "./bilibili-live-session-service"
 
 const SCHEMA_VERSION = "2" as const
@@ -103,9 +104,12 @@ export class BilibiliLiveSessionExportService {
     const parsed = ExportBilibiliLiveSessionInputSchema.parse(input)
     const snapshot = this.options.database.runInTransaction(() => this.snapshot(parsed.sessionId))
     const extension = parsed.category === "xlsx" ? "xlsx" : parsed.category === "all" ? "zip" : "csv"
-    const suggestedFileName = parsed.category === "xlsx"
-      ? `bilibili-live-session-${parsed.sessionId}.xlsx`
-      : `bilibili-live-session-${parsed.sessionId}-${parsed.category}.${extension}`
+    const date = bilibiliLiveExportDate(this.options.now())
+    const number = this.options.database.allocateBilibiliLiveExportNumber(snapshot.summary.uid, date)
+    const suggestedFileName = bilibiliLiveExportFileName({
+      uname: this.options.database.findBilibiliLiveRoomById(snapshot.summary.monitorId)?.uname,
+      uid: snapshot.summary.uid, date, number, category: parsed.category
+    })
     await mkdir(this.options.exportDirectory, { recursive: true })
     const temporaryPath = resolve(
       this.options.exportDirectory,

@@ -7,14 +7,14 @@ import { ControlDatabase } from "@bmd/storage"
 
 import { BilibiliLiveSessionService } from "../bilibili-live-session-service"
 
-export async function createLiveSessionFixture() {
+export async function createLiveSessionFixture(uname = "测试主播") {
   const directory = await mkdtemp(resolve(tmpdir(), "bmd-live-parity-"))
   const database = await ControlDatabase.open(directory)
   const monitorId = randomUUID()
   const start = "2026-09-13T04:00:00.000Z"
   database.applyBilibiliLiveRoomSnapshot({
     monitor: {
-      monitorId, uid: "22", roomId: "33", shortId: null, uname: "测试主播", faceUrl: null,
+      monitorId, uid: "22", roomId: "33", shortId: null, uname, faceUrl: null,
       title: "测试场次", coverUrl: null, keyframeUrl: null, areaId: null, areaName: null,
       parentAreaId: null, parentAreaName: null, liveStatus: 1, liveTime: start,
       onlineCount: 1, attentionCount: 2, intervalSeconds: 300, nextCollectAt: start,

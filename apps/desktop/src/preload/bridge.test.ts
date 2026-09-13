@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from "vitest"
 import { createDesktopBridge } from "./bridge"
 
 describe("createDesktopBridge", () => {
+  it("normalizes recent-session limits before sending the narrow IPC request", async () => {
+    const invoke = vi.fn(async () => [])
+    const bridge = createDesktopBridge(invoke)
+    const roomMonitorId = "018f0f39-7b5e-4cc1-862d-9a208b3d0801"
+    for (const limit of [undefined, 0, 200, 201]) {
+      expect(await bridge.bilibiliLive.sessions({ roomMonitorId, ...(limit === undefined ? {} : { limit }) })).toEqual([])
+    }
+    expect(invoke.mock.calls).toEqual([20, 20, 200, 200].map(limit => ["bilibili-live:sessions", { roomMonitorId, limit }]))
+  })
+
   it("exposes only typed account and subject channels", async () => {
     const timestamp = "2026-08-23T07:00:00.000Z"
     const account = {

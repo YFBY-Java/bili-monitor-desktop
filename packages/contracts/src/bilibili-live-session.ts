@@ -186,7 +186,7 @@ export const BilibiliLiveSessionInsightSchema = z.object({
 
 export const ListBilibiliLiveSessionsInputSchema = z.object({
   roomMonitorId: z.uuid(),
-  limit: z.number().int().min(1).max(100).default(20)
+  limit: z.number().int().default(20).transform(value => value <= 0 ? 20 : Math.min(value, 200))
 }).strict()
 export const BilibiliLiveSessionIdInputSchema = z.object({ sessionId: z.uuid() }).strict()
 export const ListBilibiliLiveSessionUsersInputSchema = z.object({

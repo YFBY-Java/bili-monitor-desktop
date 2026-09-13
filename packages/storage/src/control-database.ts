@@ -1439,6 +1439,21 @@ export class ControlDatabase {
         COMMIT;
       `)
     }
+    if (Number(version.user_version) < 12) {
+      database.exec(`
+        BEGIN IMMEDIATE;
+        CREATE TABLE bilibili_live_export_daily_counter (
+          uid TEXT NOT NULL,
+          export_date TEXT NOT NULL,
+          export_count INTEGER NOT NULL CHECK (typeof(export_count) = 'integer' AND export_count > 0),
+          PRIMARY KEY (uid, export_date)
+        );
+        INSERT INTO schema_migration(version, applied_at)
+        VALUES (12, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+        PRAGMA user_version = 12;
+        COMMIT;
+      `)
+    }
   }
 
   status(): ControlDatabaseStatus {
@@ -3381,7 +3396,24 @@ export class ControlDatabase {
   listBilibiliLiveSessions(monitorId: string, limit: number): StoredBilibiliLiveSession[] {
     return this.database.prepare(`${bilibiliLiveSessionSelect()}
       WHERE monitor_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?
-    `).all(monitorId, Math.min(100, Math.max(1, limit))) as unknown as StoredBilibiliLiveSession[]
+    `).all(monitorId, Math.min(200, Math.max(1, limit))) as unknown as StoredBilibiliLiveSession[]
+  }
+
+  allocateBilibiliLiveExportNumber(uid: string, date: string): number {
+    if (this.transactionDepth > 0) {
+      throw new Error("Export numbers must be allocated outside a snapshot transaction.")
+    }
+    // One autocommitted statement, independent of export encoding, saving, and snapshot rollbacks.
+    const row = this.database.prepare(`
+      INSERT INTO bilibili_live_export_daily_counter(uid, export_date, export_count)
+      VALUES (?, ?, 1)
+      ON CONFLICT(uid, export_date) DO UPDATE SET export_count = export_count + 1
+      RETURNING export_count
+    `).get(uid, date)
+    if (!row || typeof row.export_count !== "number" || !Number.isSafeInteger(row.export_count)) {
+      throw new Error("Invalid live export sequence allocation.")
+    }
+    return row.export_count
   }
 
   listBilibiliLiveDanmakuSessionsForMonitor(

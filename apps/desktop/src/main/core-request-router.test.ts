@@ -453,7 +453,7 @@ describe("dispatchBusinessRequest", () => {
         timestamp: "2026-08-29T12:01:00.000Z",
         correlationId: "live-sessions",
         traceId: "live-sessions",
-        payload: { roomMonitorId, limit: 20 }
+        payload: { roomMonitorId, limit: 200 }
       })
       const sessions = await dispatchBusinessRequest(runtime, sessionsRequest)
       expect(sessions).toMatchObject({

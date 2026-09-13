@@ -1,4 +1,5 @@
-import type { AddBilibiliLiveRoomInput, BilibiliLiveRoom, BilibiliLiveStatusEvent } from "@bmd/contracts"
+import type { AddBilibiliLiveRoomInput, BilibiliLiveRoom, BilibiliLiveSessionSummary,
+  BilibiliLiveStatusEvent, ListBilibiliLiveSessionsInput } from "@bmd/contracts"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useState } from "react"
 import { createRoot } from "react-dom/client"
@@ -19,11 +20,25 @@ let rooms: BilibiliLiveRoom[] = Array.from({ length: 5 }, (_, index) => ({
   }))
 }))
 let events: BilibiliLiveStatusEvent[] = []
+// Synthetic histories are confined to this test entry; no production demo records.
+const sessions: BilibiliLiveSessionSummary[] = rooms.flatMap((room, roomIndex) => Array.from({ length: 205 }, (_, index) => ({
+  id: `018f0f39-7b5e-4cc1-962d-${String(roomIndex * 1000 + index).padStart(12, "0")}`,
+  monitorId: room.id, uid: room.uid, roomId: room.roomId, state: "CLOSED",
+  startedAt: new Date(Date.parse(timestamp) - index * 3_600_000).toISOString(), endedAt: timestamp,
+  startSource: "REST_STATUS", endSource: "REST_STATUS", coverageStatus: "BOUNDARY_ONLY",
+  transportSessionCount: 0, captureStartedAt: null, captureEndedAt: null,
+  danmakuCount: null, giftEventCount: null, giftCount: null, freeGiftCount: null, giftSenderCount: null,
+  paidUserCount: null, interactingUserCount: null, unresolvedInteractingEventCount: null,
+  unresolvedGiftEventCount: null, unresolvedPaidEventCount: null, paidEventCount: null,
+  paidAmountMilliYuan: null, firstEventAt: null, lastEventAt: null
+})))
 const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 0 } } })
 let releaseAction = (): void => undefined
 const fixture = {
   actionError: "", listError: "", trendError: "", summaryError: "", holdAction: false,
   calls: [] as string[], addInputs: [] as AddBilibiliLiveRoomInput[], missingTrendIds: [] as string[],
+  sessionRequests: [] as ListBilibiliLiveSessionsInput[], sessionEventIds: [] as string[],
+  sessionInsightIds: [] as string[],
   reload: () => client.invalidateQueries({ queryKey: ["bilibili-live"] }),
   release: () => releaseAction(),
   updateFirst: (intervalSeconds: number) => {
@@ -106,7 +121,33 @@ bridge.bilibiliLive = {
       return { room, points: room.recentTrend }
     })
   },
-  events: async () => events
+  events: async () => events,
+  sessions: async (input) => {
+    fixture.sessionRequests.push(input)
+    return sessions.filter(session => session.monitorId === input.roomMonitorId).slice(0, input.limit ?? 20)
+  },
+  sessionEvents: async (input) => {
+    fixture.sessionEventIds.push(input.sessionId)
+    return { items: [], total: 0, page: input.page ?? 1, size: input.size ?? 50 }
+  },
+  sessionInsight: async ({ sessionId, bucketSeconds = 300 }) => {
+    fixture.sessionInsightIds.push(sessionId)
+    return {
+      sessionId, bucketSeconds,
+      kpis: { danmakuPerMinute: null, payerConversionRate: null, arppuMilliYuan: null,
+        paidAmountMilliYuan: null, topFiveRevenueShare: null },
+      timeline: [], peaks: [], userSegments: [], giftMix: [], findings: [],
+      danmakuDepth: { identifiedDanmakuUserCount: null, identifiedDanmakuCount: null,
+        messagesPerActiveUser: null, repeatInteractionRate: null, sustainedParticipationRate: null,
+        duplicateMessageRate: null, stages: [], repeatedMessages: [] },
+      paymentDepth: { payerCount: null, repeatPayerRate: null, engagedPayerRate: null,
+        returningPayerRate: null, medianPayerAmountMilliYuan: null, medianConversionLagSeconds: null,
+        topOneRevenueShare: null, spendTiers: [] },
+      quality: { coverageStatus: "BOUNDARY_ONLY", coveredSeconds: 0, identityResolvedEventShare: null,
+        supportedEventCount: 0, unresolvedInteractionEventCount: 0, eventLatencyP95Millis: null,
+        caveat: "合成边界场次，无在线采集覆盖。" }
+    }
+  }
 }
 function Fixture() {
   const [view, setView] = useState<BilibiliLiveView>("直播间")
@@ -115,6 +156,9 @@ function Fixture() {
     <button onClick={() => setView("直播间")}>查看直播间</button>
     <button onClick={() => setView("趋势对比")}>查看趋势</button>
     <button onClick={() => setView("状态事件")}>查看事件</button>
+    <button onClick={() => setView("直播场次")}>查看场次</button>
+    <button onClick={() => setView("数据中心")}>查看数据中心</button>
+    <button onClick={() => setView("场次分析")}>查看场次分析</button>
     <button onClick={() => setCreationOpen(true)}>添加直播间</button>
     <button onClick={() => { events = [{ id: crypto.randomUUID(), monitorId: rooms[0]!.id,
       uid: rooms[0]!.uid, roomId: rooms[0]!.roomId, eventType: "TITLE_CHANGED",

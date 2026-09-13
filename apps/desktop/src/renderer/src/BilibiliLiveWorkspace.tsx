@@ -1407,11 +1407,12 @@ export function ConnectedBilibiliLiveWorkspace({
     refetchInterval: view === "实时弹幕" ? 2_000 : false
   })
   const sessionView = view === "直播场次" || view === "数据中心" || view === "场次分析"
+  const sessionLimit = view === "直播场次" ? 20 : 200
   const sessionsQuery = useQuery({
-    queryKey: ["bilibili-live", "sessions", selectedSessionRoomId],
+    queryKey: ["bilibili-live", "sessions", selectedSessionRoomId, sessionLimit],
     queryFn: () => {
       if (!selectedSessionRoomId) throw new Error("尚未选择直播间。")
-      return bridge.bilibiliLive.sessions({ roomMonitorId: selectedSessionRoomId, limit: 100 })
+      return bridge.bilibiliLive.sessions({ roomMonitorId: selectedSessionRoomId, limit: sessionLimit })
     },
     enabled: sessionView && selectedSessionRoomId !== undefined,
     refetchInterval: sessionView ? 10_000 : false
@@ -1548,9 +1549,11 @@ export function ConnectedBilibiliLiveWorkspace({
   }, [rooms, selectedDanmakuRoomId, selectedRankRoomId, selectedSessionRoomId])
   const sessions = sessionsQuery.data ?? []
   useEffect(() => {
+    // A new room/limit query is not an empty result until it has actually loaded.
+    if (!sessionsQuery.data) return
     const next = sessions.find((session) => session.id === selectedSessionId)?.id ?? sessions[0]?.id
     if (next !== selectedSessionId) setSelectedSessionId(next)
-  }, [selectedSessionId, sessions])
+  }, [selectedSessionId, sessions, sessionsQuery.data])
   useEffect(() => {
     if (!selectedSessionId || sessionEventFilters.sessionId === selectedSessionId) return
     setSessionEventFilters({ sessionId: selectedSessionId, page: 1, size: 50 })

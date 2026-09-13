@@ -61,6 +61,6 @@ flowchart LR
 
 基础运行时已实现桌面 UI、D 盘环境、TypeScript Local Core、SQLite WAL、Durable Task 状态机、跨语言 Envelope、Python Worker、Crawlee/Playwright Worker、Realtime Worker 和完整质量脚本。
 
-当前已落地原项目的 B站用户工作台、粉丝监控、扫码认证、直播间 REST、WebSocket 弹幕、榜单、场次、事实查询、洞察与导出，以及抖音本人 Web/OAuth 登录态。SQLite schema 为 v11；Python 负责 HTTP/OAuth，Node Worker 负责 B站实时连接和抖音 Playwright，TypeScript Core 独占业务状态与数据库。Electron `safeStorage` 只在 Main 中封装 32 字节本机密钥，Core 使用 AES-256-GCM 加密 B站与抖音凭据；Renderer 仅在用户明确查看时经窄化 IPC 获取原文。
+当前已接入原项目的 B站用户工作台、粉丝监控、扫码认证、直播间 REST、WebSocket 弹幕、榜单、场次、事实查询、洞察与导出，以及抖音本人 Web/OAuth 登录态；最新逐项等价性验收以 [迁移台账](../implementation/2026-09-13-full-migration-tracker.md) 为准，尚非全量完成。SQLite schema 为 v12，新增按主播 UID/上海日期持久化的导出计数表；计数在导出快照事务之外分配，文件编码或保存失败不复用已分配编号。Python 负责 HTTP/OAuth，Node Worker 负责 B站实时连接和抖音 Playwright，TypeScript Core 独占业务状态与数据库。Electron `safeStorage` 只在 Main 中封装 32 字节本机密钥，Core 使用 AES-256-GCM 加密 B站与抖音凭据；Renderer 仅在用户明确查看时经窄化 IPC 获取原文。
 
 所有 Worker 都通过 `NDJSON stdio` 通信，不开放业务端口。只有非认证采集原始响应进入 SHA-256 Object CAS；Cookie、CSRF、Token 和浏览器存储不进入 CAS、日志或 Outbox。自动测试与公开接口 smoke 之外，B站真人扫码和抖音真人扫码/官方授权仍需人工完成，文档不得把它们标记为已验收。

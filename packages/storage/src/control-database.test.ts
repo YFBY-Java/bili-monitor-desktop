@@ -14,7 +14,7 @@ describe("ControlDatabase", () => {
     if (directory) await rm(directory, { recursive: true, force: true })
   })
 
-  it("creates the WAL control database and applies the original Douyin auth schema version 11", async () => {
+  it("creates the WAL control database and applies live export counter schema version 12", async () => {
     const testDirectory = await mkdtemp(resolve(tmpdir(), "bmd-control-"))
     directory = testDirectory
     const database = await ControlDatabase.open(testDirectory)
@@ -22,7 +22,7 @@ describe("ControlDatabase", () => {
       expect(database.status()).toEqual({
         databasePath: resolve(testDirectory, "control.db"),
         journalMode: "wal",
-        schemaVersion: 11
+        schemaVersion: 12
       })
       expect(database.listWorkerStatuses()).toEqual([])
 
@@ -47,6 +47,7 @@ describe("ControlDatabase", () => {
           "bilibili_live_danmaku_recent",
           "bilibili_live_session",
           "bilibili_live_session_event",
+          "bilibili_live_export_daily_counter",
           "bilibili_monitored_subject",
           "bilibili_subject_binding",
           "bilibili_subject_widget_layout",
@@ -232,6 +233,8 @@ describe("ControlDatabase", () => {
         DROP TABLE bilibili_monitored_subject;
         DROP TABLE douyin_auth_credential;
         DROP TABLE douyin_auth_session;
+        DROP TABLE bilibili_live_export_daily_counter;
+        DELETE FROM schema_migration WHERE version = 12;
         DELETE FROM schema_migration WHERE version = 11;
         DELETE FROM schema_migration WHERE version = 10;
         DELETE FROM schema_migration WHERE version = 9;
@@ -243,7 +246,7 @@ describe("ControlDatabase", () => {
 
     const upgraded = await ControlDatabase.open(testDirectory)
     try {
-      expect(upgraded.status().schemaVersion).toBe(11)
+      expect(upgraded.status().schemaVersion).toBe(12)
       expect(upgraded.listBilibiliLiveSessions(monitorId, 10)).toMatchObject([
         {
           state: "OPEN",
