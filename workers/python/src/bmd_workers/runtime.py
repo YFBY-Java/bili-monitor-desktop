@@ -34,6 +34,7 @@ from .bilibili_live import (
     BilibiliLiveUidRequest,
     fetch_live_endpoint,
 )
+from .bilibili_live_contract import validate_live_result
 from .bilibili_rank import BilibiliLiveRankRequest, fetch_live_rank
 from .douyin_oauth import DouyinOAuthError, request_oauth
 from .protocol import RuntimeEnvelope
@@ -212,24 +213,36 @@ class WorkerRuntime:
             live_payload: (
                 BilibiliLiveStatusRequest | BilibiliLiveUidRequest | BilibiliLiveRoomRequest
             )
-            if request.type == "bilibili.live.fetch-status-by-uids":
-                live_payload = BilibiliLiveStatusRequest.model_validate(request.payload)
-                endpoint = STATUS_BY_UIDS_ENDPOINT
-            elif request.type == "bilibili.live.fetch-room-info-old":
-                live_payload = BilibiliLiveUidRequest.model_validate(request.payload)
-                endpoint = ROOM_INFO_OLD_ENDPOINT
-            else:
-                live_payload = BilibiliLiveRoomRequest.model_validate(request.payload)
-                endpoint = (
-                    ROOM_INIT_ENDPOINT
-                    if request.type == "bilibili.live.fetch-room-init"
-                    else ROOM_INFO_ENDPOINT
+            endpoint = {
+                "bilibili.live.fetch-status-by-uids": STATUS_BY_UIDS_ENDPOINT,
+                "bilibili.live.fetch-room-info-old": ROOM_INFO_OLD_ENDPOINT,
+                "bilibili.live.fetch-room-init": ROOM_INIT_ENDPOINT,
+                "bilibili.live.fetch-room-info": ROOM_INFO_ENDPOINT,
+            }[request.type]
+            try:
+                if endpoint == STATUS_BY_UIDS_ENDPOINT:
+                    live_payload = BilibiliLiveStatusRequest.model_validate(request.payload)
+                elif endpoint == ROOM_INFO_OLD_ENDPOINT:
+                    live_payload = BilibiliLiveUidRequest.model_validate(request.payload)
+                else:
+                    live_payload = BilibiliLiveRoomRequest.model_validate(request.payload)
+            except ValidationError:
+                return self._response(
+                    request,
+                    "worker.error",
+                    {
+                        "code": "BILIBILI_INPUT_INVALID",
+                        "message": "Invalid Bilibili live Worker request.",
+                        "retryable": False,
+                        "endpoint": endpoint,
+                    },
                 )
             data_directory = self.data_directory or _data_directory_from_environment()
             try:
                 result = await self.live_fetcher(
                     endpoint, live_payload.model_dump(by_alias=True), data_directory
                 )
+                result = validate_live_result(endpoint, result)
             except BilibiliCrawlerError as error:
                 error_payload = {
                     "code": error.code,

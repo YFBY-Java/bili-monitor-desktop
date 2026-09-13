@@ -14,7 +14,7 @@ describe("ControlDatabase", () => {
     if (directory) await rm(directory, { recursive: true, force: true })
   })
 
-  it("creates the WAL control database and applies live export counter schema version 12", async () => {
+  it("creates the WAL control database and applies signed live counter schema version 13", async () => {
     const testDirectory = await mkdtemp(resolve(tmpdir(), "bmd-control-"))
     directory = testDirectory
     const database = await ControlDatabase.open(testDirectory)
@@ -22,7 +22,7 @@ describe("ControlDatabase", () => {
       expect(database.status()).toEqual({
         databasePath: resolve(testDirectory, "control.db"),
         journalMode: "wal",
-        schemaVersion: 12
+        schemaVersion: 13
       })
       expect(database.listWorkerStatuses()).toEqual([])
 
@@ -246,7 +246,7 @@ describe("ControlDatabase", () => {
 
     const upgraded = await ControlDatabase.open(testDirectory)
     try {
-      expect(upgraded.status().schemaVersion).toBe(12)
+      expect(upgraded.status().schemaVersion).toBe(13)
       expect(upgraded.listBilibiliLiveSessions(monitorId, 10)).toMatchObject([
         {
           state: "OPEN",

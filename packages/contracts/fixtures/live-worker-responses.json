@@ -1,0 +1,96 @@
+[
+  {
+    "name": "zero IDs and preserved Chinese profile",
+    "method": "status", "request": {"uids": ["101"]},
+    "body": {"code": 0, "data": {"101": {"uid": 101, "room_id": 201, "short_id": 0, "area_v2_id": 0, "area_id": 86, "area_v2_parent_id": 0, "parent_area_id": 2, "uname": " 合成直播主播 ", "title": " 中文直播标题 ", "live_status": 1, "online": 0, "watched_show": {"num": 99}, "attention": 123, "live_time": "2026-09-13 11:00:00"}}},
+    "result": [{"uid": "101", "roomId": "201", "shortId": "0", "areaId": "0", "parentAreaId": "0", "uname": " 合成直播主播 ", "title": " 中文直播标题 ", "liveStatus": 1, "onlineCount": 0, "attentionCount": 123, "liveTime": "2026-09-13T03:00:00Z"}]
+  },
+  {
+    "name": "blank nickname fallback and scalar text only",
+    "method": "status", "request": {"uids": ["102"]},
+    "body": {"code": 0, "data": {"102": {"room_id": 202, "uname": "\u001c\t ", "title": {"bad": "object"}, "area_v2_name": ["not text"], "area_name": "实际分区", "online": " 42", "watched_show": {"num": 9}}}},
+    "result": [{"uid": "102", "roomId": "202", "uname": "UID 102", "areaName": "实际分区", "liveStatus": 0, "onlineCount": 9}]
+  },
+  {
+    "name": "invalid key skip and duplicate UID last wins in first position",
+    "method": "status", "request": {"uids": ["103", "104"]},
+    "body": {"code": 0, "data": {"metadata": {"uid": "bad"}, "103": {"room_id": 203, "uname": "旧名字"}, "104": {"room_id": 204}, "duplicate": {"uid": 103, "room_id": 205, "uname": "最终名字"}}},
+    "result": [{"uid": "103", "roomId": "205", "uname": "最终名字", "liveStatus": 0}, {"uid": "104", "roomId": "204", "uname": "UID 104", "liveStatus": 0}]
+  },
+  {
+    "name": "room initialization preserves zero short ID and truncates epoch seconds",
+    "method": "init", "request": {"roomId": "206"},
+    "body": {"code": 0, "data": {"uid": 106, "room_id": 206, "short_id": 0, "live_status": 0, "live_time": 1.9}},
+    "result": {"uid": "106", "roomId": "206", "uname": "UID 106", "shortId": "0", "liveStatus": 0, "liveTime": "1970-01-01T00:00:01Z"}
+  },
+  {
+    "name": "room detail zero areas and original fallback order",
+    "method": "info", "request": {"roomId": "207"},
+    "body": {"code": 0, "data": {"uid": 107, "room_id": 207, "short_id": 0, "uname": "详情不提供昵称", "face": "https://example.test/ignored.png", "title": false, "user_cover": {}, "cover": "https://example.test/live.png", "background": "https://example.test/background.png", "area_id": 0, "parent_area_id": 0, "area_name": "\u00a0", "live_time": " 2026-09-13 11:00:00 ", "online": "+12"}},
+    "result": {"uid": "107", "roomId": "207", "uname": "UID 107", "shortId": "0", "title": "false", "coverUrl": "https://example.test/live.png", "areaId": "0", "parentAreaId": "0", "areaName": "\u00a0", "liveStatus": 0, "onlineCount": 12}
+  },
+  {
+    "name": "old interface parsed camel state falls back to snake state",
+    "method": "old", "request": {"uid": "108"},
+    "body": {"code": 0, "data": {"roomid": 208, "roomStatus": 0, "liveStatus": "invalid", "live_status": 1, "title": "旧接口标题", "online": 23}},
+    "result": {"uid": "108", "roomId": "208", "liveStatus": 1, "title": "旧接口标题", "onlineCount": 23}
+  },
+  {
+    "name": "old interface no room is an empty optional snapshot",
+    "method": "old", "request": {"uid": "109"},
+    "body": {"code": 0, "data": {"roomStatus": 0}}, "result": null
+  },
+  {
+    "name": "empty batch allows Core old-interface fallback",
+    "method": "status", "request": {"uids": ["109"]},
+    "body": {"code": 0, "data": {}}, "result": []
+  },
+  {
+    "name": "code zero does not use follower voucher detection",
+    "method": "status", "request": {"uids": ["110"]},
+    "body": {"code": "0", "data": {"v_voucher": "synthetic-only", "110": {"room_id": 210}}},
+    "result": [{"uid": "110", "roomId": "210", "uname": "UID 110", "liveStatus": 0}]
+  },
+  {
+    "name": "risk control preserves Chinese error metadata",
+    "method": "status", "request": {"uids": ["111"]},
+    "body": {"code": -412, "message": "合成直播风控", "data": null},
+    "error": {"code": "BILIBILI_RISK_CONTROL", "message": "合成直播风控", "retryable": false, "statusCode": 200, "biliCode": -412}
+  },
+  {
+    "name": "positive business 500 is UNKNOWN with raw retryable",
+    "method": "status", "request": {"uids": ["112"]},
+    "body": {"code": 500, "message": "合成业务失败"},
+    "error": {"code": "BILIBILI_UNKNOWN_ERROR", "message": "合成业务失败", "retryable": true, "statusCode": 200, "biliCode": 500}
+  },
+  {
+    "name": "negative business 500 is UNKNOWN with raw retryable",
+    "method": "info", "request": {"roomId": "213"},
+    "body": {"code": -500},
+    "error": {"code": "BILIBILI_UNKNOWN_ERROR", "message": "Bilibili live API error: -500", "retryable": true, "statusCode": 200, "biliCode": -500}
+  },
+  {
+    "name": "absent code uses original integer sentinel",
+    "method": "old", "request": {"uid": "114"},
+    "body": {"data": {}},
+    "error": {"code": "BILIBILI_UNKNOWN_ERROR", "message": "Bilibili live API error: -2147483648", "retryable": false, "statusCode": 200, "biliCode": -2147483648}
+  },
+  {
+    "name": "room data for successful Core initialization",
+    "method": "info", "request": {"roomId": "201"},
+    "body": {"code": 0, "data": {"uid": 101, "room_id": 201, "short_id": 0, "area_id": 0, "parent_area_id": 0, "live_status": 1, "live_time": "2026-09-13 11:00:00", "online": 8, "title": "详情标题"}},
+    "result": {"uid": "101", "roomId": "201", "uname": "UID 101", "shortId": "0", "areaId": "0", "parentAreaId": "0", "liveStatus": 1, "liveTime": "2026-09-13T03:00:00Z", "onlineCount": 8, "title": "详情标题"}
+  },
+  {
+    "name": "signed counters take precedence over watched fallback",
+    "method": "status", "request": {"uids": ["118"]},
+    "body": {"code": 0, "data": {"118": {"uid": 118, "room_id": 218, "uname": "合成负数计数主播", "live_status": 1, "online": -1, "attention": -2, "watched_show": {"num": 99}}}},
+    "result": [{"uid": "118", "roomId": "218", "uname": "合成负数计数主播", "liveStatus": 1, "onlineCount": -1, "attentionCount": -2}]
+  },
+  {
+    "name": "signed counters in room details",
+    "method": "info", "request": {"roomId": "218"},
+    "body": {"code": 0, "data": {"uid": 118, "room_id": 218, "live_status": 1, "online": -1, "attention": -2}},
+    "result": {"uid": "118", "roomId": "218", "uname": "UID 118", "liveStatus": 1, "onlineCount": -1, "attentionCount": -2}
+  }
+]

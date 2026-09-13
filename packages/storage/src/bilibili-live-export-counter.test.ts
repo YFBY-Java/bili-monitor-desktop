@@ -53,7 +53,7 @@ describe("persistent daily live export counter", () => {
     } finally { raw.close() }
     let upgraded = await ControlDatabase.open(directory)
     try {
-      expect(upgraded.status().schemaVersion).toBe(12)
+      expect(upgraded.status().schemaVersion).toBe(13)
       expect(upgraded.listWorkerStatuses()).toMatchObject([{ workerId: "migration-fixture", restartCount: 2 }])
       expect(upgraded.allocateBilibiliLiveExportNumber("22", "2026-09-13")).toBe(1)
       upgraded.close()

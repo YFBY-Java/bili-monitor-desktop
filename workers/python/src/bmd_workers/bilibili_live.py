@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,12 +12,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from .bilibili_follower import (
     BilibiliCrawlerError,
     _decode_json,
-    _ensure_success,
     _object,
-    _optional_int,
-    _optional_text,
     _write_object_sync,
 )
+from .bilibili_live_contract import PositiveId, PositiveInteger
+from .bilibili_live_values import ensure_success as _ensure_success
+from .bilibili_live_values import live_time as _live_time
+from .bilibili_live_values import optional_int as _optional_int
+from .bilibili_live_values import optional_text as _optional_text
 
 STATUS_BY_UIDS_ENDPOINT = "room/v1/Room/get_status_info_by_uids"
 ROOM_INIT_ENDPOINT = "room/v1/Room/room_init"
@@ -31,34 +33,32 @@ ENDPOINT_URLS = {
     ROOM_INFO_OLD_ENDPOINT: "https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld",
 }
 
-CHINA_TIMEZONE = timezone(timedelta(hours=8))
-
 
 class BilibiliLiveRoomRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     task_id: str = Field(alias="taskId", min_length=1)
-    attempt: int = Field(ge=1)
+    attempt: PositiveInteger
     lease_id: str = Field(alias="leaseId", min_length=1)
-    room_id: str = Field(alias="roomId", pattern=r"^[1-9]\d*$")
+    room_id: PositiveId = Field(alias="roomId")
 
 
 class BilibiliLiveUidRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     task_id: str = Field(alias="taskId", min_length=1)
-    attempt: int = Field(ge=1)
+    attempt: PositiveInteger
     lease_id: str = Field(alias="leaseId", min_length=1)
-    uid: str = Field(pattern=r"^[1-9]\d*$")
+    uid: PositiveId
 
 
 class BilibiliLiveStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     task_id: str = Field(alias="taskId", min_length=1)
-    attempt: int = Field(ge=1)
+    attempt: PositiveInteger
     lease_id: str = Field(alias="leaseId", min_length=1)
-    uids: list[str] = Field(min_length=1, max_length=30)
+    uids: list[PositiveId] = Field(min_length=1, max_length=30)
 
 
 def _positive_id(value: object) -> str | None:
@@ -71,21 +71,9 @@ def _live_status(value: object) -> int:
     return status if status in (0, 1, 2) else 0
 
 
-def _live_time(value: object) -> str | None:
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        if value <= 0:
-            return None
-        return datetime.fromtimestamp(value, timezone.utc).isoformat().replace("+00:00", "Z")
-    text = str(value).strip()
-    if not text or text.startswith("0000-00-00"):
-        return None
-    try:
-        parsed = datetime.strptime(text, "%Y-%m-%d %H:%M:%S").replace(tzinfo=CHINA_TIMEZONE)
-    except ValueError:
-        return None
-    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+def _auxiliary_id(value: object) -> str | None:
+    number = _optional_int(value)
+    return str(number) if number is not None and number >= 0 else None
 
 
 def _put(result: dict[str, object], key: str, value: object | None) -> None:
@@ -113,8 +101,8 @@ def _status_item(item: dict[str, Any], fallback_uid: str, endpoint: str) -> dict
         "roomId": room_id,
         "liveStatus": _live_status(item.get("live_status")),
     }
-    _put(result, "shortId", _positive_id(item.get("short_id")))
-    _put(result, "uname", _optional_text(item.get("uname")))
+    _put(result, "shortId", _auxiliary_id(item.get("short_id")))
+    _put(result, "uname", _optional_text(item.get("uname")) or f"UID {uid}")
     _put(result, "faceUrl", _optional_text(item.get("face")))
     _put(result, "title", _optional_text(item.get("title")))
     _put(
@@ -126,7 +114,7 @@ def _status_item(item: dict[str, Any], fallback_uid: str, endpoint: str) -> dict
     _put(
         result,
         "areaId",
-        _positive_id(item.get("area_v2_id")) or _positive_id(item.get("area_id")),
+        _auxiliary_id(item.get("area_v2_id")) or _auxiliary_id(item.get("area_id")),
     )
     _put(
         result,
@@ -136,7 +124,7 @@ def _status_item(item: dict[str, Any], fallback_uid: str, endpoint: str) -> dict
     _put(
         result,
         "parentAreaId",
-        _positive_id(item.get("area_v2_parent_id")) or _positive_id(item.get("parent_area_id")),
+        _auxiliary_id(item.get("area_v2_parent_id")) or _auxiliary_id(item.get("parent_area_id")),
     )
     _put(
         result,
@@ -162,9 +150,13 @@ def parse_status_by_uids_response(raw: str, fetched_at: str) -> list[dict[str, o
     root = _decode_json(raw, STATUS_BY_UIDS_ENDPOINT)
     _ensure_success(root, STATUS_BY_UIDS_ENDPOINT)
     data = _object(root.get("data"))
-    return [
-        _status_item(_object(item), str(uid), STATUS_BY_UIDS_ENDPOINT) for uid, item in data.items()
-    ]
+    snapshots: dict[str, dict[str, object]] = {}
+    for key, value in data.items():
+        item = _object(value)
+        uid = _positive_id(item.get("uid")) or _positive_id(key)
+        if uid is not None:
+            snapshots[uid] = _status_item(item, uid, STATUS_BY_UIDS_ENDPOINT)
+    return list(snapshots.values())
 
 
 def parse_room_init_response(raw: str, fetched_at: str) -> dict[str, object]:
@@ -188,7 +180,7 @@ def parse_room_init_response(raw: str, fetched_at: str) -> dict[str, object]:
         "uname": f"UID {uid}",
         "liveStatus": _live_status(data.get("live_status")),
     }
-    _put(result, "shortId", _positive_id(data.get("short_id")))
+    _put(result, "shortId", _auxiliary_id(data.get("short_id")))
     _put(result, "liveTime", _live_time(data.get("live_time")))
     return result
 
@@ -214,7 +206,7 @@ def parse_room_info_response(raw: str, fetched_at: str) -> dict[str, object]:
         "uname": f"UID {uid}",
         "liveStatus": _live_status(data.get("live_status")),
     }
-    _put(result, "shortId", _positive_id(data.get("short_id")))
+    _put(result, "shortId", _auxiliary_id(data.get("short_id")))
     _put(result, "title", _optional_text(data.get("title")))
     _put(
         result,
@@ -224,9 +216,9 @@ def parse_room_info_response(raw: str, fetched_at: str) -> dict[str, object]:
         or _optional_text(data.get("background")),
     )
     _put(result, "keyframeUrl", _optional_text(data.get("keyframe")))
-    _put(result, "areaId", _positive_id(data.get("area_id")))
+    _put(result, "areaId", _auxiliary_id(data.get("area_id")))
     _put(result, "areaName", _optional_text(data.get("area_name")))
-    _put(result, "parentAreaId", _positive_id(data.get("parent_area_id")))
+    _put(result, "parentAreaId", _auxiliary_id(data.get("parent_area_id")))
     _put(result, "parentAreaName", _optional_text(data.get("parent_area_name")))
     _put(result, "liveTime", _live_time(data.get("live_time")))
     _put(result, "onlineCount", _optional_int(data.get("online")))
@@ -254,9 +246,7 @@ def parse_room_info_old_response(raw: str, uid: str, fetched_at: str) -> dict[st
         "uid": uid,
         "roomId": room_id,
         "liveStatus": _live_status(
-            data.get("liveStatus")
-            if data.get("liveStatus") is not None
-            else data.get("live_status")
+            _first(_optional_int(data.get("liveStatus")), _optional_int(data.get("live_status")))
         ),
     }
     _put(result, "title", _optional_text(data.get("title")))
@@ -298,9 +288,10 @@ async def fetch_live_endpoint(
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(10.0, connect=5.0),
+            follow_redirects=True,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "BiliMonitorDesktop/0.1 (+low-frequency public Bilibili live monitor)",
+                "User-Agent": "SocialDataMonitor/0.1 (+low-frequency public Bilibili live monitor)",
                 "Referer": "https://live.bilibili.com/",
             },
         ) as client:
@@ -318,7 +309,9 @@ async def fetch_live_endpoint(
         code = (
             "BILIBILI_RATE_LIMITED"
             if response.status_code == 429
-            else "BILIBILI_SERVER_ERROR" if response.status_code >= 500 else "BILIBILI_HTTP_ERROR"
+            else (
+                "BILIBILI_SERVER_ERROR" if response.status_code >= 500 else "BILIBILI_UNKNOWN_ERROR"
+            )
         )
         raise BilibiliCrawlerError(
             code,
@@ -329,7 +322,16 @@ async def fetch_live_endpoint(
         )
 
     raw_bytes = response.content
-    raw = raw_bytes.decode("utf-8")
+    try:
+        raw = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise BilibiliCrawlerError(
+            "BILIBILI_PARSE_ERROR",
+            "Unable to decode Bilibili live response as UTF-8.",
+            retryable=False,
+            endpoint=endpoint,
+            status_code=response.status_code,
+        ) from error
     fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     evidence = await asyncio.to_thread(_write_object_sync, data_directory, raw_bytes)
     common = {
@@ -339,13 +341,21 @@ async def fetch_live_endpoint(
         "statusCode": response.status_code,
         "durationMs": duration_ms,
     }
-    if endpoint == STATUS_BY_UIDS_ENDPOINT:
-        return {"snapshots": parse_status_by_uids_response(raw, fetched_at), **common}
-    if endpoint == ROOM_INIT_ENDPOINT:
-        return {**parse_room_init_response(raw, fetched_at), **common}
-    if endpoint == ROOM_INFO_ENDPOINT:
-        return {**parse_room_info_response(raw, fetched_at), **common}
-    return {
-        "snapshot": parse_room_info_old_response(raw, str(payload["uid"]), fetched_at),
-        **common,
-    }
+    try:
+        if endpoint == STATUS_BY_UIDS_ENDPOINT:
+            return {"snapshots": parse_status_by_uids_response(raw, fetched_at), **common}
+        if endpoint == ROOM_INIT_ENDPOINT:
+            return {**parse_room_init_response(raw, fetched_at), **common}
+        if endpoint == ROOM_INFO_ENDPOINT:
+            return {**parse_room_info_response(raw, fetched_at), **common}
+        snapshot = parse_room_info_old_response(raw, str(payload["uid"]), fetched_at)
+        return {**common, **({"snapshot": snapshot} if snapshot is not None else {})}
+    except (ValueError, OverflowError, OSError, TypeError, RecursionError) as error:
+        # Only parser failures: evidence storage and network failures retain their own meaning.
+        raise BilibiliCrawlerError(
+            "BILIBILI_PARSE_ERROR",
+            "Unable to parse Bilibili live response fields.",
+            retryable=False,
+            endpoint=endpoint,
+            status_code=response.status_code,
+        ) from error

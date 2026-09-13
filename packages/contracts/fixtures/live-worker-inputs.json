@@ -1,0 +1,14 @@
+[
+  {"name": "room request", "schema": "RoomRequest", "input": {"taskId": "t", "attempt": 1, "leaseId": "l", "roomId": "201"}, "valid": true},
+  {"name": "trim UID at boundary", "schema": "UidRequest", "input": {"taskId": "t", "attempt": 1, "leaseId": "l", "uid": " 101 "}, "valid": true, "output": {"taskId": "t", "attempt": 1, "leaseId": "l", "uid": "101"}},
+  {"name": "batch trims every UID", "schema": "StatusRequest", "input": {"taskId": "t", "attempt": 1, "leaseId": "l", "uids": [" 101", "102\n"]}, "valid": true, "output": {"taskId": "t", "attempt": 1, "leaseId": "l", "uids": ["101", "102"]}},
+  {"name": "no zero room", "schema": "RoomRequest", "input": {"taskId": "t", "attempt": 1, "leaseId": "l", "roomId": "0"}, "valid": false},
+  {"name": "no Unicode UID digits", "schema": "UidRequest", "input": {"taskId": "t", "attempt": 1, "leaseId": "l", "uid": "1２"}, "valid": false},
+  {"name": "batch item validation", "schema": "StatusRequest", "input": {"taskId": "t", "attempt": 1, "leaseId": "l", "uids": ["101", "bad"]}, "valid": false},
+  {"name": "batch cannot be empty", "schema": "StatusRequest", "input": {"taskId": "t", "attempt": 1, "leaseId": "l", "uids": []}, "valid": false},
+  {"name": "attempt is not boolean", "schema": "UidRequest", "input": {"taskId": "t", "attempt": true, "leaseId": "l", "uid": "101"}, "valid": false},
+  {"name": "attempt is not string", "schema": "UidRequest", "input": {"taskId": "t", "attempt": "1", "leaseId": "l", "uid": "101"}, "valid": false},
+  {"name": "attempt is positive", "schema": "UidRequest", "input": {"taskId": "t", "attempt": 0, "leaseId": "l", "uid": "101"}, "valid": false},
+  {"name": "unknown fields rejected", "schema": "RoomRequest", "input": {"taskId": "t", "attempt": 1, "leaseId": "l", "roomId": "201", "extra": 0}, "valid": false},
+  {"name": "task ID required", "schema": "RoomRequest", "input": {"taskId": "", "attempt": 1, "leaseId": "l", "roomId": "201"}, "valid": false}
+]

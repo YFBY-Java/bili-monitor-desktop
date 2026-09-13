@@ -4,6 +4,9 @@ import { ObjectRefSchema } from "./bilibili-follower"
 
 export const BilibiliLiveNumericIdSchema = z.string().trim()
   .regex(/^[1-9]\d*$/, "B站 UID/房间号必须是大于 0 的数字。")
+// Public responses use 0 for an absent short number or uncategorized area.
+export const BilibiliLiveAuxiliaryIdSchema = z.string().regex(/^[0-9]+$/)
+export const BilibiliLiveCounterSchema = z.number().int()
 export const BilibiliLiveIntervalSecondsSchema = z.number().int().min(1).max(2_592_000)
 export const BilibiliLiveMonitorStatusSchema = z.enum(["ACTIVE", "PAUSED"])
 export const BilibiliLiveStatusSchema = z.union([z.literal(0), z.literal(1), z.literal(2)])
@@ -19,8 +22,8 @@ export const BilibiliLiveTrendPointSchema = z.object({
   uid: BilibiliLiveNumericIdSchema,
   capturedAt: z.iso.datetime(),
   liveStatus: BilibiliLiveStatusSchema,
-  onlineCount: z.number().int().nonnegative().optional(),
-  attentionCount: z.number().int().nonnegative().optional(),
+  onlineCount: BilibiliLiveCounterSchema.optional(),
+  attentionCount: BilibiliLiveCounterSchema.optional(),
   sourceEndpoint: BilibiliLiveEndpointSchema
 }).strict()
 
@@ -28,20 +31,20 @@ export const BilibiliLiveRoomSchema = z.object({
   id: z.uuid(),
   uid: BilibiliLiveNumericIdSchema,
   roomId: BilibiliLiveNumericIdSchema,
-  shortId: BilibiliLiveNumericIdSchema.optional(),
-  uname: z.string().trim().min(1).max(160),
+  shortId: BilibiliLiveAuxiliaryIdSchema.optional(),
+  uname: z.string().min(1).max(160),
   faceUrl: z.url().optional(),
   title: z.string().optional(),
   coverUrl: z.url().optional(),
   keyframeUrl: z.url().optional(),
-  areaId: BilibiliLiveNumericIdSchema.optional(),
+  areaId: BilibiliLiveAuxiliaryIdSchema.optional(),
   areaName: z.string().max(120).optional(),
-  parentAreaId: BilibiliLiveNumericIdSchema.optional(),
+  parentAreaId: BilibiliLiveAuxiliaryIdSchema.optional(),
   parentAreaName: z.string().max(120).optional(),
   liveStatus: BilibiliLiveStatusSchema,
   liveTime: z.iso.datetime().optional(),
-  onlineCount: z.number().int().nonnegative().optional(),
-  attentionCount: z.number().int().nonnegative().optional(),
+  onlineCount: BilibiliLiveCounterSchema.optional(),
+  attentionCount: BilibiliLiveCounterSchema.optional(),
   onlineDelta: z.number().int().optional(),
   monitorStatus: BilibiliLiveMonitorStatusSchema,
   intervalSeconds: BilibiliLiveIntervalSecondsSchema,
@@ -82,7 +85,7 @@ export const BilibiliLiveStatusEventSchema = z.object({
   toLiveStatus: BilibiliLiveStatusSchema.optional(),
   titleBefore: z.string().optional(),
   titleAfter: z.string().optional(),
-  onlineCount: z.number().int().nonnegative().optional(),
+  onlineCount: BilibiliLiveCounterSchema.optional(),
   occurredAt: z.iso.datetime()
 }).strict()
 
@@ -93,7 +96,7 @@ export const BilibiliLiveSummarySchema = z.object({
   roundRooms: z.number().int().nonnegative(),
   offlineRooms: z.number().int().nonnegative(),
   errorRooms: z.number().int().nonnegative(),
-  totalOnlineCount: z.number().int().nonnegative(),
+  totalOnlineCount: BilibiliLiveCounterSchema,
   todayLiveStarts: z.number().int().nonnegative(),
   latestEvent: BilibiliLiveStatusEventSchema.optional()
 }).strict()
@@ -104,7 +107,7 @@ export const BilibiliLiveCollectResultSchema = z.object({
   roomId: BilibiliLiveNumericIdSchema,
   success: z.boolean(),
   liveStatus: BilibiliLiveStatusSchema.optional(),
-  onlineCount: z.number().int().nonnegative().optional(),
+  onlineCount: BilibiliLiveCounterSchema.optional(),
   capturedAt: z.iso.datetime(),
   sourceEndpoint: BilibiliLiveEndpointSchema.optional(),
   message: z.string().min(1)
@@ -181,20 +184,20 @@ export const BilibiliLiveStatusByUidsRequestSchema = BilibiliLiveWorkerRequestBa
 export const BilibiliLiveSnapshotDataSchema = z.object({
   uid: BilibiliLiveNumericIdSchema,
   roomId: BilibiliLiveNumericIdSchema,
-  shortId: BilibiliLiveNumericIdSchema.optional(),
-  uname: z.string().trim().min(1).max(160).optional(),
+  shortId: BilibiliLiveAuxiliaryIdSchema.optional(),
+  uname: z.string().min(1).max(160).optional(),
   faceUrl: z.url().optional(),
   title: z.string().optional(),
   coverUrl: z.url().optional(),
   keyframeUrl: z.url().optional(),
-  areaId: BilibiliLiveNumericIdSchema.optional(),
+  areaId: BilibiliLiveAuxiliaryIdSchema.optional(),
   areaName: z.string().max(120).optional(),
-  parentAreaId: BilibiliLiveNumericIdSchema.optional(),
+  parentAreaId: BilibiliLiveAuxiliaryIdSchema.optional(),
   parentAreaName: z.string().max(120).optional(),
   liveStatus: BilibiliLiveStatusSchema,
   liveTime: z.iso.datetime().optional(),
-  onlineCount: z.number().int().nonnegative().optional(),
-  attentionCount: z.number().int().nonnegative().optional()
+  onlineCount: BilibiliLiveCounterSchema.optional(),
+  attentionCount: BilibiliLiveCounterSchema.optional()
 }).strict()
 
 export const BilibiliLiveFetchedSnapshotSchema = BilibiliLiveSnapshotDataSchema.extend({

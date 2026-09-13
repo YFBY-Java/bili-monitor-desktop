@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises"
 import { resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { compareLiveSnapshotTime, hasLiveSnapshotText } from "./bilibili-live-snapshot-values"
+import { migrateLiveSignedCounters } from "./bilibili-live-counter-migration"
 
 export interface ControlDatabaseStatus {
   databasePath: string
@@ -578,7 +579,12 @@ export class ControlDatabase {
     const database = new DatabaseSync(databasePath)
     database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
     database.exec("PRAGMA journal_mode = WAL;")
-    ControlDatabase.migrate(database)
+    try {
+      ControlDatabase.migrate(database)
+    } catch (error) {
+      database.close()
+      throw error
+    }
     return new ControlDatabase(database, databasePath)
   }
 
@@ -1456,6 +1462,7 @@ export class ControlDatabase {
         COMMIT;
       `)
     }
+    if (Number(version.user_version) < 13) migrateLiveSignedCounters(database)
   }
 
   status(): ControlDatabaseStatus {

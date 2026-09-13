@@ -29,7 +29,7 @@ describe("LocalCoreRuntime", () => {
         version: "0.2.0",
         dataDirectory: testDirectory,
         databaseReady: true,
-        schemaVersion: 12,
+        schemaVersion: 13,
         startedAt: "2026-08-23T00:00:00.000Z"
       },
       workers: [],

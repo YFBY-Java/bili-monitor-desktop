@@ -1,0 +1,19 @@
+[
+  {"name": "zero auxiliary IDs", "patch": {"shortId": "0", "areaId": "0"}, "valid": true},
+  {"name": "preserve nickname spaces", "patch": {"uname": " 主播 "}, "valid": true},
+  {"name": "JSON integer number", "patch": {"onlineCount": 1.0}, "valid": true},
+  {"name": "original signed counters", "patch": {"onlineCount": -1, "attentionCount": -2}, "valid": true},
+  {"name": "UTC seconds optional", "patch": {"liveTime": "2026-09-13T03:00Z"}, "valid": true},
+  {"name": "microseconds retained", "patch": {"liveTime": "2026-09-13T03:00:00.123456Z"}, "valid": true},
+  {"name": "explicit null is not omitted", "patch": {"uname": null}, "valid": false},
+  {"name": "boolean is not a live status", "patch": {"liveStatus": true}, "valid": false},
+  {"name": "unsupported state remains a contract gap", "patch": {"liveStatus": 3}, "valid": false},
+  {"name": "unexpected property", "patch": {"extra": 1}, "valid": false},
+  {"name": "basic ISO spelling is not the wire format", "patch": {"liveTime": "20260913T030000Z"}, "valid": false},
+  {"name": "invalid calendar date", "patch": {"liveTime": "2026-02-30T03:00:00Z"}, "valid": false},
+  {"name": "wire datetime must be UTC", "patch": {"liveTime": "2026-09-13T11:00:00+08:00"}, "valid": false},
+  {"name": "string is not a count", "patch": {"onlineCount": "1"}, "valid": false},
+  {"name": "fraction is not a count", "patch": {"onlineCount": 1.5}, "valid": false},
+  {"name": "large UID stays text", "patch": {"uid": "9223372036854775807"}, "valid": true},
+  {"name": "invalid URL", "patch": {"coverUrl": "not-a-url"}, "valid": false}
+]

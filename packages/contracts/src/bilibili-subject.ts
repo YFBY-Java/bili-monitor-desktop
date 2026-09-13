@@ -3,6 +3,7 @@ import { z } from "zod"
 import { BilibiliUidSchema } from "./bilibili-follower"
 import {
   BilibiliLiveMonitorStatusSchema,
+  BilibiliLiveCounterSchema,
   BilibiliLiveNumericIdSchema,
   BilibiliLiveStatusSchema
 } from "./bilibili-live"
@@ -140,9 +141,9 @@ export const BilibiliSubjectLiveRoomSchema = z.object({
   parentAreaName: z.string().optional(),
   liveStatus: BilibiliLiveStatusSchema,
   liveTime: OptionalDateTimeSchema,
-  onlineCount: z.number().int().nonnegative().optional(),
+  onlineCount: BilibiliLiveCounterSchema.optional(),
   onlineDelta24h: z.number().int().optional(),
-  onlinePeak24h: z.number().int().nonnegative().optional(),
+  onlinePeak24h: BilibiliLiveCounterSchema.optional(),
   monitorStatus: BilibiliLiveMonitorStatusSchema,
   lastSuccessAt: OptionalDateTimeSchema,
   nextCollectAt: OptionalDateTimeSchema,
@@ -154,9 +155,9 @@ export const BilibiliSubjectSummarySchema = z.object({
   followerCount: z.number().int().nonnegative().optional(),
   followerDelta24h: z.number().int().optional(),
   liveStatus: BilibiliLiveStatusSchema.optional(),
-  onlineCount: z.number().int().nonnegative().optional(),
+  onlineCount: BilibiliLiveCounterSchema.optional(),
   onlineDelta24h: z.number().int().optional(),
-  onlinePeak24h: z.number().int().nonnegative().optional(),
+  onlinePeak24h: BilibiliLiveCounterSchema.optional(),
   danmuPerMinute: z.number().int().nonnegative().optional(),
   danmuLast5Minutes: z.number().int().nonnegative().optional(),
   healthScore: z.number().min(0).max(100),
@@ -215,7 +216,7 @@ export const QueryBilibiliSubjectTrendsInputSchema = BilibiliSubjectIdInputSchem
 export const BilibiliSubjectTrendPointSchema = z.object({
   bucketAt: z.iso.datetime(),
   followerCount: z.number().int().nonnegative().optional(),
-  liveOnlineCount: z.number().int().nonnegative().optional()
+  liveOnlineCount: BilibiliLiveCounterSchema.optional()
 }).strict()
 
 export const BilibiliSubjectTrendSchema = z.object({

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bmd:bilibili-live-worker:v1",
+  "$defs": {
+    "PositiveId": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+    "AuxiliaryId": {"type": "string", "pattern": "^[0-9]+$"},
+    "NonnegativeInteger": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "SignedInteger": {"type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991},
+    "PositiveInteger": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "IsoDateTime": {
+      "type": "string",
+      "pattern": "^(?:(?:[0-9][0-9][2468][048]|[0-9][0-9][13579][26]|[0-9][0-9]0[48]|[02468][048]00|[13579][26]00)-02-29|[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|(?:02)-(?:0[1-9]|1[0-9]|2[0-8])))T(?:(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\\.[0-9]+)?)?(?:Z))$"
+    },
+    "Endpoint": {"enum": ["room/v1/Room/get_status_info_by_uids", "room/v1/Room/room_init", "room/v1/Room/get_info", "room/v1/Room/getRoomInfoOld"]},
+    "Url": {"type": "string", "format": "uri", "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:"},
+    "SnapshotFields": {
+      "type": "object", "required": ["uid", "roomId", "liveStatus"],
+      "properties": {
+        "uid": {"$ref": "#/$defs/PositiveId"}, "roomId": {"$ref": "#/$defs/PositiveId"},
+        "shortId": {"$ref": "#/$defs/AuxiliaryId"}, "uname": {"type": "string", "minLength": 1, "maxLength": 160},
+        "faceUrl": {"$ref": "#/$defs/Url"}, "title": {"type": "string"},
+        "coverUrl": {"$ref": "#/$defs/Url"}, "keyframeUrl": {"$ref": "#/$defs/Url"},
+        "areaId": {"$ref": "#/$defs/AuxiliaryId"}, "areaName": {"type": "string", "maxLength": 120},
+        "parentAreaId": {"$ref": "#/$defs/AuxiliaryId"}, "parentAreaName": {"type": "string", "maxLength": 120},
+        "liveStatus": {"type": "integer", "enum": [0, 1, 2]},
+        "liveTime": {"$ref": "#/$defs/IsoDateTime"},
+        "onlineCount": {"$ref": "#/$defs/SignedInteger"}, "attentionCount": {"$ref": "#/$defs/SignedInteger"}
+      }
+    },
+    "Snapshot": {"allOf": [{"$ref": "#/$defs/SnapshotFields"}], "unevaluatedProperties": false},
+    "ObjectRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["objectId", "relativePath", "sha256", "sizeBytes", "mediaType"],
+      "properties": {
+        "objectId": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "relativePath": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "sizeBytes": {"$ref": "#/$defs/NonnegativeInteger"}, "mediaType": {"type": "string", "minLength": 1}
+      }
+    },
+    "MetadataFields": {
+      "type": "object", "required": ["fetchedAt", "sourceEndpoint", "evidenceObject", "statusCode", "durationMs"],
+      "properties": {
+        "fetchedAt": {"$ref": "#/$defs/IsoDateTime"}, "sourceEndpoint": {"$ref": "#/$defs/Endpoint"},
+        "evidenceObject": {"$ref": "#/$defs/ObjectRef"}, "statusCode": {"$ref": "#/$defs/PositiveInteger"},
+        "durationMs": {"$ref": "#/$defs/NonnegativeInteger"}
+      }
+    },
+    "FetchedSnapshot": {"allOf": [{"$ref": "#/$defs/SnapshotFields"}, {"$ref": "#/$defs/MetadataFields"}], "unevaluatedProperties": false},
+    "FetchedOptionalSnapshot": {
+      "allOf": [{"$ref": "#/$defs/MetadataFields"}], "unevaluatedProperties": false,
+      "properties": {"snapshot": {"$ref": "#/$defs/Snapshot"}}
+    },
+    "FetchedStatusBatch": {
+      "allOf": [{"$ref": "#/$defs/MetadataFields"}], "unevaluatedProperties": false,
+      "required": ["snapshots"],
+      "properties": {
+        "sourceEndpoint": {"const": "room/v1/Room/get_status_info_by_uids"},
+        "snapshots": {"type": "array", "items": {"$ref": "#/$defs/Snapshot"}}
+      }
+    },
+    "RequestFields": {
+      "type": "object", "required": ["taskId", "attempt", "leaseId"],
+      "properties": {"taskId": {"type": "string", "minLength": 1}, "attempt": {"$ref": "#/$defs/PositiveInteger"}, "leaseId": {"type": "string", "minLength": 1}}
+    },
+    "RoomRequest": {"allOf": [{"$ref": "#/$defs/RequestFields"}], "unevaluatedProperties": false,
+      "required": ["roomId"], "properties": {"roomId": {"$ref": "#/$defs/PositiveId"}}},
+    "UidRequest": {"allOf": [{"$ref": "#/$defs/RequestFields"}], "unevaluatedProperties": false,
+      "required": ["uid"], "properties": {"uid": {"$ref": "#/$defs/PositiveId"}}},
+    "StatusRequest": {"allOf": [{"$ref": "#/$defs/RequestFields"}], "unevaluatedProperties": false,
+      "required": ["uids"], "properties": {"uids": {"type": "array", "minItems": 1, "maxItems": 30, "items": {"$ref": "#/$defs/PositiveId"}}}}
+  }
+}
