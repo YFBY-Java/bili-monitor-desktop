@@ -32,6 +32,7 @@ describe("live configuration failure across Core entry and desktop host", () => 
   let directory: string
   let core: LocalCoreController | undefined
   const workers: Worker[] = []
+  const messages: Array<{ type: string; id: string; payload: unknown }> = []
   beforeAll(async () => {
     buildDirectory = await mkdtemp(resolve(tmpdir(), "bmd-core-config-entry-"))
     await build({ configFile: false, logLevel: "silent", ssr: { noExternal: true }, build: {
@@ -42,10 +43,13 @@ describe("live configuration failure across Core entry and desktop host", () => 
     shell.fork.mockImplementation((_entry: string, _args: string[], options: { env: NodeJS.ProcessEnv }) => {
       const worker = new Worker(resolve(buildDirectory, "core-worker.mjs"), { env: options.env, stderr: true })
       workers.push(worker)
+      worker.on("message", message => messages.push(message))
       return new IsolatedCoreProcess(worker)
     })
   }, 30_000)
   afterEach(async () => {
+    messages.length = 0
+    vi.unstubAllEnvs()
     await core?.stop(); core = undefined
     for (const worker of workers.splice(0)) await worker.terminate()
     if (directory) await rm(directory, { recursive: true, force: true })
@@ -73,5 +77,15 @@ describe("live configuration failure across Core entry and desktop host", () => 
     await writeFile(f.path, '{"enabled":false}', "utf8")
     const recovered = await f.controller.start()
     expect(recovered.coreStatus).toMatchObject({ state: "ready", databaseReady: true })
+  }, 30_000)
+  it("emits opt-in liveness from the actual Core entry before returning the actual Python collection result", async () => {
+    vi.stubEnv("BMD_PYTHON_WORKER_PATH", resolve(process.cwd(), "../../workers/python/tests/fixtures/live_http_configuration"))
+    const f = await setup(JSON.stringify({ enabled: false, maxAttempts: 1, connectTimeoutMs: 1200, readTimeoutMs: 0,
+      userAgent: "Fixture local monitor/2", referer: "https://live.bilibili.com/2" }))
+    await f.controller.start()
+    expect(await f.controller.addBilibiliLiveRoom({ uid: "2" })).toMatchObject({ uname: "合成HTTP配置主播" })
+    const alive = messages.find(message => message.type === "core.request-alive")
+    expect(alive?.payload).toEqual({ requestType: "bilibili-live.rooms.add" })
+    expect(messages.find(message => message.type === "bilibili-live.rooms.add.result")?.id).toBe(alive?.id)
   }, 30_000)
 })

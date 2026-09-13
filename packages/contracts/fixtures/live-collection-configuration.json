@@ -15,5 +15,16 @@
   { "name": "underflow", "input": { "dueBatchSize": -2147483649 }, "valid": false },
   { "name": "zero delay", "input": { "schedulerDelayMs": 0 }, "valid": false },
   { "name": "negative delay", "input": { "schedulerDelayMs": -1 }, "valid": false },
-  { "name": "unknown property", "input": { "storageEnabled": false }, "valid": false }
+  { "name": "unknown property", "input": { "storageEnabled": false }, "valid": false },
+  { "name": "custom collection policy", "input": { "defaultIntervalSeconds": 420, "minIntervalSeconds": 120, "maxIntervalSeconds": 600, "shortIntervalWarningSeconds": 450, "failureBackoffSeconds": 75, "requestMinIntervalMs": 400, "maxAttempts": 10, "retryBackoffMs": 250 }, "valid": true },
+  { "name": "policy signed int minimum consumed separately", "input": { "defaultIntervalSeconds": -2147483648, "minIntervalSeconds": -2147483648, "maxIntervalSeconds": -2147483648, "shortIntervalWarningSeconds": -2147483648, "failureBackoffSeconds": -2147483648, "requestMinIntervalMs": -2147483648, "maxAttempts": -2147483648, "retryBackoffMs": -2147483648 }, "valid": true },
+  { "name": "policy signed int maximum consumed separately", "input": { "defaultIntervalSeconds": 2147483647, "minIntervalSeconds": 2147483647, "maxIntervalSeconds": 2147483647, "shortIntervalWarningSeconds": 2147483647, "failureBackoffSeconds": 2147483647, "requestMinIntervalMs": 2147483647, "maxAttempts": 2147483647, "retryBackoffMs": 2147483647 }, "valid": true },
+  { "name": "default interval is not a string", "input": { "defaultIntervalSeconds": "420" }, "valid": false },
+  { "name": "minimum is not a boolean", "input": { "minIntervalSeconds": true }, "valid": false },
+  { "name": "maximum cannot overflow", "input": { "maxIntervalSeconds": 2147483648 }, "valid": false },
+  { "name": "warning cannot underflow", "input": { "shortIntervalWarningSeconds": -2147483649 }, "valid": false },
+  { "name": "failure backoff is not null", "input": { "failureBackoffSeconds": null }, "valid": false },
+  { "name": "request spacing is integral", "input": { "requestMinIntervalMs": 0.5 }, "valid": false },
+  { "name": "attempt count is not an object", "input": { "maxAttempts": {} }, "valid": false },
+  { "name": "retry backoff is not an array", "input": { "retryBackoffMs": [] }, "valid": false }
 ]

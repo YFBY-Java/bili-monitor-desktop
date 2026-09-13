@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:bmd:bilibili-live-worker:v1",
   "$defs": {
+    "HttpConfiguration": {"type":"object","additionalProperties":false,"properties":{"connectTimeoutMs":{"type":"integer","minimum":0,"maximum":2147483647,"default":5000},"readTimeoutMs":{"type":"integer","minimum":0,"maximum":2147483647,"default":10000},"userAgent":{"type":"string","not":{"pattern":"[^\\t\\x20-\\x7e]"},"default":"SocialDataMonitor/0.1 (+low-frequency public Bilibili live monitor)"},"referer":{"type":"string","not":{"pattern":"[^\\t\\x20-\\x7e]"},"default":"https://live.bilibili.com/"}}},
     "PositiveId": {"type": "string", "pattern": "^[1-9][0-9]*$"},
     "AuxiliaryId": {"type": "string", "pattern": "^[0-9]+$"},
     "NonnegativeInteger": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
@@ -61,7 +62,7 @@
     },
     "RequestFields": {
       "type": "object", "required": ["taskId", "attempt", "leaseId"],
-      "properties": {"taskId": {"type": "string", "minLength": 1}, "attempt": {"$ref": "#/$defs/PositiveInteger"}, "leaseId": {"type": "string", "minLength": 1}}
+      "properties": {"taskId": {"type": "string", "minLength": 1}, "attempt": {"$ref": "#/$defs/PositiveInteger"}, "leaseId": {"type": "string", "minLength": 1}, "httpConfiguration": {"$ref": "#/$defs/HttpConfiguration"}}
     },
     "RoomRequest": {"allOf": [{"$ref": "#/$defs/RequestFields"}], "unevaluatedProperties": false,
       "required": ["roomId"], "properties": {"roomId": {"$ref": "#/$defs/PositiveId"}}},

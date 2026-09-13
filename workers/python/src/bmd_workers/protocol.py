@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 
 class RuntimeEnvelope(BaseModel):
@@ -18,6 +18,9 @@ class RuntimeEnvelope(BaseModel):
     correlation_id: str = Field(alias="correlationId", min_length=1)
     causation_id: str | None = Field(default=None, alias="causationId", min_length=1)
     trace_id: str = Field(alias="traceId", min_length=1)
+    keep_alive: StrictBool = Field(
+        default=False, alias="keepAlive", exclude_if=lambda value: not value
+    )
     payload: dict[str, Any]
 
     @classmethod

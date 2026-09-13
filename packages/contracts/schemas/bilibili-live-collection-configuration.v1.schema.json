@@ -4,9 +4,21 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "connectTimeoutMs": {"type":"integer","minimum":0,"maximum":2147483647,"default":5000},
+    "readTimeoutMs": {"type":"integer","minimum":0,"maximum":2147483647,"default":10000},
+    "userAgent": {"type":"string","not":{"pattern":"[^\\t\\x20-\\x7e]"},"default":"SocialDataMonitor/0.1 (+low-frequency public Bilibili live monitor)"},
+    "referer": {"type":"string","not":{"pattern":"[^\\t\\x20-\\x7e]"},"default":"https://live.bilibili.com/"},
     "enabled": { "type": "boolean", "default": true },
     "schedulerDelayMs": { "type": "integer", "minimum": 1, "maximum": 2147483647, "default": 1000 },
     "dueBatchSize": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 20 },
-    "statusBatchSize": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 30 }
+    "statusBatchSize": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 30 },
+    "defaultIntervalSeconds": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 300 },
+    "minIntervalSeconds": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 1 },
+    "maxIntervalSeconds": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 2592000 },
+    "shortIntervalWarningSeconds": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 120 },
+    "failureBackoffSeconds": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 900 },
+    "requestMinIntervalMs": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 1500 },
+    "maxAttempts": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 3 },
+    "retryBackoffMs": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 1500 }
   }
 }

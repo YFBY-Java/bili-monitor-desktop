@@ -2,6 +2,8 @@ import {
   BILIBILI_LIVE_CONFIG_ERROR_MESSAGE,
   RuntimeEnvelopeSchema,
   createRuntimeEnvelope,
+  LIVE_HTTP_CORE_REQUESTS,
+  REQUEST_KEEP_ALIVE_INTERVAL_MS,
   type RuntimeEnvelope,
   type RuntimeError
 } from "@bmd/contracts"
@@ -51,6 +53,7 @@ async function handleMessage(message: unknown): Promise<void> {
   const parsed = RuntimeEnvelopeSchema.safeParse(message)
   if (!parsed.success) return
   const request = parsed.data as RuntimeEnvelope
+  let heartbeat: NodeJS.Timeout | undefined
 
   try {
     if (request.type === "core.shutdown") {
@@ -68,6 +71,17 @@ async function handleMessage(message: unknown): Promise<void> {
       parentPort.postMessage(response(request, "core.bootstrap.result", runtime.bootstrap()))
       return
     }
+    if (request.keepAlive && LIVE_HTTP_CORE_REQUESTS.some(type => type === request.type)) {
+      const report = () => parentPort.postMessage(response(request, "core.request-alive", { requestType: request.type }))
+      report()
+      heartbeat = setInterval(() => {
+        try { report() } catch {
+          clearInterval(heartbeat)
+          // Losing the supervising Main also cancels any active Core/Worker operations.
+          void runtime.stop().finally(() => process.exit(1))
+        }
+      }, REQUEST_KEEP_ALIVE_INTERVAL_MS)
+    }
     const result = await dispatchBusinessRequest(runtime, request)
     parentPort.postMessage(response(request, result.responseType, result.payload))
   } catch (error) {
@@ -78,6 +92,8 @@ async function handleMessage(message: unknown): Promise<void> {
       retryable: details?.retryable ?? false
     }
     parentPort.postMessage(response(request, "core.error", payload))
+  } finally {
+    clearInterval(heartbeat)
   }
 }
 

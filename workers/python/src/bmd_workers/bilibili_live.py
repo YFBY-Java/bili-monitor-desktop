@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from .bilibili_follower import (
     BilibiliCrawlerError,
@@ -16,6 +16,7 @@ from .bilibili_follower import (
     _write_object_sync,
 )
 from .bilibili_live_contract import PositiveId, PositiveInteger
+from .bilibili_live_http import BilibiliLiveHttpConfiguration, BilibiliLiveHttpRequest
 from .bilibili_live_values import ensure_success as _ensure_success
 from .bilibili_live_values import live_time as _live_time
 from .bilibili_live_values import optional_int as _optional_int
@@ -34,7 +35,7 @@ ENDPOINT_URLS = {
 }
 
 
-class BilibiliLiveRoomRequest(BaseModel):
+class BilibiliLiveRoomRequest(BilibiliLiveHttpRequest):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     task_id: str = Field(alias="taskId", min_length=1)
@@ -43,7 +44,7 @@ class BilibiliLiveRoomRequest(BaseModel):
     room_id: PositiveId = Field(alias="roomId")
 
 
-class BilibiliLiveUidRequest(BaseModel):
+class BilibiliLiveUidRequest(BilibiliLiveHttpRequest):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     task_id: str = Field(alias="taskId", min_length=1)
@@ -52,7 +53,7 @@ class BilibiliLiveUidRequest(BaseModel):
     uid: PositiveId
 
 
-class BilibiliLiveStatusRequest(BaseModel):
+class BilibiliLiveStatusRequest(BilibiliLiveHttpRequest):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     task_id: str = Field(alias="taskId", min_length=1)
@@ -284,16 +285,15 @@ async def fetch_live_endpoint(
     else:
         parameters = [("mid", str(payload["uid"]))]
 
+    configuration = BilibiliLiveHttpConfiguration.model_validate(
+        payload.get("httpConfiguration") or {}
+    )
     started = time.perf_counter()
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0, connect=5.0),
+            timeout=configuration.timeout(),
             follow_redirects=True,
-            headers={
-                "Accept": "application/json",
-                "User-Agent": "SocialDataMonitor/0.1 (+low-frequency public Bilibili live monitor)",
-                "Referer": "https://live.bilibili.com/",
-            },
+            headers=configuration.headers(),
         ) as client:
             response = await client.get(ENDPOINT_URLS[endpoint], params=parameters)
     except httpx.RequestError as error:

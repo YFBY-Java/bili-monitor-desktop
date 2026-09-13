@@ -14,7 +14,13 @@ describe("read-only live collection configuration loader", () => {
   it("defaults without creating a configuration directory", async () => {
     await setup()
     expect(await loadLiveCollectionConfiguration(directory, {})).toEqual({
-      enabled: true, schedulerDelayMs: 1000, dueBatchSize: 20, statusBatchSize: 30
+      enabled: true, schedulerDelayMs: 1000, dueBatchSize: 20, statusBatchSize: 30,
+      defaultIntervalSeconds: 300, minIntervalSeconds: 1, maxIntervalSeconds: 2592000,
+      shortIntervalWarningSeconds: 120, failureBackoffSeconds: 900, requestMinIntervalMs: 1500,
+      maxAttempts: 3, retryBackoffMs: 1500,
+      connectTimeoutMs: 5000, readTimeoutMs: 10000,
+      userAgent: "SocialDataMonitor/0.1 (+low-frequency public Bilibili live monitor)",
+      referer: "https://live.bilibili.com/"
     })
     await expect(access(resolve(directory, "config"))).rejects.toMatchObject({ code: "ENOENT" })
   })
@@ -26,7 +32,7 @@ describe("read-only live collection configuration loader", () => {
     expect(await loadLiveCollectionConfiguration(directory, {
       SOCIAL_MONITOR_BILIBILI_LIVE_MONITOR_ENABLED: " FALSE ",
       SOCIAL_MONITOR_BILIBILI_LIVE_STATUS_BATCH_SIZE: " +64 "
-    })).toEqual({ enabled: false, schedulerDelayMs: 250, dueBatchSize: 99, statusBatchSize: 64 })
+    })).toMatchObject({ enabled: false, schedulerDelayMs: 250, dueBatchSize: 99, statusBatchSize: 64 })
     expect(await readFile(path, "utf8")).toBe(contents)
   })
   it.each(["", "12.5", "1e3", "NaN", "Infinity", "2147483648"])("rejects invalid integer environment value %j", async value => {
@@ -47,5 +53,26 @@ describe("read-only live collection configuration loader", () => {
     await expect(loadLiveCollectionConfiguration(directory, {
       SOCIAL_MONITOR_BILIBILI_LIVE_MONITOR_ENABLED: "true"
     })).rejects.toMatchObject({ code: "BILIBILI_LIVE_CONFIG_INVALID" })
+  })
+  it("maps all original policy environment aliases over file values without changing bytes", async () => {
+    const path = await setup()
+    await mkdir(resolve(directory, "config"))
+    const contents = JSON.stringify({ defaultIntervalSeconds: 300, minIntervalSeconds: 1,
+      maxIntervalSeconds: 2592000, shortIntervalWarningSeconds: 120, failureBackoffSeconds: 900,
+      requestMinIntervalMs: 1500, maxAttempts: 3, retryBackoffMs: 1500 })
+    await writeFile(path, contents, "utf8")
+    expect(await loadLiveCollectionConfiguration(directory, {
+      SOCIAL_MONITOR_BILIBILI_LIVE_INTERVAL_SECONDS: " +420 ",
+      SOCIAL_MONITOR_BILIBILI_LIVE_MIN_INTERVAL_SECONDS: "120",
+      SOCIAL_MONITOR_BILIBILI_LIVE_MAX_INTERVAL_SECONDS: "600",
+      SOCIAL_MONITOR_BILIBILI_LIVE_SHORT_INTERVAL_WARNING_SECONDS: "450",
+      SOCIAL_MONITOR_BILIBILI_LIVE_FAILURE_BACKOFF_SECONDS: "75",
+      SOCIAL_MONITOR_BILIBILI_LIVE_REQUEST_MIN_INTERVAL_MS: "-1",
+      SOCIAL_MONITOR_BILIBILI_LIVE_MAX_ATTEMPTS: "10",
+      SOCIAL_MONITOR_BILIBILI_LIVE_RETRY_BACKOFF_MS: "250"
+    })).toMatchObject({ defaultIntervalSeconds: 420, minIntervalSeconds: 120, maxIntervalSeconds: 600,
+      shortIntervalWarningSeconds: 450, failureBackoffSeconds: 75, requestMinIntervalMs: -1,
+      maxAttempts: 10, retryBackoffMs: 250 })
+    expect(await readFile(path, "utf8")).toBe(contents)
   })
 })

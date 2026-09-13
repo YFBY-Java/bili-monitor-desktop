@@ -21,6 +21,7 @@ import type {
   BilibiliQrLoginStart,
   BilibiliQrLoginStatus,
   AddBilibiliLiveRoomInput,
+  BilibiliLiveHttpConfiguration,
   BilibiliLiveCollectResult,
   BilibiliLiveRoom,
   BilibiliLiveRoomList,
@@ -193,13 +194,24 @@ export class LocalCoreRuntime {
       now: normalized.now,
       idFactory: normalized.idFactory
     })
-    const liveSource = options.liveSource ?? LocalCoreRuntime.defaultLiveSource(normalized)
+    const liveSource = options.liveSource ?? LocalCoreRuntime.defaultLiveSource(normalized, {
+      connectTimeoutMs: liveConfiguration.connectTimeoutMs, readTimeoutMs: liveConfiguration.readTimeoutMs,
+      userAgent: liveConfiguration.userAgent, referer: liveConfiguration.referer
+    })
     const live = new BilibiliLiveMonitorService({
       database,
       source: liveSource,
       enabled: liveConfiguration.enabled,
       dueBatchSize: liveConfiguration.dueBatchSize,
       statusBatchSize: liveConfiguration.statusBatchSize,
+      defaultIntervalSeconds: liveConfiguration.defaultIntervalSeconds,
+      minIntervalSeconds: liveConfiguration.minIntervalSeconds,
+      maxIntervalSeconds: liveConfiguration.maxIntervalSeconds,
+      shortIntervalWarningSeconds: liveConfiguration.shortIntervalWarningSeconds,
+      failureBackoffSeconds: liveConfiguration.failureBackoffSeconds,
+      requestMinIntervalMs: liveConfiguration.requestMinIntervalMs,
+      maxAttempts: liveConfiguration.maxAttempts,
+      retryBackoffMs: liveConfiguration.retryBackoffMs,
       now: normalized.now,
       idFactory: normalized.idFactory,
       sessionObserver: liveSessions
@@ -755,7 +767,8 @@ export class LocalCoreRuntime {
   }
 
   private static defaultLiveSource(
-    options: ResolvedLocalCoreRuntimeOptions
+    options: ResolvedLocalCoreRuntimeOptions,
+    httpConfiguration: BilibiliLiveHttpConfiguration
   ): BilibiliLiveSource {
     const repositoryRoot = process.env.BMD_REPOSITORY_ROOT
     const pythonExecutable = process.env.BMD_PYTHON_EXE
@@ -770,7 +783,7 @@ export class LocalCoreRuntime {
       dataDirectory: options.dataDirectory,
       role: "crawler",
       standaloneExecutable: process.env.BMD_PYTHON_STANDALONE === "1"
-    }))
+    }), httpConfiguration)
   }
 
   private static defaultLiveRankSource(

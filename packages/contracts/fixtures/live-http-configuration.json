@@ -1,0 +1,17 @@
+[
+  { "name": "defaults", "input": {}, "valid": true },
+  { "name": "custom", "input": { "connectTimeoutMs": 1200, "readTimeoutMs": 2400, "userAgent": "Local monitor/2", "referer": "https://live.bilibili.com/2" }, "valid": true },
+  { "name": "zero is unlimited", "input": { "connectTimeoutMs": 0, "readTimeoutMs": 0 }, "valid": true },
+  { "name": "int maximum", "input": { "connectTimeoutMs": 2147483647, "readTimeoutMs": 2147483647 }, "valid": true },
+  { "name": "empty headers", "input": { "userAgent": "", "referer": "" }, "valid": true },
+  { "name": "negative connect", "input": { "connectTimeoutMs": -1 }, "valid": false },
+  { "name": "negative read", "input": { "readTimeoutMs": -1 }, "valid": false },
+  { "name": "fraction", "input": { "readTimeoutMs": 1.5 }, "valid": false },
+  { "name": "boolean", "input": { "connectTimeoutMs": true }, "valid": false },
+  { "name": "overflow", "input": { "readTimeoutMs": 2147483648 }, "valid": false },
+  { "name": "null", "input": { "readTimeoutMs": null }, "valid": false },
+  { "name": "header injection", "input": { "userAgent": "local\r\nCookie: forbidden" }, "valid": false },
+  { "name": "non ASCII header", "input": { "referer": "https://example.test/中文" }, "valid": false },
+  { "name": "not arbitrary headers", "input": { "cookie": "not-forwarded" }, "valid": false },
+  { "name": "no trailing newline", "input": { "userAgent": "local\n" }, "valid": false }
+]

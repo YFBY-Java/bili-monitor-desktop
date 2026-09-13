@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { BilibiliLiveHttpConfigurationSchema } from "./bilibili-live-http"
 
 import { ObjectRefSchema } from "./bilibili-follower"
 
@@ -169,7 +170,8 @@ export const QueryBilibiliLiveEventsInputSchema = z.object({
 const BilibiliLiveWorkerRequestBaseSchema = z.object({
   taskId: z.string().min(1),
   attempt: z.number().int().positive(),
-  leaseId: z.string().min(1)
+  leaseId: z.string().min(1),
+  httpConfiguration: BilibiliLiveHttpConfigurationSchema.optional()
 })
 export const BilibiliLiveRoomRequestSchema = BilibiliLiveWorkerRequestBaseSchema.extend({
   roomId: BilibiliLiveNumericIdSchema

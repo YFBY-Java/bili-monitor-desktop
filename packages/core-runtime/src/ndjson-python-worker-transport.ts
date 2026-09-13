@@ -4,6 +4,8 @@ import { parse, resolve } from "node:path"
 
 import {
   RuntimeEnvelopeSchema,
+  RequestKeepAliveSchema,
+  LIVE_HTTP_WORKER_REQUESTS,
   createRuntimeEnvelope,
   type RuntimeEnvelope
 } from "@bmd/contracts"
@@ -35,6 +37,7 @@ interface PendingWorkerRequest {
   resolve: (payload: unknown) => void
   reject: (error: Error) => void
   timeout: NodeJS.Timeout
+  envelope: RuntimeEnvelope
 }
 
 export class BilibiliWorkerError extends Error {
@@ -74,15 +77,20 @@ export class NdjsonPythonWorkerTransport implements WorkerRequestTransport {
       timestamp: new Date().toISOString(),
       correlationId: id,
       traceId: randomUUID(),
+      ...(LIVE_HTTP_WORKER_REQUESTS.some(request => request === type) ? { keepAlive: true } : {}),
       payload
     })
 
     return new Promise((resolveRequest, reject) => {
       const timeout = setTimeout(() => {
-        this.pending.delete(id)
-        reject(new Error(`Python worker request ${type} timed out after ${this.requestTimeoutMs} ms.`))
+        const error = new BilibiliWorkerError("WORKER_UNRESPONSIVE",
+          `Python worker request ${type} received no response for ${this.requestTimeoutMs} ms.`, false)
+        this.child = undefined
+        this.rejectAll(error)
+        child.stdin.end()
+        child.kill()
       }, this.requestTimeoutMs)
-      this.pending.set(id, { resolve: resolveRequest, reject, timeout })
+      this.pending.set(id, { resolve: resolveRequest, reject, timeout, envelope })
       child.stdin.write(`${JSON.stringify(envelope)}\n`, "utf8", (error) => {
         if (!error) return
         clearTimeout(timeout)
@@ -137,12 +145,14 @@ export class NdjsonPythonWorkerTransport implements WorkerRequestTransport {
     this.child = child
     child.stdout.setEncoding("utf8")
     child.stderr.setEncoding("utf8")
-    child.stdout.on("data", (chunk: string) => this.handleStdout(chunk))
+    child.stdout.on("data", (chunk: string) => { if (this.child === child) this.handleStdout(chunk) })
     child.stderr.on("data", (chunk: string) => {
+      if (this.child !== child) return
       this.stderrTail = `${this.stderrTail}${chunk}`.slice(-4_096)
     })
-    child.on("error", (error) => this.rejectAll(error))
+    child.on("error", (error) => { if (this.child === child) this.rejectAll(error) })
     child.on("exit", (code) => {
+      if (this.child !== child) return
       if (this.child === child) this.child = undefined
       if (this.stopping) return
       const details = this.stderrTail.trim()
@@ -183,6 +193,15 @@ export class NdjsonPythonWorkerTransport implements WorkerRequestTransport {
     const envelope = parsed.data as RuntimeEnvelope
     const request = this.pending.get(envelope.id)
     if (!request) return
+    if (envelope.type === "worker.request-alive") {
+      const payload = RequestKeepAliveSchema.safeParse(envelope.payload)
+      if (request.envelope.keepAlive && payload.success && payload.data.requestType === request.envelope.type
+        && envelope.traceId === request.envelope.traceId && envelope.correlationId === request.envelope.correlationId) {
+        // Python handles requests serially: a live active request also accounts for queued live work.
+        for (const queued of this.pending.values()) if (queued.envelope.keepAlive) queued.timeout.refresh()
+      }
+      return
+    }
     clearTimeout(request.timeout)
     this.pending.delete(envelope.id)
     if (envelope.type === "worker.error") {

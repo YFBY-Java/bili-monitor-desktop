@@ -69,6 +69,11 @@ export interface BilibiliLiveMonitorServiceOptions {
   jitter?: () => number
   dueBatchSize?: number
   statusBatchSize?: number
+  defaultIntervalSeconds?: number
+  minIntervalSeconds?: number
+  maxIntervalSeconds?: number
+  shortIntervalWarningSeconds?: number
+  failureBackoffSeconds?: number
   sessionObserver?: {
     reconcileRest: (
       room: StoredBilibiliLiveRoomMonitor,
@@ -115,7 +120,7 @@ export class BilibiliLiveMonitorService {
   async addRoom(input: AddBilibiliLiveRoomInput): Promise<BilibiliLiveRoom> {
     this.ensureRunning()
     const parsed = AddBilibiliLiveRoomInputSchema.parse(input)
-    const intervalSeconds = parsed.intervalSeconds ?? 300
+    const intervalSeconds = this.resolveInterval(parsed.intervalSeconds)
     const taskId = this.options.idFactory()
     let snapshot: ResolvedLiveSnapshot
     try {
@@ -174,6 +179,7 @@ export class BilibiliLiveMonitorService {
     this.ensureRunning()
     const input = UpdateBilibiliLiveRoomSettingsInputSchema.parse({ roomMonitorId, intervalSeconds })
     this.requireStoredRoom(input.roomMonitorId)
+    this.resolveInterval(input.intervalSeconds)
     const timestamp = this.options.now().toISOString()
     const nextCollectAt = new Date(this.options.now().getTime() + input.intervalSeconds * 1_000)
       .toISOString()
@@ -510,15 +516,23 @@ export class BilibiliLiveMonitorService {
     if (this.options.sleep) {
       await this.options.sleep(milliseconds)
     } else {
-      await new Promise<void>(resolveWait => {
-        const finish = () => {
-          clearTimeout(timer)
-          this.lifetime.signal.removeEventListener("abort", finish)
-          resolveWait()
-        }
-        const timer = setTimeout(finish, milliseconds)
-        this.lifetime.signal.addEventListener("abort", finish, { once: true })
-      })
+      // Original int backoff multiplied by exponential retry/jitter can exceed a Node timer.
+      // Node would otherwise reduce an overflowing timeout to 1ms.
+      let remaining = milliseconds
+      while (remaining > 0) {
+        const delay = Math.min(remaining, 2_147_483_647)
+        await new Promise<void>(resolveWait => {
+          const finish = () => {
+            clearTimeout(timer)
+            this.lifetime.signal.removeEventListener("abort", finish)
+            resolveWait()
+          }
+          const timer = setTimeout(finish, delay)
+          this.lifetime.signal.addEventListener("abort", finish, { once: true })
+        })
+        this.ensureRunning()
+        remaining -= delay
+      }
     }
     this.ensureRunning()
   }
@@ -667,11 +681,26 @@ export class BilibiliLiveMonitorService {
     return applied
   }
 
+  private resolveInterval(requested?: number): number {
+    const interval = requested ?? this.options.defaultIntervalSeconds ?? 300
+    const minimum = Math.max(1, this.options.minIntervalSeconds ?? 1)
+    const maximum = Math.max(minimum, this.options.maxIntervalSeconds ?? 2_592_000)
+    if (interval < minimum) throw new CoreApplicationError("BILIBILI_LIVE_INTERVAL_INVALID",
+      `采集间隔不能低于 ${minimum} 秒，避免过于频繁请求 B站直播接口。`)
+    if (interval > maximum) throw new CoreApplicationError("BILIBILI_LIVE_INTERVAL_INVALID",
+      `采集间隔不能超过 ${maximum} 秒。`)
+    if (interval < Math.max(1, this.options.shortIntervalWarningSeconds ?? 120)) {
+      console.warn(JSON.stringify({ event: "bilibili.live.short-interval", timestamp: this.options.now().toISOString(),
+        intervalSeconds: interval, requestMinIntervalMs: this.options.requestMinIntervalMs ?? 1500 }))
+    }
+    return interval
+  }
+
   private markFailure(room: StoredBilibiliLiveRoomMonitor, error: unknown): void {
     this.ensureRunning()
     const details = this.sourceError(error)
     const errorAt = this.options.now().toISOString()
-    const backoffSeconds = Math.max(60, Math.min(room.intervalSeconds, 900))
+    const backoffSeconds = Math.max(60, Math.min(room.intervalSeconds, this.options.failureBackoffSeconds ?? 900))
     const nextCollectAt = new Date(this.options.now().getTime() + backoffSeconds * 1_000)
       .toISOString()
     this.options.database.markBilibiliLiveRoomFailure({

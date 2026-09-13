@@ -38,6 +38,7 @@ from .bilibili_live_contract import validate_live_result
 from .bilibili_rank import BilibiliLiveRankRequest, fetch_live_rank
 from .douyin_oauth import DouyinOAuthError, request_oauth
 from .protocol import RuntimeEnvelope
+from .request_lifetime import handle_with_liveness
 
 WorkerRole = Literal["agent", "auth", "crawler", "data"]
 FollowerFetcher = Callable[[str, str, Path], Awaitable[dict[str, Any]]]
@@ -240,7 +241,9 @@ class WorkerRuntime:
             data_directory = self.data_directory or _data_directory_from_environment()
             try:
                 result = await self.live_fetcher(
-                    endpoint, live_payload.model_dump(by_alias=True), data_directory
+                    endpoint,
+                    live_payload.model_dump(by_alias=True, exclude_none=True),
+                    data_directory,
                 )
                 result = validate_live_result(endpoint, result)
             except BilibiliCrawlerError as error:
@@ -362,7 +365,7 @@ async def run_stdio(runtime: WorkerRuntime, stdin: TextIO, stdout: TextIO) -> No
     while line := await asyncio.to_thread(stdin.readline):
         try:
             request = RuntimeEnvelope.model_validate_json(line)
-            response = await runtime.handle(request)
+            response = await handle_with_liveness(request, runtime.handle(request), stdout)
             # Keep the stdio wire format ASCII-only. Windows virtual-environment launchers can
             # still inherit GBK for stdout even when the parent requested UTF-8; JSON escapes
             # make the protocol byte-stable and JSON.parse restores the original Unicode text.

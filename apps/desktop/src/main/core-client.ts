@@ -101,6 +101,8 @@ import {
   DouyinValidationResultSchema,
   RevokeDouyinCredentialResultSchema,
   createRuntimeEnvelope,
+  LIVE_HTTP_CORE_REQUESTS,
+  RequestKeepAliveSchema,
   type BootstrapResponse,
   type RuntimeError,
   type RuntimeEnvelope
@@ -125,6 +127,7 @@ interface PendingRequest {
   resolve: (envelope: RuntimeEnvelope) => void
   reject: (error: Error) => void
   timeout: NodeJS.Timeout
+  envelope: RuntimeEnvelope
 }
 
 class CoreRequestError extends Error {
@@ -732,6 +735,7 @@ export class LocalCoreController {
       timestamp: new Date().toISOString(),
       correlationId: id,
       traceId: randomUUID(),
+      ...(LIVE_HTTP_CORE_REQUESTS.some(request => request === type) ? { keepAlive: true } : {}),
       payload
     })
 
@@ -740,8 +744,9 @@ export class LocalCoreController {
       const timeout = setTimeout(() => {
         this.pending.delete(id)
         reject(new Error(`Local Core request ${type} timed out after ${requestTimeoutMs} ms.`))
+        if (envelope.keepAlive) void this.forceStop()
       }, requestTimeoutMs)
-      this.pending.set(id, { resolve, reject, timeout })
+      this.pending.set(id, { resolve, reject, timeout, envelope })
       child.postMessage(envelope)
     })
   }
@@ -752,6 +757,14 @@ export class LocalCoreController {
     const envelope = parsed.data as RuntimeEnvelope
     const pending = this.pending.get(envelope.id)
     if (!pending) return
+    if (envelope.type === "core.request-alive") {
+      const payload = RequestKeepAliveSchema.safeParse(envelope.payload)
+      if (pending.envelope.keepAlive && payload.success && payload.data.requestType === pending.envelope.type
+        && envelope.traceId === pending.envelope.traceId && envelope.correlationId === pending.envelope.correlationId) {
+        pending.timeout.refresh()
+      }
+      return
+    }
 
     clearTimeout(pending.timeout)
     this.pending.delete(envelope.id)

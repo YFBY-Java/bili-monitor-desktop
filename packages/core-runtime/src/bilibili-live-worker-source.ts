@@ -10,13 +10,15 @@ import {
   type BilibiliLiveFetchedStatusBatch,
   type BilibiliLiveRoomRequest,
   type BilibiliLiveStatusByUidsRequest,
-  type BilibiliLiveUidRequest
+  type BilibiliLiveUidRequest,
+  type BilibiliLiveHttpConfiguration
 } from "@bmd/contracts"
 
 import type { WorkerRequestTransport } from "./bilibili-follower-worker-source"
 
 export class BilibiliLiveWorkerSource {
-  constructor(private readonly transport: WorkerRequestTransport) {}
+  constructor(private readonly transport: WorkerRequestTransport,
+    private readonly httpConfiguration?: BilibiliLiveHttpConfiguration) {}
 
   fetchRoomInit(request: BilibiliLiveRoomRequest): Promise<BilibiliLiveFetchedSnapshot> {
     return this.fetchRoom("bilibili.live.fetch-room-init", request)
@@ -29,7 +31,7 @@ export class BilibiliLiveWorkerSource {
   async fetchRoomInfoOld(
     request: BilibiliLiveUidRequest
   ): Promise<BilibiliLiveFetchedOptionalSnapshot> {
-    const payload = BilibiliLiveUidRequestSchema.parse(request)
+    const payload = BilibiliLiveUidRequestSchema.parse(this.configuredRequest(request))
     return BilibiliLiveFetchedOptionalSnapshotSchema.parse(
       await this.transport.request("bilibili.live.fetch-room-info-old", payload)
     )
@@ -38,7 +40,7 @@ export class BilibiliLiveWorkerSource {
   async fetchStatusByUids(
     request: BilibiliLiveStatusByUidsRequest
   ): Promise<BilibiliLiveFetchedStatusBatch> {
-    const payload = BilibiliLiveStatusByUidsRequestSchema.parse(request)
+    const payload = BilibiliLiveStatusByUidsRequestSchema.parse(this.configuredRequest(request))
     return BilibiliLiveFetchedStatusBatchSchema.parse(
       await this.transport.request("bilibili.live.fetch-status-by-uids", payload)
     )
@@ -52,9 +54,13 @@ export class BilibiliLiveWorkerSource {
     type: "bilibili.live.fetch-room-init" | "bilibili.live.fetch-room-info",
     request: BilibiliLiveRoomRequest
   ): Promise<BilibiliLiveFetchedSnapshot> {
-    const payload = BilibiliLiveRoomRequestSchema.parse(request)
+    const payload = BilibiliLiveRoomRequestSchema.parse(this.configuredRequest(request))
     return BilibiliLiveFetchedSnapshotSchema.parse(
       await this.transport.request(type, payload)
     )
+  }
+
+  private configuredRequest<T>(request: T) {
+    return this.httpConfiguration ? { ...request, httpConfiguration: this.httpConfiguration } : request
   }
 }

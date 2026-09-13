@@ -1,6 +1,12 @@
 import { z } from "zod"
 
 export const RUNTIME_PROTOCOL_VERSION = 1 as const
+export const REQUEST_KEEP_ALIVE_INTERVAL_MS = 5_000
+export const LIVE_HTTP_WORKER_REQUESTS = ["bilibili.live.fetch-room-init", "bilibili.live.fetch-room-info",
+  "bilibili.live.fetch-room-info-old", "bilibili.live.fetch-status-by-uids"] as const
+export const LIVE_HTTP_CORE_REQUESTS = ["bilibili-live.rooms.add", "bilibili-live.rooms.refresh",
+  "bilibili-subjects.create", "bilibili-subjects.bind"] as const
+export const RequestKeepAliveSchema = z.object({ requestType: z.string().min(1) }).strict()
 
 export const CoreStatusSchema = z.object({
   state: z.enum(["starting", "ready", "degraded", "stopping", "offline"]),
@@ -34,6 +40,7 @@ export const RuntimeEnvelopeSchema = z.object({
   correlationId: z.string().min(1),
   causationId: z.string().min(1).optional(),
   traceId: z.string().min(1),
+  keepAlive: z.boolean().optional(),
   payload: z.unknown()
 })
 

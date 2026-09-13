@@ -1,0 +1,8 @@
+[
+  { "name": "legacy", "input": {}, "valid": true },
+  { "name": "opt in", "input": { "keepAlive": true }, "valid": true },
+  { "name": "opt out", "input": { "keepAlive": false }, "valid": true },
+  { "name": "no string coercion", "input": { "keepAlive": "true" }, "valid": false },
+  { "name": "no numeric coercion", "input": { "keepAlive": 1 }, "valid": false },
+  { "name": "not null", "input": { "keepAlive": null }, "valid": false }
+]
