@@ -25,6 +25,7 @@ import type {
   StoredBilibiliLiveSession,
   StoredBilibiliLiveSessionEvent
 } from "@bmd/storage"
+import { compareLiveSnapshotTime } from "@bmd/storage"
 
 import { CoreApplicationError } from "./account-subject-service"
 import type { NormalizedBilibiliDanmakuEvent } from "./bilibili-live-danmaku-service"
@@ -54,7 +55,7 @@ export class BilibiliLiveSessionService {
     if (
       active?.state === "END_PENDING"
       && active.endSignalAt
-      && observation.fetchedAt < active.endSignalAt
+      && compareLiveSnapshotTime(observation.fetchedAt, active.endSignalAt) < 0
     ) return active
     if (observation.liveStatus === null) return active
     if (observation.liveStatus !== 1) {

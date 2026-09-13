@@ -1,6 +1,7 @@
 import {
   AddBilibiliLiveRoomInputSchema,
   BilibiliLiveCollectResultSchema,
+  BilibiliLiveEndpointSchema,
   BilibiliLiveFetchedOptionalSnapshotSchema,
   BilibiliLiveFetchedSnapshotSchema,
   BilibiliLiveFetchedStatusBatchSchema,
@@ -33,6 +34,8 @@ import {
 } from "@bmd/contracts"
 import {
   ControlDatabase,
+  compareLiveSnapshotTime,
+  hasLiveSnapshotText,
   type NewStoredOutboxMessage,
   type StoredBilibiliLiveRoomMonitor,
   type StoredBilibiliLiveRoomSnapshot
@@ -90,6 +93,17 @@ interface SourceErrorDetails {
   retryable: boolean
 }
 
+// Only failures from the platform/source boundary use the collection-failure workflow.
+// SQLite or session transaction errors must not be mislabeled as platform errors.
+class LiveFetchFailure extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly retryable: boolean,
+    readonly endpoint: BilibiliLiveFetchedSnapshot["sourceEndpoint"]
+  ) { super(message) }
+}
+
 export class BilibiliLiveMonitorService {
   private readonly nextRequestAt = new Map<string, number>()
 
@@ -105,8 +119,8 @@ export class BilibiliLiveMonitorService {
         ? await this.fetchByRoomIdWithDetails(parsed.roomId, taskId)
         : await this.fetchByUidWithDetails(parsed.uid as string, taskId)
     } catch (error) {
-      if (error instanceof CoreApplicationError) throw error
-      throw this.applicationError(error)
+      if (error instanceof LiveFetchFailure) throw this.applicationError(error)
+      throw error
     }
     const existing = this.options.database.findBilibiliLiveRoomByUid(snapshot.uid)
       ?? this.options.database.findBilibiliLiveRoomByRoomId(snapshot.roomId)
@@ -169,7 +183,7 @@ export class BilibiliLiveMonitorService {
     const room = this.requireStoredRoom(roomMonitorId)
     const taskId = this.options.idFactory()
     try {
-      const snapshot = await this.fetchByUidWithDetails(room.uid, taskId)
+      const snapshot = this.withExistingProfile(await this.fetchByUidWithDetails(room.uid, taskId), room)
       const applied = this.persistSnapshot(
         room,
         room.monitorId,
@@ -180,6 +194,7 @@ export class BilibiliLiveMonitorService {
       )
       return this.collectResult(room.monitorId, snapshot, true, applied ? "ok" : "ignored-stale")
     } catch (error) {
+      if (!(error instanceof LiveFetchFailure)) throw error
       this.markFailure(room, error)
       throw this.applicationError(error)
     }
@@ -195,41 +210,30 @@ export class BilibiliLiveMonitorService {
     for (let start = 0; start < rooms.length; start += batchSize) {
       const batchRooms = rooms.slice(start, start + batchSize)
       const taskId = this.options.idFactory()
+      let batch: BilibiliLiveFetchedStatusBatch
       try {
-        const batch = await this.fetchStatusBatch(batchRooms.map((room) => room.uid), taskId)
-        for (const room of batchRooms) {
-          const found = batch.snapshots.find((snapshot) => snapshot.uid === room.uid)
-          if (!found) {
-            const error = Object.assign(
-              new Error(`Bilibili live status response missing uid=${room.uid}`),
-              { code: "BILIBILI_PARSE_ERROR", retryable: false }
-            )
-            this.markFailure(room, error)
-            results.push(this.failedCollectResult(room, error))
-            continue
-          }
-          const snapshot = this.enrichStatusSnapshot(found, batch)
-          const merged = this.withExistingProfile(snapshot, room)
-          const applied = this.persistSnapshot(
-            room,
-            room.monitorId,
-            merged,
-            room.intervalSeconds,
-            taskId,
-            "bilibili.live.snapshot-collected"
-          )
-          results.push(this.collectResult(
-            room.monitorId,
-            merged,
-            true,
-            applied ? "ok" : "ignored-stale"
-          ))
-        }
+        batch = await this.fetchStatusBatch(batchRooms.map((room) => room.uid), taskId)
       } catch (error) {
+        if (!(error instanceof LiveFetchFailure)) throw error
         for (const room of batchRooms) {
           this.markFailure(room, error)
           results.push(this.failedCollectResult(room, error))
         }
+        continue
+      }
+      for (const room of batchRooms) {
+        const found = batch.snapshots.find((snapshot) => snapshot.uid === room.uid)
+        if (!found) {
+          const error = new LiveFetchFailure("BILIBILI_UNKNOWN_ERROR",
+            `Bilibili live status response missing uid=${room.uid}`, true, STATUS_ENDPOINT)
+          this.markFailure(room, error)
+          results.push(this.failedCollectResult(room, error))
+          continue
+        }
+        const snapshot = this.withExistingProfile(this.enrichStatusSnapshot(found, batch), room)
+        const applied = this.persistSnapshot(room, room.monitorId, snapshot, room.intervalSeconds,
+          taskId, "bilibili.live.snapshot-collected")
+        results.push(this.collectResult(room.monitorId, snapshot, true, applied ? "ok" : "ignored-stale"))
       }
     }
     return results
@@ -348,9 +352,11 @@ export class BilibiliLiveMonitorService {
 
     const old = await this.fetchRoomInfoOld(uid, taskId)
     if (!old.snapshot) {
-      throw new CoreApplicationError(
-        "BILIBILI_LIVE_ROOM_NOT_FOUND",
-        `该 UID 暂无公开直播间或接口未返回房间信息：${uid}`
+      throw new LiveFetchFailure(
+        "BILIBILI_UNKNOWN_ERROR",
+        `该 UID 暂无公开直播间或接口未返回房间信息：${uid}`,
+        false,
+        OLD_INFO_ENDPOINT
       )
     }
     const oldSnapshot: ResolvedLiveSnapshot = {
@@ -405,48 +411,35 @@ export class BilibiliLiveMonitorService {
   }
 
   private async fetchWithRetry<T extends FetchMetadata>(
-    endpoint: string,
+    endpoint: BilibiliLiveFetchedSnapshot["sourceEndpoint"],
     identifier: string,
     taskId: string,
     operation: (request: { taskId: string; attempt: number; leaseId: string }) => Promise<T>,
     validate: (value: unknown) => T
   ): Promise<T> {
     const maxAttempts = Math.max(1, this.options.maxAttempts ?? 3)
-    let lastError: unknown
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       await this.acquireRateLimit(endpoint)
       const startedAt = performance.now()
+      let result: T
       try {
-        const result = validate(await operation({
+        result = validate(await operation({
           taskId,
           attempt,
           leaseId: this.options.idFactory()
         }))
-        this.options.database.insertBilibiliApiCall({
-          callId: this.options.idFactory(),
-          taskId,
-          attempt,
-          endpointKey: endpoint,
-          mid: identifier,
-          statusCode: result.statusCode,
-          durationMs: result.durationMs,
-          errorType: null,
-          retryable: false,
-          evidenceObjectId: result.evidenceObject.objectId,
-          createdAt: result.fetchedAt
-        }, {
-          ...result.evidenceObject,
-          createdAt: result.fetchedAt
-        })
-        return result
       } catch (error) {
-        lastError = error
         const details = this.sourceError(error)
+        const sourceEndpoint = BilibiliLiveEndpointSchema.safeParse(
+          typeof error === "object" && error !== null && "endpoint" in error ? error.endpoint : undefined
+        )
+        const failure = new LiveFetchFailure(details.code, details.message, details.retryable,
+          sourceEndpoint.success ? sourceEndpoint.data : endpoint)
         this.options.database.insertBilibiliApiCall({
           callId: this.options.idFactory(),
           taskId,
           attempt,
-          endpointKey: endpoint,
+          endpointKey: failure.endpoint,
           mid: identifier,
           statusCode: this.errorNumber(error, "statusCode"),
           durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
@@ -455,14 +448,22 @@ export class BilibiliLiveMonitorService {
           evidenceObjectId: null,
           createdAt: this.options.now().toISOString()
         })
-        if (!details.retryable || attempt >= maxAttempts) break
-        const backoff = Math.max(0, this.options.retryBackoffMs ?? 1_500)
+        const canRetry = ["BILIBILI_RATE_LIMITED", "BILIBILI_NETWORK_ERROR", "BILIBILI_SERVER_ERROR"].includes(details.code)
+        if (!canRetry || attempt >= maxAttempts || attempt > 3) throw failure
+        const backoff = Math.max(100, this.options.retryBackoffMs ?? 1_500)
           * (2 ** Math.min(attempt - 1, 4))
         const jitter = Math.floor((this.options.jitter?.() ?? Math.random()) * 300)
         await (this.options.sleep ?? delay)(backoff + jitter)
+        continue
       }
+      this.options.database.insertBilibiliApiCall({
+        callId: this.options.idFactory(), taskId, attempt, endpointKey: endpoint, mid: identifier,
+        statusCode: result.statusCode, durationMs: result.durationMs, errorType: null, retryable: false,
+        evidenceObjectId: result.evidenceObject.objectId, createdAt: result.fetchedAt
+      }, { ...result.evidenceObject, createdAt: result.fetchedAt })
+      return result
     }
-    throw lastError instanceof Error ? lastError : new Error(String(lastError))
+    throw new LiveFetchFailure("BILIBILI_UNKNOWN_ERROR", "Unknown Bilibili live fetch failure.", false, endpoint)
   }
 
   private async acquireRateLimit(endpoint: string): Promise<void> {
@@ -503,8 +504,6 @@ export class BilibiliLiveMonitorService {
       ...(room.parentAreaId ? { parentAreaId: room.parentAreaId } : {}),
       ...(room.parentAreaName ? { parentAreaName: room.parentAreaName } : {}),
       liveStatus: room.liveStatus as 0 | 1 | 2,
-      ...(room.liveTime ? { liveTime: room.liveTime } : {}),
-      ...(room.onlineCount !== null ? { onlineCount: room.onlineCount } : {}),
       ...(room.attentionCount !== null ? { attentionCount: room.attentionCount } : {}),
       fetchedAt: snapshot.fetchedAt,
       sourceEndpoint: snapshot.sourceEndpoint,
@@ -525,23 +524,22 @@ export class BilibiliLiveMonitorService {
       const initializing = topic === "bilibili.live.monitor-added"
       const current = initializing ? previous : this.requireStoredRoom(monitorId)
       const pending = this.options.database.findActiveBilibiliLiveSession(monitorId)
-      const snapshotTime = Date.parse(snapshot.fetchedAt)
       const stale = [current?.lastSnapshotAt, current?.lastSuccessAt]
-        .some((value) => value && Date.parse(value) > snapshotTime)
+        .some((value) => value && compareLiveSnapshotTime(value, snapshot.fetchedAt) > 0)
       const olderThanPending = pending?.state === "END_PENDING" && pending.endSignalAt
-        && Date.parse(pending.endSignalAt) > snapshotTime
+        && compareLiveSnapshotTime(pending.endSignalAt, snapshot.fetchedAt) > 0
       if (stale || olderThanPending) {
         // Explicit re-add still applies settings, but cannot roll back observed platform state.
         if (initializing && current) {
           const timestamp = this.options.now().toISOString()
-          this.updateStatus(current.monitorId, true)
           this.options.database.updateBilibiliLiveRoomInterval(
             current.monitorId, intervalSeconds,
-            new Date(snapshotTime + intervalSeconds * 1000).toISOString(), timestamp,
+            timestamp, timestamp,
             this.outbox(this.options.idFactory(), "bilibili.live.monitor-settings-updated", timestamp, {
               roomMonitorId: current.monitorId, intervalSeconds
             })
           )
+          this.updateStatus(current.monitorId, true)
         }
         return false
       }
@@ -560,19 +558,20 @@ export class BilibiliLiveMonitorService {
     taskId: string,
     topic: string
   ): boolean {
-    const resolved = previous ? this.withExistingProfile(snapshot, previous) : snapshot
+    const resolved = snapshot
     const eventId = this.options.idFactory()
     const nextCollectAt = new Date(
       new Date(resolved.fetchedAt).getTime() + intervalSeconds * 1_000
     ).toISOString()
     const applied = this.options.database.applyBilibiliLiveRoomSnapshot({
       reactivate: topic === "bilibili.live.monitor-added",
+      appliedAt: this.options.now().toISOString(),
       monitor: {
         monitorId,
         uid: resolved.uid,
         roomId: resolved.roomId,
         shortId: resolved.shortId ?? null,
-        uname: resolved.uname ?? previous?.uname ?? `UID ${resolved.uid}`,
+        uname: resolved.uname ?? `UID ${resolved.uid}`,
         faceUrl: resolved.faceUrl ?? null,
         title: resolved.title ?? null,
         coverUrl: resolved.coverUrl ?? null,
@@ -607,16 +606,14 @@ export class BilibiliLiveMonitorService {
         onlineCount: resolved.onlineCount,
         sourceEndpoint: resolved.sourceEndpoint
       })
-    })
-    if (applied && this.options.sessionObserver) {
-      const room = this.options.database.findBilibiliLiveRoomById(previous?.monitorId ?? monitorId)
-      if (room) this.options.sessionObserver.reconcileRest(room, {
+    }, (room) => {
+      this.options.sessionObserver?.reconcileRest(room, {
         liveStatus: resolved.liveStatus,
         liveTime: resolved.liveTime ?? null,
         title: resolved.title ?? null,
         fetchedAt: resolved.fetchedAt
       })
-    }
+    })
     return applied
   }
 
@@ -628,6 +625,7 @@ export class BilibiliLiveMonitorService {
       .toISOString()
     this.options.database.markBilibiliLiveRoomFailure({
       monitorId: room.monitorId,
+      eventContext: room,
       nextCollectAt,
       errorAt,
       errorType: details.code,
@@ -740,7 +738,7 @@ export class BilibiliLiveMonitorService {
 
   private failedCollectResult(
     room: StoredBilibiliLiveRoomMonitor,
-    error: unknown
+    error: LiveFetchFailure
   ): BilibiliLiveCollectResult {
     return BilibiliLiveCollectResultSchema.parse({
       roomMonitorId: room.monitorId,
@@ -750,7 +748,8 @@ export class BilibiliLiveMonitorService {
       liveStatus: room.liveStatus,
       ...(room.onlineCount !== null ? { onlineCount: room.onlineCount } : {}),
       capturedAt: this.options.now().toISOString(),
-      message: this.sourceError(error).message
+      sourceEndpoint: error.endpoint,
+      message: error.message
     })
   }
 
@@ -816,15 +815,15 @@ function mergeSnapshot(primary: ResolvedLiveSnapshot, fallback: ResolvedLiveSnap
     uid: primary.uid ?? fallback.uid,
     roomId: primary.roomId ?? fallback.roomId,
     ...(primary.shortId ?? fallback.shortId ? { shortId: primary.shortId ?? fallback.shortId } : {}),
-    ...(primary.uname ?? fallback.uname ? { uname: primary.uname ?? fallback.uname } : {}),
-    ...(primary.faceUrl ?? fallback.faceUrl ? { faceUrl: primary.faceUrl ?? fallback.faceUrl } : {}),
-    ...(hasText(primary.title) || hasText(fallback.title) ? { title: hasText(primary.title) ? primary.title : fallback.title } : {}),
-    ...(primary.coverUrl ?? fallback.coverUrl ? { coverUrl: primary.coverUrl ?? fallback.coverUrl } : {}),
-    ...(primary.keyframeUrl ?? fallback.keyframeUrl ? { keyframeUrl: primary.keyframeUrl ?? fallback.keyframeUrl } : {}),
+    ...(firstText(primary.uname, fallback.uname) !== undefined ? { uname: firstText(primary.uname, fallback.uname) } : {}),
+    ...(firstText(primary.faceUrl, fallback.faceUrl) !== undefined ? { faceUrl: firstText(primary.faceUrl, fallback.faceUrl) } : {}),
+    ...(firstText(primary.title, fallback.title) !== undefined ? { title: firstText(primary.title, fallback.title) } : {}),
+    ...(firstText(primary.coverUrl, fallback.coverUrl) !== undefined ? { coverUrl: firstText(primary.coverUrl, fallback.coverUrl) } : {}),
+    ...(firstText(primary.keyframeUrl, fallback.keyframeUrl) !== undefined ? { keyframeUrl: firstText(primary.keyframeUrl, fallback.keyframeUrl) } : {}),
     ...(primary.areaId ?? fallback.areaId ? { areaId: primary.areaId ?? fallback.areaId } : {}),
-    ...(primary.areaName ?? fallback.areaName ? { areaName: primary.areaName ?? fallback.areaName } : {}),
+    ...(firstText(primary.areaName, fallback.areaName) !== undefined ? { areaName: firstText(primary.areaName, fallback.areaName) } : {}),
     ...(primary.parentAreaId ?? fallback.parentAreaId ? { parentAreaId: primary.parentAreaId ?? fallback.parentAreaId } : {}),
-    ...(primary.parentAreaName ?? fallback.parentAreaName ? { parentAreaName: primary.parentAreaName ?? fallback.parentAreaName } : {}),
+    ...(firstText(primary.parentAreaName, fallback.parentAreaName) !== undefined ? { parentAreaName: firstText(primary.parentAreaName, fallback.parentAreaName) } : {}),
     liveStatus: primary.liveStatus ?? fallback.liveStatus,
     ...(primary.liveTime ?? fallback.liveTime ? { liveTime: primary.liveTime ?? fallback.liveTime } : {}),
     ...(primary.onlineCount ?? fallback.onlineCount ?? undefined) !== undefined
@@ -862,8 +861,8 @@ function chinaStartOfDay(now: Date): Date {
   return new Date(Date.UTC(china.getUTCFullYear(), china.getUTCMonth(), china.getUTCDate()) - 8 * 60 * 60 * 1_000)
 }
 
-function hasText(value: string | undefined): value is string {
-  return typeof value === "string" && value.trim().length > 0
+function firstText(primary: string | undefined, fallback: string | undefined): string | undefined {
+  return hasLiveSnapshotText(primary) ? primary : fallback
 }
 
 function delay(milliseconds: number): Promise<void> {

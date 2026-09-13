@@ -81,13 +81,15 @@ describe("original live snapshot application semantics", () => {
 
   it("reactivates an explicitly re-added room even if the returned platform snapshot is old", async () => {
     const f = await setup()
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-09-05T02:20:00.000Z"))
     f.setObservation("2026-09-05T02:10:00.000Z", 1)
     const room = await f.service.addRoom({ uid: "22" })
     f.service.updateStatus(room.id, false)
     f.setObservation("2026-09-05T02:05:00.000Z", 0)
     expect(await f.service.addRoom({ uid: "22", intervalSeconds: 120 })).toMatchObject({
       id: room.id, monitorStatus: "ACTIVE", intervalSeconds: 120, liveStatus: 1,
-      lastSnapshotAt: "2026-09-05T02:10:00.000Z", nextCollectAt: "2026-09-05T02:07:00.000Z"
+      lastSnapshotAt: "2026-09-05T02:10:00.000Z", nextCollectAt: "2026-09-05T02:20:00.000Z"
     })
   })
 

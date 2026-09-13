@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { compareLiveSnapshotTime, hasLiveSnapshotText } from "./bilibili-live-snapshot-values"
 
 export interface ControlDatabaseStatus {
   databasePath: string
@@ -508,6 +509,7 @@ export interface UpsertBilibiliLiveRankSnapshotInput {
 
 export interface ApplyBilibiliLiveRoomSnapshotInput {
   reactivate?: boolean
+  appliedAt?: string
   monitor: {
     monitorId: string
     uid: string
@@ -2476,17 +2478,27 @@ export class ControlDatabase {
     })
   }
 
-  applyBilibiliLiveRoomSnapshot(input: ApplyBilibiliLiveRoomSnapshotInput): boolean {
+  applyBilibiliLiveRoomSnapshot(
+    input: ApplyBilibiliLiveRoomSnapshotInput,
+    reconcileBeforeSnapshot?: (room: StoredBilibiliLiveRoomMonitor) => void
+  ): boolean {
     return this.transaction(() => {
       const previous = this.findBilibiliLiveRoomById(input.monitor.monitorId)
         ?? this.findBilibiliLiveRoomByUid(input.monitor.uid)
         ?? this.findBilibiliLiveRoomByRoomId(input.monitor.roomId)
-      const newestPersistedAt = latestIso(previous?.lastSnapshotAt, previous?.lastSuccessAt)
-      if (newestPersistedAt && input.monitor.capturedAt < newestPersistedAt) return false
+      if ([previous?.lastSnapshotAt, previous?.lastSuccessAt]
+        .some(value => value && compareLiveSnapshotTime(input.monitor.capturedAt, value) < 0)) return false
 
       this.insertObjectArtifact(input.artifact)
       const monitor = input.monitor
+      const appliedAt = input.appliedAt ?? new Date().toISOString()
       if (previous) {
+        // Original collection: events -> boundary(current) -> monitor -> history.
+        // Initialization has no success events and reconciles after the monitor is available.
+        if (!input.reactivate) {
+          this.recordBilibiliLiveSuccessEvents(previous, monitor, appliedAt)
+          reconcileBeforeSnapshot?.(previous)
+        }
         this.database.prepare(`
           UPDATE bilibili_live_room_monitor
           SET uid = ?, room_id = ?, short_id = ?, uname = ?, face_url = ?, title = ?,
@@ -2524,10 +2536,9 @@ export class ControlDatabase {
           monitor.capturedAt,
           monitor.sourceEndpoint,
           input.artifact.objectId,
-          monitor.capturedAt,
+          appliedAt,
           previous.monitorId
         )
-        this.recordBilibiliLiveSuccessEvents(previous, monitor)
       } else {
         this.database.prepare(`
           INSERT INTO bilibili_live_room_monitor (
@@ -2561,12 +2572,16 @@ export class ControlDatabase {
           monitor.capturedAt,
           monitor.sourceEndpoint,
           input.artifact.objectId,
-          monitor.capturedAt,
-          monitor.capturedAt
+          appliedAt,
+          appliedAt
         )
       }
 
       const persistedId = previous?.monitorId ?? monitor.monitorId
+      if (input.reactivate || !previous) {
+        const boundaryRoom = previous ?? this.findBilibiliLiveRoomById(persistedId)
+        if (boundaryRoom) reconcileBeforeSnapshot?.(boundaryRoom)
+      }
       this.database.prepare(`
         INSERT INTO bilibili_live_room_snapshot (
           snapshot_id, monitor_id, uid, room_id, live_status, title, area_id,
@@ -2575,8 +2590,6 @@ export class ControlDatabase {
           evidence_object_id, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(monitor_id, captured_bucket) DO UPDATE SET
-          uid = excluded.uid,
-          room_id = excluded.room_id,
           live_status = excluded.live_status,
           title = excluded.title,
           area_id = excluded.area_id,
@@ -2607,7 +2620,7 @@ export class ControlDatabase {
         monitor.capturedAt,
         input.snapshot.capturedBucket,
         input.artifact.objectId,
-        monitor.capturedAt
+        appliedAt
       )
       this.insertOutbox(input.outbox)
       return true
@@ -2747,11 +2760,13 @@ export class ControlDatabase {
     errorType: string
     errorMessage: string
     eventId: string
+    eventContext?: Pick<StoredBilibiliLiveRoomMonitor, "uid" | "roomId" | "liveStatus" | "title" | "onlineCount">
     outbox: NewStoredOutboxMessage
   }): void {
     this.transaction(() => {
       const room = this.findBilibiliLiveRoomById(input.monitorId)
       if (!room) return
+      const eventContext = input.eventContext ?? room
       this.database.prepare(`
         UPDATE bilibili_live_room_monitor
         SET next_collect_at = ?, backoff_until = ?, last_error_at = ?,
@@ -2769,14 +2784,14 @@ export class ControlDatabase {
       this.insertBilibiliLiveEvent({
         eventId: input.eventId,
         monitorId: room.monitorId,
-        uid: room.uid,
-        roomId: room.roomId,
+        uid: eventContext.uid,
+        roomId: eventContext.roomId,
         eventType: "ERROR_OCCURRED",
-        fromLiveStatus: room.liveStatus,
-        toLiveStatus: room.liveStatus,
-        titleBefore: room.title,
-        titleAfter: room.title,
-        onlineCount: room.onlineCount,
+        fromLiveStatus: eventContext.liveStatus,
+        toLiveStatus: eventContext.liveStatus,
+        titleBefore: eventContext.title,
+        titleAfter: eventContext.title,
+        onlineCount: eventContext.onlineCount,
         occurredAt: input.errorAt
       })
       this.insertOutbox(input.outbox)
@@ -3582,10 +3597,12 @@ export class ControlDatabase {
 
   private recordBilibiliLiveSuccessEvents(
     previous: StoredBilibiliLiveRoomMonitor,
-    current: ApplyBilibiliLiveRoomSnapshotInput["monitor"]
+    current: ApplyBilibiliLiveRoomSnapshotInput["monitor"],
+    occurredAt: string
   ): void {
     if (previous.lastErrorType) {
-      this.insertBilibiliLiveEvent(this.liveEvent(previous, current, "ERROR_RECOVERED"))
+      this.insertBilibiliLiveEvent({ ...this.liveEvent(previous, current, "ERROR_RECOVERED", occurredAt),
+        uid: previous.uid, roomId: previous.roomId })
     }
     if (previous.liveStatus !== current.liveStatus) {
       const eventType = current.liveStatus === 1
@@ -3595,17 +3612,18 @@ export class ControlDatabase {
           : current.liveStatus === 2
             ? "ROUND_STARTED"
             : undefined
-      if (eventType) this.insertBilibiliLiveEvent(this.liveEvent(previous, current, eventType))
+      if (eventType) this.insertBilibiliLiveEvent(this.liveEvent(previous, current, eventType, occurredAt))
     }
-    if (hasText(previous.title) && hasText(current.title) && previous.title !== current.title) {
-      this.insertBilibiliLiveEvent(this.liveEvent(previous, current, "TITLE_CHANGED"))
+    if (hasLiveSnapshotText(previous.title) && hasLiveSnapshotText(current.title) && previous.title !== current.title) {
+      this.insertBilibiliLiveEvent(this.liveEvent(previous, current, "TITLE_CHANGED", occurredAt))
     }
   }
 
   private liveEvent(
     previous: StoredBilibiliLiveRoomMonitor,
     current: ApplyBilibiliLiveRoomSnapshotInput["monitor"],
-    eventType: string
+    eventType: string,
+    occurredAt: string
   ): StoredBilibiliLiveStatusEvent {
     return {
       eventId: randomUUID(),
@@ -3618,7 +3636,7 @@ export class ControlDatabase {
       titleBefore: previous.title,
       titleAfter: current.title,
       onlineCount: current.onlineCount,
-      occurredAt: current.capturedAt
+      occurredAt
     }
   }
 
@@ -4173,14 +4191,4 @@ function toStoredRankSnapshot(row: Record<string, unknown>): StoredBilibiliLiveR
     evidenceObjectId: String(row.evidenceObjectId),
     createdAt: String(row.createdAt)
   }
-}
-
-function latestIso(left: string | null | undefined, right: string | null | undefined): string | undefined {
-  if (!left) return right ?? undefined
-  if (!right) return left
-  return left > right ? left : right
-}
-
-function hasText(value: string | null | undefined): value is string {
-  return typeof value === "string" && value.trim().length > 0
 }
