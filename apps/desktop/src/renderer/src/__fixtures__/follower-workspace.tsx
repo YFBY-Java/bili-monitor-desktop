@@ -20,6 +20,15 @@ let users: BilibiliFollowerMonitor[] = Array.from({ length: 5 }, (_, index) => (
 }))
 const fixture = {
   actionError: "", readError: "", calls: [] as string[],
+  holdRefresh: false,
+  releaseRefresh: () => {},
+  holdListAfterRefresh: false,
+  holdList: false,
+  listWaiting: false,
+  releaseList: () => {},
+  patchUser: (index: number, patch: Partial<BilibiliFollowerMonitor>) => {
+    users = users.map((user, position) => position === index ? { ...user, ...patch } : user)
+  },
   listRequests: [] as ListBilibiliFollowerMonitorsInput[],
   expandList: () => {
     const first = users[0]!
@@ -47,6 +56,11 @@ bridge.bilibiliFollowers = {
     fixture.calls.push("list")
     fixture.listRequests.push(input)
     if (fixture.readError) throw new Error(fixture.readError)
+    if (fixture.holdList) {
+      fixture.listWaiting = true
+      await new Promise<void>(resolve => { fixture.releaseList = () => { fixture.holdList = false; resolve() } })
+      fixture.listWaiting = false
+    }
     return { items: input.limit ? users.slice(0, input.limit) : users, total: users.length, snapshotAt: timestamp }
   },
   add: async () => { action("add"); return users[0]! },
@@ -62,6 +76,8 @@ bridge.bilibiliFollowers = {
   },
   refresh: async ({ userId }) => {
     action("refresh")
+    if (fixture.holdRefresh) await new Promise<void>(resolve => { fixture.releaseRefresh = resolve })
+    if (fixture.holdListAfterRefresh) fixture.holdList = true
     return { userId, mid: requireUser(userId).mid, success: true, followerCount: 100, capturedAt: timestamp, message: "ok" }
   },
   remove: async ({ userId }) => { action("delete"); users = users.filter((user) => user.id !== userId); return { deleted: true } },
@@ -76,10 +92,10 @@ const client = new QueryClient({ defaultOptions: { queries: { retry: false, stal
 function Fixture() {
   const [view, setView] = useState<"监控用户" | "趋势对比">("监控用户")
   const [creationOpen, setCreationOpen] = useState(false)
-  return <QueryClientProvider client={client}><main className="theme-light" style={{ padding: 24 }}>
-    <button onClick={() => setView("监控用户")}>查看用户列表</button>
-    <button onClick={() => setView("趋势对比")}>查看趋势</button>
-    <button onClick={() => setCreationOpen(true)}>添加用户</button>
+  return <QueryClientProvider client={client}><main className="theme-light" style={{ padding: 24, height: "100vh", overflow: "auto", color: "var(--text)", background: "var(--bg)" }}>
+    <button className="button button-secondary" onClick={() => setView("监控用户")}>查看用户列表</button>
+    <button className="button button-secondary" onClick={() => setView("趋势对比")}>查看趋势</button>
+    <button className="button button-secondary" onClick={() => setCreationOpen(true)}>添加用户</button>
     <ConnectedBilibiliFollowerWorkspace bridge={bridge} view={view} creationOpen={creationOpen} onCloseCreation={() => setCreationOpen(false)} />
   </main></QueryClientProvider>
 }

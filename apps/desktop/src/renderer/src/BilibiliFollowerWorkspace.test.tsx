@@ -61,7 +61,7 @@ describe("BilibiliFollowerWorkspace", () => {
     expect(image.hidden).toBe(true)
   })
 
-  it("renders the original B/S follower monitor projection and actions", () => {
+  it("renders original summary and compact monitor projection before opening detail actions", () => {
     const html = renderToStaticMarkup(
       <BilibiliFollowerWorkspace
         view="监控用户"
@@ -78,12 +78,12 @@ describe("BilibiliFollowerWorkspace", () => {
     expect(html).toContain("UID 672328094")
     expect(html).toContain("12,840")
     expect(html).toContain("+18")
-    expect(html).toContain("关注 92")
-    expect(html).toContain("立即刷新")
-    expect(html).toContain("暂停监控")
+    expect(html).toContain("粉丝采集汇总")
+    expect(html).toContain("展开测试用户的详情")
+    expect(html).toContain("监控中")
+    expect(html).toContain('role="progressbar"')
     expect(html).toContain("采集间隔")
-    expect(html).toContain("删除监控与全部历史快照")
-    expect(html).toContain("x/web-interface/card")
+    expect(html).not.toContain("删除监控与全部历史快照")
     expect(html).not.toContain("演示数据")
   })
 
