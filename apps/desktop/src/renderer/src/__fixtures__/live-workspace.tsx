@@ -1,5 +1,5 @@
 import type { AddBilibiliLiveRoomInput, BilibiliLiveRoom, BilibiliLiveSessionSummary,
-  BilibiliLiveStatusEvent, ListBilibiliLiveSessionsInput } from "@bmd/contracts"
+  BilibiliLiveStatusEvent, ListBilibiliLiveSessionsInput, BilibiliLiveTrendPoint, QueryBilibiliLiveTrendsInput } from "@bmd/contracts"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useState } from "react"
 import { createRoot } from "react-dom/client"
@@ -32,14 +32,20 @@ const sessions: BilibiliLiveSessionSummary[] = rooms.flatMap((room, roomIndex) =
   unresolvedGiftEventCount: null, unresolvedPaidEventCount: null, paidEventCount: null,
   paidAmountMilliYuan: null, firstEventAt: null, lastEventAt: null
 })))
-const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 0 } } })
+// Match DesktopWorkspace's 15s freshness window; only disable transport retries for deterministic errors.
+const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 15_000 } } })
 let releaseAction = (): void => undefined
+const heldTrends: (() => void)[] = []
 const fixture = {
   actionError: "", listError: "", trendError: "", summaryError: "", holdAction: false,
   addResultIndex: undefined as number | undefined,
   calls: [] as string[], addInputs: [] as AddBilibiliLiveRoomInput[], missingTrendIds: [] as string[],
   sessionRequests: [] as ListBilibiliLiveSessionsInput[], sessionEventIds: [] as string[],
   sessionInsightIds: [] as string[],
+  trendRequests: [] as QueryBilibiliLiveTrendsInput[],
+  trendPoints: {} as Record<string, BilibiliLiveTrendPoint[]>,
+  holdTrends: false,
+  releaseTrend: (index: number) => heldTrends[index]?.(),
   expandRoomList: () => {
     const template = rooms[0]!
     rooms = Array.from({ length: 505 }, (_, index) => ({ ...template,
@@ -126,14 +132,18 @@ bridge.bilibiliLive = {
       liveRooms: rooms.filter((room) => room.liveStatus === 1).length, roundRooms: 0, offlineRooms: rooms.length - 1,
       errorRooms: rooms.filter((room) => room.lastErrorType).length, totalOnlineCount: 1234, todayLiveStarts: 2 }
   },
-  trends: async ({ roomMonitorIds = [] }) => {
+  trends: async (input) => {
+    const { roomMonitorIds = [] } = input
+    fixture.trendRequests.push(input)
     fixture.calls.push("trends")
     if (fixture.trendError) throw new Error(fixture.trendError)
-    return roomMonitorIds.map((id) => {
+    const result = roomMonitorIds.map((id) => {
       if (!rooms.some((room) => room.id === id)) fixture.missingTrendIds.push(id)
       const room = requireRoom(id)
-      return { room, points: room.recentTrend }
+      return { room, points: fixture.trendPoints[id] ?? room.recentTrend }
     })
+    if (fixture.holdTrends) await new Promise<void>(resolve => heldTrends.push(resolve))
+    return result
   },
   events: async () => events,
   sessions: async (input) => {

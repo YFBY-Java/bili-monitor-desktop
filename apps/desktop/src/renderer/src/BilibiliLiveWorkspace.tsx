@@ -34,6 +34,8 @@ import {
 import { useEffect, useMemo, useRef, useState, type FormEvent, type JSX, type ReactNode } from "react"
 import { ConnectedBilibiliLiveDataWidget } from "./ConnectedBilibiliLiveDataWidget"
 import { BilibiliLiveMonitorPanel, useLiveMonitorPanel } from "./BilibiliLiveMonitorPanel"
+import { BilibiliLiveTrendBoard } from "./BilibiliLiveTrendBoard"
+import { useLiveTrendQuery } from "./useLiveTrendQuery"
 
 export type BilibiliLiveView =
   | "直播间"
@@ -270,8 +272,9 @@ export function BilibiliLiveWorkspacePresentation({
                 onToggleTrend={id => onTrendSelectionChange(toggleTrendId(selectedTrendIds, id))} />
       )}
 
-      {view === "趋势对比" && (
-        <LiveTrendView
+      {(view === "趋势对比" || (view === "直播间" && !pending)) && (
+        <BilibiliLiveTrendBoard
+          showSelector={view === "趋势对比"}
           rooms={rooms}
           trends={trends}
           selectedIds={selectedTrendIds}
@@ -381,92 +384,6 @@ function LiveSummary({ summary, rooms }: { summary?: BilibiliLiveSummary; rooms:
 }
 
 
-function LiveTrendView({
-  rooms,
-  trends,
-  selectedIds,
-  pending,
-  errorMessage,
-  onReload,
-  onSelectionChange
-}: {
-  rooms: BilibiliLiveRoom[]
-  trends: BilibiliLiveRoomTrend[]
-  selectedIds: string[]
-  pending: boolean
-  errorMessage?: string
-  onReload?: () => Promise<unknown>
-  onSelectionChange: (ids: string[]) => void
-}): JSX.Element {
-  return (
-    <div className="live-trend-panel">
-      <header>
-        <div><span>LIVE HISTORY</span><h2>在线趋势对比</h2></div>
-        <small>最多选择 4 个直播间</small>
-      </header>
-      <div className="live-trend-selector">
-        {rooms.map((room) => (
-          <label key={room.id}>
-            <input
-              type="checkbox"
-              checked={selectedIds.includes(room.id)}
-              disabled={!selectedIds.includes(room.id) && selectedIds.length >= 4}
-              onChange={() => onSelectionChange(toggleTrendId(selectedIds, room.id))}
-            />
-            <span>{room.uname}</span>
-          </label>
-        ))}
-      </div>
-      {errorMessage && selectedIds.length > 0 && (
-        <div className="business-error" role="alert">
-          <span>{errorMessage}{trends.length > 0 ? "；以下保留上次成功读取的数据。" : ""}</span>
-          {onReload && <button type="button" className="button" disabled={pending} onClick={() => void onReload()}>重试趋势查询</button>}
-        </div>
-      )}
-      {pending && selectedIds.length > 0 && <p role="status">正在读取趋势…</p>}
-      {selectedIds.length === 0
-        ? <LiveState title="尚未选择直播间" detail="选择直播间后查看 SQLite 快照形成的真实在线趋势。" />
-        : trends.filter((trend) => selectedIds.includes(trend.room.id)).map((trend) => (
-            <article className="live-chart-card" key={trend.room.id}>
-              <div><strong>{trend.room.uname}</strong><span>房间 {trend.room.roomId} · {trend.points.length} 个快照</span></div>
-              <LiveTrendChart trend={trend} />
-            </article>
-          ))}
-    </div>
-  )
-}
-
-function LiveTrendChart({ trend }: { trend: BilibiliLiveRoomTrend }): JSX.Element {
-  const points = [...trend.points].sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
-  const first = points[0]
-  const last = points.at(-1)
-  const values = points.flatMap((point) => point.onlineCount === undefined ? [] : [point.onlineCount])
-  if (!first || !last || values.length === 0) return <p>尚无可用热度快照。</p>
-  const min = Math.min(...values)
-  const range = Math.max(1, Math.max(...values) - min)
-  const from = Date.parse(first.capturedAt)
-  const duration = Math.max(1, Date.parse(last.capturedAt) - from)
-  const coordinates = points.map((point) => point.onlineCount === undefined ? undefined : {
-    x: 20 + ((Date.parse(point.capturedAt) - from) / duration) * 680,
-    y: 160 - ((point.onlineCount - min) / range) * 140,
-    point
-  })
-  const path = coordinates.map((coordinate, index) => coordinate
-    ? `${coordinates[index - 1] ? "L" : "M"}${coordinate.x.toFixed(1)},${coordinate.y.toFixed(1)}`
-    : "").join(" ")
-  return <>
-    <svg viewBox="0 0 720 180" role="img" aria-label={`${trend.room.uname} 在线趋势`}>
-      <path d={path} fill="none" stroke="currentColor" strokeWidth="3" />
-      {coordinates.map((coordinate, index) => coordinate && (
-        <circle key={`${coordinate.point.capturedAt}-${index}`} cx={coordinate.x} cy={coordinate.y} r="4" fill="currentColor">
-          <title>{formatTime(coordinate.point.capturedAt)} · 热度 {formatCount(coordinate.point.onlineCount)}</title>
-        </circle>
-      ))}
-    </svg>
-    <div className="live-chart-time-range"><time>{formatTime(first.capturedAt)}</time><time>{formatTime(last.capturedAt)}</time></div>
-    {values.length === 1 && <p>仅有 1 个有效采样点，等待后续采集。</p>}
-  </>
-}
 
 function LiveEvents({ events }: { events: BilibiliLiveStatusEvent[] }): JSX.Element {
   if (events.length === 0) return <LiveState title="暂无状态事件" detail="开播、下播、轮播、标题变化、错误与恢复会在真实变化后写入。" />
@@ -1217,7 +1134,6 @@ export function ConnectedBilibiliLiveWorkspace({
 }): JSX.Element {
   const queryClient = useQueryClient()
   const [selectedTrendIds, setSelectedTrendIds] = useState<string[]>([])
-  const initializedTrendSelection = useRef(false)
   const roomLocks = useRef(new Set<string>())
   const [busyRoomIds, setBusyRoomIds] = useState<string[]>([])
   const [roomActionErrors, setRoomActionErrors] = useState<Record<string, string | undefined>>({})
@@ -1253,17 +1169,7 @@ export function ConnectedBilibiliLiveWorkspace({
     queryFn: () => bridge.bilibiliLive.events({ limit: 20 }),
     refetchInterval: 15_000
   })
-  const trendsQuery = useQuery({
-    queryKey: ["bilibili-live", "trends", validSelection],
-    queryFn: () => {
-      // A deletion can invalidate an old query before React commits its new selection.
-      const currentRooms = queryClient.getQueryData<BilibiliLiveRoomList>(["bilibili-live", "rooms"])?.items ?? []
-      const ids = validSelection.filter((id) => currentRooms.some((room) => room.id === id))
-      return ids.length === 0 ? Promise.resolve([]) : bridge.bilibiliLive.trends({ roomMonitorIds: ids, limitPerRoom: 500 })
-    },
-    enabled: view === "趋势对比" && validSelection.length > 0,
-    refetchInterval: 30_000
-  })
+  const trendsQuery = useLiveTrendQuery(bridge, rooms, roomsQuery.dataUpdatedAt, validSelection)
   const lastSuccessfulTrends = useLastSuccessfulLiveTrends(rooms, trendsQuery.data, trendsQuery.dataUpdatedAt)
   const rankQuery = useQuery({
     queryKey: ["bilibili-live", "rank", selectedRankRoomId],
@@ -1345,7 +1251,6 @@ export function ConnectedBilibiliLiveWorkspace({
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "rooms"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "summary"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "events"] }),
-      queryClient.invalidateQueries({ queryKey: ["bilibili-live", "trends"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "rank"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "danmaku"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "sessions"] }),
@@ -1425,14 +1330,15 @@ export function ConnectedBilibiliLiveWorkspace({
     onError: (error) => setExportMessage(errorMessageOf(error))
   })
   useEffect(() => {
-    if (!initializedTrendSelection.current && roomsQuery.isSuccess) {
-      initializedTrendSelection.current = true
-      const initial = rooms.find((room) => room.liveStatus === 1) ?? rooms[0]
-      if (initial && selectedTrendIds.length === 0) setSelectedTrendIds([initial.id])
-      return
-    }
-    if (validSelection.length !== selectedTrendIds.length) setSelectedTrendIds(validSelection)
-  }, [roomsQuery.isSuccess, rooms, selectedTrendIds, validSelection])
+    if (!roomsQuery.isSuccess) return
+    // normalizeSelection belongs to a successful reread, never to a user's clear click.
+    setSelectedTrendIds(current => {
+      const valid = current.filter(id => rooms.some(room => room.id === id)).slice(0, 4)
+      const initial = rooms.find(room => room.liveStatus === 1) ?? rooms[0]
+      const next = valid.length || !initial ? valid : [initial.id]
+      return next.length === current.length && next.every((id, index) => id === current[index]) ? current : next
+    })
+  }, [roomsQuery.isSuccess, roomsQuery.dataUpdatedAt, rooms])
   useEffect(() => {
     if (rooms.length === 0) {
       if (selectedRankRoomId !== undefined) setSelectedRankRoomId(undefined)
@@ -1495,7 +1401,7 @@ export function ConnectedBilibiliLiveWorkspace({
       roomActionErrors={roomActionErrors}
       refreshing={roomsQuery.isFetching || summaryQuery.isFetching || eventsQuery.isFetching}
       onReload={refreshQueries}
-      trendPending={trendsQuery.isFetching}
+      trendPending={trendsQuery.pending}
       trendError={trendsQuery.error ? errorMessageOf(trendsQuery.error) : undefined}
       onReloadTrends={() => trendsQuery.refetch()}
       errorMessage={firstErrorMessage(

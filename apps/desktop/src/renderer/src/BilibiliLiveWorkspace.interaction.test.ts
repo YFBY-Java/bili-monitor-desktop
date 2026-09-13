@@ -247,16 +247,19 @@ describe("original live-room renderer workflows", () => {
       .toBe("018f0f39-7b5e-4cc1-962d-000000001000")
   })
 
-  it("initially selects a live room, caps comparison at four, and honors explicitly clearing the selection", async () => {
+  it("caps comparison at four and restores live-first only after a successful reread following clear", async () => {
     await expect.poll(() => page.getByRole("button", { name: "已选趋势", exact: true }).count()).toBe(1)
     expect(await page.locator(".live-room-card").nth(1).getByRole("button", { name: "已选趋势" }).count()).toBe(1)
     for (let index = 0; index < 3; index++) await page.getByRole("button", { name: "加入趋势", exact: true }).first().click()
     expect(await page.getByRole("button", { name: "趋势已满" }).isDisabled()).toBe(true)
     await page.getByRole("button", { name: "查看趋势", exact: true }).click()
     for (let index = 0; index < 5; index++) await page.getByRole("checkbox").nth(index).uncheck()
-    await page.evaluate(() => window.liveFixture.reload())
     await page.getByText("尚未选择直播间", { exact: true }).waitFor()
     expect(await page.locator(".live-chart-card").count()).toBe(0)
+    await page.evaluate(async () => { window.liveFixture.listError = "读取失败"; await window.liveFixture.reload() })
+    expect(await page.locator(".live-chart-card").count()).toBe(0)
+    await page.evaluate(async () => { window.liveFixture.listError = ""; await window.liveFixture.reload() })
+    await expect.poll(() => page.getByRole("checkbox", { name: "测试主播2", exact: true }).isChecked()).toBe(true)
   })
 
   it("validates input and adds by room number or UID with the original default interval", async () => {
@@ -352,20 +355,22 @@ describe("original live-room renderer workflows", () => {
     expect(await page.locator(".live-chart-card").count()).toBeGreaterThan(0)
     await page.getByRole("alert").filter({ hasText: "历史查询暂时失败" }).waitFor()
     await page.getByRole("button", { name: "查看直播间", exact: true }).click()
+    await page.getByRole("alert").filter({ hasText: "历史查询暂时失败" }).waitFor()
+    await page.getByRole("button", { name: "查看事件", exact: true }).click()
     expect(await page.getByRole("alert").count()).toBe(0)
   })
 
-  it("uses actual timestamps and leaves missing heat values as gaps", async () => {
+  it("uses actual timestamps and marks the original missing-heat display-zero rule", async () => {
     await page.getByRole("button", { name: "加入趋势", exact: true }).first().click()
     await page.getByRole("button", { name: "查看趋势", exact: true }).click()
     const chart = page.locator(".live-chart-card").first()
     await chart.locator("svg").waitFor()
-    const path = await chart.locator("svg path").getAttribute("d")
-    const coordinates = path!.match(/-?\d+(?:\.\d+)?/g)!.map(Number)
-    expect((coordinates[2]! - coordinates[0]!) / (coordinates[4]! - coordinates[0]!)).toBeCloseTo(0.1, 2)
+    const coordinates = await chart.locator("circle").evaluateAll(elements => elements.map(element => Number(element.getAttribute("cx"))))
+    expect((coordinates[1]! - coordinates[0]!) / (coordinates[2]! - coordinates[0]!)).toBeCloseTo(0.1, 2)
     await page.evaluate(async () => { window.liveFixture.missingHeat(); await window.liveFixture.reload() })
-    await expect.poll(() => chart.locator("circle").count()).toBe(2)
-    expect((await chart.locator("svg path").getAttribute("d"))?.match(/M/g)).toHaveLength(2)
+    await expect.poll(() => chart.locator("circle.is-missing").count()).toBe(1)
+    expect(await chart.locator("circle").count()).toBe(3)
+    expect((await chart.locator(".live-trend-line").getAttribute("d"))?.match(/M/g)).toHaveLength(1)
     expect(await chart.locator("circle title").first().textContent()).toContain("100")
   })
 
@@ -376,7 +381,7 @@ describe("original live-room renderer workflows", () => {
     await page.getByRole("checkbox", { name: "测试主播1", exact: true }).check()
     await page.getByRole("alert").filter({ hasText: "新选择暂时无法查询" }).waitFor()
     expect(await page.locator(".live-chart-card").filter({ hasText: "测试主播2" }).count()).toBe(1)
-    expect(await page.locator(".live-chart-card").filter({ hasText: "测试主播1" }).count()).toBe(0)
+    await page.locator(".live-chart-card").filter({ hasText: "测试主播1" }).getByText("房间近期快照", { exact: true }).waitFor()
     await page.evaluate(() => { window.liveFixture.trendError = "" })
     await page.getByRole("button", { name: "重试趋势查询" }).click()
     await expect.poll(() => page.locator(".live-chart-card").count()).toBe(2)
