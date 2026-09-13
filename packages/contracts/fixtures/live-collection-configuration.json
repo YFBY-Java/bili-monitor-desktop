@@ -1,0 +1,19 @@
+[
+  { "name": "defaults", "input": {}, "valid": true },
+  { "name": "disabled", "input": { "enabled": false }, "valid": true },
+  { "name": "configured batches", "input": { "enabled": true, "schedulerDelayMs": 250, "dueBatchSize": 75, "statusBatchSize": 64 }, "valid": true },
+  { "name": "zero batch consumed as one", "input": { "dueBatchSize": 0, "statusBatchSize": 0 }, "valid": true },
+  { "name": "negative batch consumed as one", "input": { "dueBatchSize": -2147483648, "statusBatchSize": -1 }, "valid": true },
+  { "name": "largest original integer", "input": { "schedulerDelayMs": 2147483647, "statusBatchSize": 2147483647 }, "valid": true },
+  { "name": "invalid object", "input": [], "valid": false },
+  { "name": "null", "input": null, "valid": false },
+  { "name": "explicit null", "input": { "enabled": null }, "valid": false },
+  { "name": "string boolean", "input": { "enabled": "false" }, "valid": false },
+  { "name": "boolean number", "input": { "dueBatchSize": true }, "valid": false },
+  { "name": "float batch", "input": { "statusBatchSize": 2.5 }, "valid": false },
+  { "name": "overflow", "input": { "dueBatchSize": 2147483648 }, "valid": false },
+  { "name": "underflow", "input": { "dueBatchSize": -2147483649 }, "valid": false },
+  { "name": "zero delay", "input": { "schedulerDelayMs": 0 }, "valid": false },
+  { "name": "negative delay", "input": { "schedulerDelayMs": -1 }, "valid": false },
+  { "name": "unknown property", "input": { "storageEnabled": false }, "valid": false }
+]

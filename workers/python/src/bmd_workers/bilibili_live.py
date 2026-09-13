@@ -58,7 +58,7 @@ class BilibiliLiveStatusRequest(BaseModel):
     task_id: str = Field(alias="taskId", min_length=1)
     attempt: PositiveInteger
     lease_id: str = Field(alias="leaseId", min_length=1)
-    uids: list[PositiveId] = Field(min_length=1, max_length=30)
+    uids: list[PositiveId] = Field(min_length=1)
 
 
 def _positive_id(value: object) -> str | None:

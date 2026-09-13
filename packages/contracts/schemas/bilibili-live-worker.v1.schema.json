@@ -68,6 +68,6 @@
     "UidRequest": {"allOf": [{"$ref": "#/$defs/RequestFields"}], "unevaluatedProperties": false,
       "required": ["uid"], "properties": {"uid": {"$ref": "#/$defs/PositiveId"}}},
     "StatusRequest": {"allOf": [{"$ref": "#/$defs/RequestFields"}], "unevaluatedProperties": false,
-      "required": ["uids"], "properties": {"uids": {"type": "array", "minItems": 1, "maxItems": 30, "items": {"$ref": "#/$defs/PositiveId"}}}}
+      "required": ["uids"], "properties": {"uids": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/PositiveId"}}}}
   }
 }

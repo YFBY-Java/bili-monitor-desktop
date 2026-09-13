@@ -20,10 +20,10 @@ describe("original live Worker output fields shared with Python", () => {
     expect(result.success).toBe(fixture.valid)
     if (result.success) expect(result.data).toEqual(fixture.output ?? fixture.input)
   })
-  it("keeps the original maximum of 30 UIDs per worker request", () => {
+  it("accepts configured batches larger than the original default of 30", () => {
     const base = { taskId: "t", attempt: 1, leaseId: "l" }
     expect(requests.StatusRequest.safeParse({ ...base, uids: Array.from({ length: 30 }, (_, i) => String(i + 1)) }).success).toBe(true)
-    expect(requests.StatusRequest.safeParse({ ...base, uids: Array.from({ length: 31 }, (_, i) => String(i + 1)) }).success).toBe(false)
+    expect(requests.StatusRequest.safeParse({ ...base, uids: Array.from({ length: 75 }, (_, i) => String(i + 1)) }).success).toBe(true)
   })
   it.each(fixtures.filter(f => !f.error && f.result !== null))("$name", fixture => {
     const results = Array.isArray(fixture.result) ? fixture.result : [fixture.result]

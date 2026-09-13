@@ -317,7 +317,7 @@ def test_portable_request_and_pydantic(fixture):
             models[fixture["schema"]].model_validate(fixture["input"])
 
 
-def test_worker_request_keeps_thirty_uid_batch_limit():
+def test_worker_request_accepts_configured_batches_above_thirty():
     base = {"taskId": "t", "attempt": 1, "leaseId": "l"}
     assert (
         len(
@@ -327,7 +327,6 @@ def test_worker_request_keeps_thirty_uid_batch_limit():
         )
         == 30
     )
-    with pytest.raises(ValidationError):
-        live.BilibiliLiveStatusRequest.model_validate(
-            {**base, "uids": [str(i + 1) for i in range(31)]}
-        )
+    payload = {**base, "uids": [str(i + 1) for i in range(75)]}
+    assert len(live.BilibiliLiveStatusRequest.model_validate(payload).uids) == 75
+    Draft202012Validator({**SCHEMA, "$ref": "#/$defs/StatusRequest"}).validate(payload)

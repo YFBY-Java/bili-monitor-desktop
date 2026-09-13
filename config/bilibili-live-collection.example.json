@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "schedulerDelayMs": 1000,
+  "dueBatchSize": 20,
+  "statusBatchSize": 30
+}

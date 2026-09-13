@@ -109,4 +109,15 @@ describe("real Python live HTTP replay through NDJSON, WorkerSource and SQLite",
       code: "BILIBILI_INPUT_INVALID", retryable: false, endpoint: endpoints.status })
     expect(await f.wire.request("worker.ping", {})).toMatchObject({ state: "ready" })
   }, 20_000)
+
+  it("carries 75 configured UIDs in one real Worker request and preserves every result", async () => {
+    const f = await setup()
+    const uids = Array.from({ length: 75 }, (_, i) => String(2000 + i))
+    const result = await f.source.fetchStatusByUids({ ...request, uids })
+    expect(result.snapshots.map(snapshot => snapshot.uid)).toEqual(uids)
+    expect(result.snapshots.map(snapshot => snapshot.onlineCount)).toEqual(uids.map((_, i) => i))
+    const evidence = JSON.parse(await readFile(resolve(f.directory, result.evidenceObject.relativePath), "utf8"))
+    expect(Object.keys(evidence.data)).toEqual(uids)
+    expect(await f.wire.request("worker.ping", {})).toMatchObject({ state: "ready" })
+  }, 20_000)
 })

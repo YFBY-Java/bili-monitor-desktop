@@ -102,6 +102,7 @@ import {
   RevokeDouyinCredentialResultSchema,
   createRuntimeEnvelope,
   type BootstrapResponse,
+  type RuntimeError,
   type RuntimeEnvelope
 } from "@bmd/contracts"
 import { utilityProcess, type UtilityProcess } from "electron"
@@ -124,6 +125,14 @@ interface PendingRequest {
   resolve: (envelope: RuntimeEnvelope) => void
   reject: (error: Error) => void
   timeout: NodeJS.Timeout
+}
+
+class CoreRequestError extends Error {
+  readonly code: string
+  constructor(error: RuntimeError) {
+    super(`${error.code}: ${error.message}`)
+    this.code = error.code
+  }
 }
 
 const LONG_RUNNING_CORE_REQUESTS = new Set([
@@ -224,6 +233,8 @@ export class LocalCoreController {
       return await this.bootstrap()
     } catch (error) {
       await this.forceStop()
+      // Known actionable configuration errors already carry a fixed, safe protocol message.
+      if (error instanceof CoreRequestError && error.code === "BILIBILI_LIVE_CONFIG_INVALID") throw error
       const message = error instanceof Error ? error.message : String(error)
       const details = this.stderrTail.trim()
       throw new Error(details ? `${message}\n${details}` : message)
@@ -746,7 +757,7 @@ export class LocalCoreController {
     this.pending.delete(envelope.id)
     if (envelope.type === "core.error") {
       const runtimeError = RuntimeErrorSchema.parse(envelope.payload)
-      pending.reject(new Error(`${runtimeError.code}: ${runtimeError.message}`))
+      pending.reject(new CoreRequestError(runtimeError))
       return
     }
     pending.resolve(envelope)

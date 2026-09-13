@@ -178,7 +178,7 @@ export const BilibiliLiveUidRequestSchema = BilibiliLiveWorkerRequestBaseSchema.
   uid: BilibiliLiveNumericIdSchema
 }).strict()
 export const BilibiliLiveStatusByUidsRequestSchema = BilibiliLiveWorkerRequestBaseSchema.extend({
-  uids: z.array(BilibiliLiveNumericIdSchema).min(1).max(30)
+  uids: z.array(BilibiliLiveNumericIdSchema).min(1)
 }).strict()
 
 export const BilibiliLiveSnapshotDataSchema = z.object({

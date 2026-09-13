@@ -23,6 +23,19 @@ def replay(request):
         request.headers["User-Agent"]
         == "SocialDataMonitor/0.1 (+low-frequency public Bilibili live monitor)"
     )
+    if request.url.path == "/" + METHODS["status"] and request.url.params.get("uids[]") == "2000":
+        uids = request.url.params.get_list("uids[]")
+        assert uids == [str(2000 + i) for i in range(75)]
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    uid: {"uid": int(uid), "room_id": int(uid) + 100, "live_status": 1, "online": i}
+                    for i, uid in enumerate(uids)
+                },
+            },
+        )
     if request.url.params.get("mid") == "901":
         return httpx.Response(200, content=b'{"code":0,"data":"\xff"}')
     if request.url.params.get("mid") == "902":

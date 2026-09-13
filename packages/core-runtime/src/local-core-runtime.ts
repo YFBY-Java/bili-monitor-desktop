@@ -77,6 +77,7 @@ import {
   type BilibiliLiveSource
 } from "./bilibili-live-service"
 import { BilibiliLiveWorkerSource } from "./bilibili-live-worker-source"
+import { loadLiveCollectionConfiguration } from "./bilibili-live-collection-config"
 import {
   BilibiliLiveRankService,
   type BilibiliLiveRankSource
@@ -150,6 +151,7 @@ export class LocalCoreRuntime {
   private followerSchedulerDelayMs = 1_000
 
   static async start(options: LocalCoreRuntimeOptions): Promise<LocalCoreRuntime> {
+    const liveConfiguration = await loadLiveCollectionConfiguration(options.dataDirectory, process.env)
     const normalized: ResolvedLocalCoreRuntimeOptions = {
       dataDirectory: options.dataDirectory,
       version: options.version,
@@ -195,6 +197,9 @@ export class LocalCoreRuntime {
     const live = new BilibiliLiveMonitorService({
       database,
       source: liveSource,
+      enabled: liveConfiguration.enabled,
+      dueBatchSize: liveConfiguration.dueBatchSize,
+      statusBatchSize: liveConfiguration.statusBatchSize,
       now: normalized.now,
       idFactory: normalized.idFactory,
       sessionObserver: liveSessions
@@ -266,12 +271,13 @@ export class LocalCoreRuntime {
       normalized.now().toISOString()
     )
     runtime.schedulerEnabled = options.schedulerEnabled ?? true
-    runtime.liveSchedulerDelayMs = Math.max(1_000, options.schedulerDelayMs ?? 1_000)
+    runtime.liveSchedulerDelayMs = options.schedulerDelayMs === undefined
+      ? liveConfiguration.schedulerDelayMs : Math.max(1_000, options.schedulerDelayMs)
     // The original follower page checked due users every second. Core owns that timer locally.
     runtime.followerSchedulerDelayMs = Math.max(1_000, options.schedulerDelayMs ?? 1_000)
     if (runtime.schedulerEnabled) {
       runtime.startFollowerScheduler()
-      runtime.startLiveScheduler(0)
+      if (liveConfiguration.enabled) runtime.startLiveScheduler(0)
       runtime.startLiveDanmakuScheduler()
     }
     return runtime

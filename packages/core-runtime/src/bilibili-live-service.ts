@@ -59,6 +59,7 @@ export interface BilibiliLiveSource {
 export interface BilibiliLiveMonitorServiceOptions {
   database: ControlDatabase
   source: BilibiliLiveSource
+  enabled?: boolean
   now: () => Date
   idFactory: () => string
   sleep?: (milliseconds: number) => Promise<void>
@@ -210,13 +211,13 @@ export class BilibiliLiveMonitorService {
   }
 
   async collectDueRooms(): Promise<BilibiliLiveCollectResult[]> {
-    if (this.lifetime.signal.aborted) return []
+    if (this.lifetime.signal.aborted || this.options.enabled === false) return []
     const rooms = this.options.database.findDueBilibiliLiveRooms(
       this.options.now().toISOString(),
       Math.max(1, this.options.dueBatchSize ?? 20)
     )
     const results: BilibiliLiveCollectResult[] = []
-    const batchSize = Math.min(30, Math.max(1, this.options.statusBatchSize ?? 30))
+    const batchSize = Math.max(1, this.options.statusBatchSize ?? 30)
     for (let start = 0; start < rooms.length; start += batchSize) {
       if (this.lifetime.signal.aborted) break
       const batchRooms = rooms.slice(start, start + batchSize)

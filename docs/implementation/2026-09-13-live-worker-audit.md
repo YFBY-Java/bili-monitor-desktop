@@ -53,6 +53,6 @@
 
 1. 原parser支持的完整signed Long、未知直播状态及部分非标准数字与客户端既有正UID/0..2枚举/JS安全整数输出域仍有差异；本轮仅完成安全范围内有符号计数，完整数值域仍需整体迁移。`live-worker-validation.json`中的state=3拒绝用例记录当前边界，不是原业务最终验收标准。
 2. Pydantic、WHATWG URL与portable schema对所有边缘URL、日期年份/控制字符、别名的全集等价尚未证明。当前环境缺少可选URI format校验器，portable schema仅附加scheme约束，对无主机/越界端口弱于生产Pydantic/Zod；Python允许snake_case别名，字符串长度按码点而TS按UTF-16，均列后续对齐。原非对象根JSON、负ID/溢出数字及跨协议重定向亦须逐条核对；不能把已有fixture通过当作全集等价。
-3. 默认HTTP参数已对齐，但原配置的全部可变项和本地设置映射还要随M08配置/生命周期一起核对。
+3. 后续M08已实现自动REST开关/调度延迟/两级批量配置，并纠正本审计当时误把30默认UID当作硬上限的限制；详见`2026-09-13-live-collection-configuration-audit.md`。默认HTTP参数已对齐，其余可变HTTP/重试/间隔/storageEnabled配置与完整绑定语义仍待迁移。
 4. 原生Electron utilityProcess环境、安装包、真实平台、应用退出取消/重启排程和完整直播UI仍待验收。本轮是实际Python子进程自动回归，不是原生安装客户端或真人平台验收。
 5. M09–M18、M07真人扫码与M11开播时间同刻不同拼写判重启差异均保留。原仓库不修改、不启动；用户要求提交后仅收尾验证并提交本地，不推送、不重打安装包或重启已安装应用。

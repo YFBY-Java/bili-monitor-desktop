@@ -13,7 +13,7 @@ export const liveStatusEndpoint = "room/v1/Room/get_status_info_by_uids"
 export const liveInfoEndpoint = "room/v1/Room/get_info"
 
 // Only the external API/NDJSON transport is synthetic. All business writes and boundaries are real.
-export async function liveCollectionFixture(options: { maxAttempts?: number; retryBackoffMs?: number; workerBoundary?: boolean } = {}) {
+export async function liveCollectionFixture(options: { maxAttempts?: number; retryBackoffMs?: number; workerBoundary?: boolean; dueBatchSize?: number; statusBatchSize?: number; enabled?: boolean } = {}) {
   const directory = await mkdtemp(resolve(tmpdir(), "bmd-live-collection-"))
   const database = await ControlDatabase.open(directory)
   const state = {
@@ -70,6 +70,9 @@ export async function liveCollectionFixture(options: { maxAttempts?: number; ret
     database, source: options.workerBoundary ? transportedSource : source, idFactory: () => state.idFactory(),
     now: () => new Date(state.now), requestMinIntervalMs: 0,
     maxAttempts: options.maxAttempts ?? 1, retryBackoffMs: options.retryBackoffMs ?? 0, jitter: () => 0,
+    ...(options.dueBatchSize === undefined ? {} : { dueBatchSize: options.dueBatchSize }),
+    ...(options.statusBatchSize === undefined ? {} : { statusBatchSize: options.statusBatchSize }),
+    ...(options.enabled === undefined ? {} : { enabled: options.enabled }),
     sleep: async ms => { waits.push(ms) },
     sessionObserver: { reconcileRest: (room, observation) => {
       state.inspectBoundary(room, observation)
