@@ -10,7 +10,7 @@ from typing import Any, Literal
 from urllib.parse import urlencode
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from .bilibili_follower import (
     BilibiliCrawlerError,
@@ -20,6 +20,7 @@ from .bilibili_follower import (
     _optional_text,
     _write_object_sync,
 )
+from .bilibili_live_http import BilibiliLiveHttpConfiguration, BilibiliLiveHttpRequest
 
 AUDIENCE_RANK_ENDPOINT = "xlive/general-interface/v1/rank/queryContributionRank"
 ONLINE_GOLD_RANK_ENDPOINT = "xlive/general-interface/v1/rank/getOnlineGoldRank"
@@ -108,7 +109,7 @@ WBI_KEY_PATTERN = re.compile(r"/([^/]+)\.png(?:\?.*)?$")
 _cached_wbi_keys: tuple[str, str, float] | None = None
 
 
-class BilibiliLiveRankRequest(BaseModel):
+class BilibiliLiveRankRequest(BilibiliLiveHttpRequest):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     task_id: str = Field(alias="taskId", min_length=1)
@@ -347,7 +348,13 @@ def sign_wbi_params(
 
 async def _get(client: httpx.AsyncClient, endpoint: str, params: dict[str, str]) -> httpx.Response:
     try:
-        response = await client.get(ENDPOINT_URLS[endpoint], params=params)
+        response = await client.get(
+            ENDPOINT_URLS[endpoint],
+            params=params,
+            headers=(
+                {"Referer": "https://www.bilibili.com/"} if endpoint == WBI_NAV_ENDPOINT else None
+            ),
+        )
     except httpx.RequestError as error:
         raise BilibiliCrawlerError(
             "BILIBILI_NETWORK_ERROR",
@@ -398,17 +405,14 @@ async def _wbi_keys(client: httpx.AsyncClient, force_refresh: bool) -> tuple[str
 
 async def fetch_live_rank(payload: dict[str, object], data_directory: Path) -> dict[str, Any]:
     request = BilibiliLiveRankRequest.model_validate(payload)
+    configuration = request.http_configuration or BilibiliLiveHttpConfiguration()
     endpoint = request.endpoint or (
         GUARD_RANK_ENDPOINT if request.family == "GUARD" else AUDIENCE_RANK_ENDPOINT
     )
     started = time.perf_counter()
     async with httpx.AsyncClient(
-        timeout=httpx.Timeout(10.0, connect=5.0),
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "BiliMonitorDesktop/0.1 (+low-frequency public Bilibili live rank monitor)",
-            "Referer": "https://live.bilibili.com/",
-        },
+        timeout=configuration.timeout(),
+        headers=configuration.headers(),
     ) as client:
         if endpoint == GUARD_RANK_ENDPOINT:
             parameters = {

@@ -1,4 +1,4 @@
-import type { BilibiliFollowerTrend, DesktopBridge } from "@bmd/contracts"
+import type { BilibiliFollowerTrendV2, DesktopBridge } from "@bmd/contracts"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
 
@@ -8,7 +8,7 @@ export type FollowerTrendIndicator = "idle" | "refreshing" | "done" | "error"
 export function useFollowerTrends(bridge: DesktopBridge, userIds: string[], listUpdatedAt: number) {
   const client = useQueryClient()
   const instance = useId()
-  const queryKey = useMemo(() => ["bilibili-follower-trends", "workspace", instance], [instance])
+  const queryKey = useMemo(() => ["bilibili-follower-trends-v2", "workspace", instance], [instance])
   const latest = useRef({ bridge, userIds })
   latest.current = { bridge, userIds }
   const failedKey = useRef<string | undefined>(undefined)
@@ -18,15 +18,15 @@ export function useFollowerTrends(bridge: DesktopBridge, userIds: string[], list
     queryKey, enabled: false, retry: false, gcTime: 0,
     queryFn: async () => {
       const ids = [...latest.current.userIds]
-      let incoming: BilibiliFollowerTrend[]
+      let incoming: BilibiliFollowerTrendV2[]
       try {
-        incoming = await latest.current.bridge.bilibiliFollowers.trends({ userIds: ids, limitPerUser: 500 })
+        incoming = await latest.current.bridge.bilibiliFollowersV2.trends({ userIds: ids, limitPerUser: 500 })
         failedKey.current = undefined
       } catch (error) {
         failedKey.current = ids.join(",")
         throw error
       }
-      const cache = new Map((client.getQueryData<BilibiliFollowerTrend[]>(queryKey) ?? []).map(trend => [trend.user.id, trend]))
+      const cache = new Map((client.getQueryData<BilibiliFollowerTrendV2[]>(queryKey) ?? []).map(trend => [trend.user.id, trend]))
       for (const trend of incoming) cache.set(trend.user.id, trend)
       // Bounded to the current four selections; late responses cannot revive removed users.
       return latest.current.userIds.flatMap(id => cache.has(id) ? [cache.get(id)!] : [])
@@ -86,7 +86,7 @@ export function useFollowerTrends(bridge: DesktopBridge, userIds: string[], list
   useEffect(() => { queue.current(180) }, [selectionKey])
   useEffect(() => {
     if (!listUpdatedAt) return
-    client.setQueryData<BilibiliFollowerTrend[]>(queryKey, current => current?.filter(trend => latest.current.userIds.includes(trend.user.id)))
+    client.setQueryData<BilibiliFollowerTrendV2[]>(queryKey, current => current?.filter(trend => latest.current.userIds.includes(trend.user.id)))
     queue.current(0)
   }, [client, queryKey, listUpdatedAt])
   const visibleIndicator: FollowerTrendIndicator = userIds.length ? indicator : "idle"

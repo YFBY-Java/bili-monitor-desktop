@@ -59,9 +59,21 @@ export function createBrowserPreviewBridge(): DesktopBridge {
       bind: async () => { throw readOnlyError() },
       workbench: async () => { throw readOnlyError() },
       trends: async () => { throw readOnlyError() },
+      workbenchV2: async () => { throw readOnlyError() },
+      trendsV2: async () => { throw readOnlyError() },
       updateLayout: async () => { throw readOnlyError() }
     },
     bilibiliFollowers: {
+      list: async () => ({ items: [], total: 0, snapshotAt: timestamp }),
+      add: async () => { throw readOnlyError() },
+      updateStatus: async () => { throw readOnlyError() },
+      updateSettings: async () => { throw readOnlyError() },
+      refresh: async () => { throw readOnlyError() },
+      remove: async () => { throw readOnlyError() },
+      trend: async () => { throw readOnlyError() },
+      trends: async () => []
+    },
+    bilibiliFollowersV2: {
       list: async () => ({ items: [], total: 0, snapshotAt: timestamp }),
       add: async () => { throw readOnlyError() },
       updateStatus: async () => { throw readOnlyError() },

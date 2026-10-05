@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bmd:bilibili-follower-collection-configuration:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": { "enabled": { "const": true }, "storageEnabled": { "const": true } }
+      },
+      "then": { "properties": { "schedulerDelayMs": { "minimum": 1 } } }
+    }
+  ],
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "storageEnabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "schedulerDelayMs": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 1000
+    },
+    "dueBatchSize": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 10
+    },
+    "defaultIntervalSeconds": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 3600
+    },
+    "minIntervalSeconds": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 1
+    },
+    "maxIntervalSeconds": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 2592000
+    },
+    "shortIntervalWarningSeconds": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 60
+    },
+    "failureBackoffSeconds": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 900
+    },
+    "requestMinIntervalMs": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 1500
+    },
+    "maxAttempts": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 3
+    },
+    "retryBackoffMs": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 1500
+    },
+    "connectTimeoutMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647,
+      "default": 5000
+    },
+    "readTimeoutMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647,
+      "default": 10000
+    },
+    "userAgent": {
+      "type": "string",
+      "not": {
+        "pattern": "[^\\t\\x20-\\x7e]"
+      },
+      "default": "SocialDataMonitor/0.1 (+low-frequency public Bilibili follower monitor)"
+    },
+    "referer": {
+      "type": "string",
+      "not": {
+        "pattern": "[^\\t\\x20-\\x7e]"
+      },
+      "default": "https://www.bilibili.com/"
+    }
+  }
+}

@@ -31,6 +31,69 @@ describe("desktop Core liveness watchdog", () => {
     return { child, requests, respond }
   }
   const id = "11111111-1111-4111-8111-111111111111"
+  it.each(["add", "refresh", "add.v2", "refresh.v2"])("keeps a follower %s pending across multiple 90-second windows", async action => {
+    const f = await setup()
+    let settled = false
+    const operation = action === "add" ? controller.addBilibiliFollowerMonitor({ mid: "2" })
+      : action === "refresh" ? controller.refreshBilibiliFollowerMonitor({ userId: id })
+      : action === "add.v2" ? controller.addBilibiliFollowerMonitorV2({ mid: "9223372036854775807" })
+      : controller.refreshBilibiliFollowerMonitorV2({ userId: id })
+    const pending = operation.then(value => { settled = true; return value },
+      (error: unknown) => { settled = true; return error })
+    const request = f.requests.at(-1)!
+    try {
+      expect(request.keepAlive).toBe(true)
+      for (let n = 0; n < 4; n++) {
+        await vi.advanceTimersByTimeAsync(60_000)
+        f.respond(request, { requestType: request.type })
+        expect(settled).toBe(false)
+      }
+      f.respond(request, { code: "SYNTHETIC_FOLLOWER_RESULT", message: "fixture", retryable: false }, "core.error")
+      expect(await pending).toMatchObject({ code: "SYNTHETIC_FOLLOWER_RESULT" })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      f.respond(request, { code: "SYNTHETIC_STOP", message: "fixture", retryable: false }, "core.error")
+      await pending
+    }
+  })
+  it("keeps a danmaku start alive instead of cancelling a configured long HTTP request", async () => {
+    const f = await setup()
+    let settled = false
+    const pending = controller.startBilibiliLiveDanmaku({ roomMonitorId: id })
+      .then(value => { settled = true; return value }, (error: unknown) => { settled = true; return error })
+    const request = f.requests.at(-1)!
+    try {
+      expect(request.keepAlive).toBe(true)
+      for (let n = 0; n < 4; n++) {
+        await vi.advanceTimersByTimeAsync(60_000)
+        f.respond(request, { requestType: request.type })
+        expect(settled).toBe(false)
+      }
+      f.respond(request, { liveRoomMonitorId: id, running: true, status: "CONNECTED",
+        ratePerMinute: 0, last5MinutesCount: 0, likeIncrement: 0 }, request.type + ".result")
+      expect(await pending).toMatchObject({ running: true, status: "CONNECTED" })
+      expect(vi.getTimerCount()).toBe(0)
+    }
+    finally { f.respond(request, { code: "SYNTHETIC_STOP", message: "fixture", retryable: false }, "core.error"); await pending }
+  })
+  it("keeps a rank refresh alive across multiple 90-second windows", async () => {
+    const f = await setup()
+    let settled = false
+    const pending = controller.refreshBilibiliLiveRanks({ roomMonitorId: id })
+      .then(value => { settled = true; return value }, (error: unknown) => { settled = true; return error })
+    const request = f.requests.at(-1)!
+    expect(request.keepAlive).toBe(true)
+    for (let count = 0; count < 4; count++) {
+      await vi.advanceTimersByTimeAsync(60_000)
+      f.respond(request, { requestType: request.type })
+      await Promise.resolve()
+      expect(settled).toBe(false)
+    }
+    f.respond(request, { roomMonitorId: id, successCount: 1, errors: [],
+      summary: { roomMonitorId: id, roomId: "102", ruid: "2", snapshots: [] } }, request.type + ".result")
+    expect(await pending).toMatchObject({ successCount: 1 })
+    expect(vi.getTimerCount()).toBe(0)
+  })
   it("keeps a live command pending for longer than 90 seconds and returns its actual result", async () => {
     const f = await setup()
     let settled = false

@@ -21,6 +21,7 @@ import {
 } from "@bmd/storage"
 
 import { CoreApplicationError } from "./account-subject-service"
+import { LocalRequestRateLimiter } from "./local-request-rate-limiter"
 
 const AUDIENCE_ENDPOINT = "xlive/general-interface/v1/rank/queryContributionRank" as const
 const AUDIENCE_FALLBACK_ENDPOINT = "xlive/general-interface/v1/rank/getOnlineGoldRank" as const
@@ -58,13 +59,21 @@ export interface BilibiliLiveRankServiceOptions {
   now: () => Date
   idFactory: () => string
   sleep?: (milliseconds: number) => Promise<void>
+  rateLimiter?: LocalRequestRateLimiter
   requestMinIntervalMs?: number
 }
 
-export class BilibiliLiveRankService {
-  private lastRequestAt: number | undefined
+class RankFetchFailure extends Error {
+  constructor(readonly code: string, message: string) { super(message) }
+}
 
-  constructor(private readonly options: BilibiliLiveRankServiceOptions) {}
+export class BilibiliLiveRankService {
+  private readonly rateLimiter: LocalRequestRateLimiter
+  private readonly lifetime = new AbortController()
+
+  constructor(private readonly options: BilibiliLiveRankServiceOptions) {
+    this.rateLimiter = options.rateLimiter ?? new LocalRequestRateLimiter(options.now)
+  }
 
   summary(roomMonitorId: string): BilibiliLiveRankSummary {
     return this.toSummary(this.requireRoom(roomMonitorId))
@@ -92,6 +101,7 @@ export class BilibiliLiveRankService {
   }
 
   async refresh(input: BilibiliLiveRankRefreshInput): Promise<BilibiliLiveRankRefreshResult> {
+    this.ensureRunning()
     const command = BilibiliLiveRankRefreshInputSchema.parse(input)
     const room = this.requireRoom(command.roomMonitorId)
     const kinds = this.selectedKinds(command.families, command.types)
@@ -104,10 +114,13 @@ export class BilibiliLiveRankService {
     for (const kind of kinds) {
       for (let page = 1; page <= command.maxPages; page += 1) {
         try {
+          this.ensureRunning()
           const fetched = await this.fetchKind(room, kind, page, command.force, taskId)
+          this.ensureRunning()
           this.persist(room, fetched)
           successCount += 1
         } catch (error) {
+          this.ensureRunning()
           errors.push(`${kind.label}：${errorMessage(error)}`)
           break
         }
@@ -122,6 +135,8 @@ export class BilibiliLiveRankService {
   }
 
   async stop(): Promise<void> {
+    if (this.lifetime.signal.aborted) return
+    this.lifetime.abort()
     await this.options.source.stop?.()
   }
 
@@ -163,6 +178,8 @@ export class BilibiliLiveRankService {
         forceRefreshWbi: force
       })
     } catch (error) {
+      this.ensureRunning()
+      if (!(error instanceof RankFetchFailure)) throw error
       if (!force && errorCode(error) === "BILIBILI_RISK_CONTROL") {
         return this.fetchWithLog({
           ...base,
@@ -189,27 +206,18 @@ export class BilibiliLiveRankService {
   private async fetchWithLog(
     request: BilibiliLiveRankWorkerRequest
   ): Promise<BilibiliLiveRankFetchedSnapshot> {
-    await this.acquireRateLimit()
+    this.ensureRunning()
     const started = performance.now()
+    await this.acquireRateLimit()
+    this.ensureRunning()
+    let result: BilibiliLiveRankFetchedSnapshot
     try {
-      const result = BilibiliLiveRankFetchedSnapshotSchema.parse(
+      result = BilibiliLiveRankFetchedSnapshotSchema.parse(
         await this.options.source.fetch(request)
       )
-      this.options.database.insertBilibiliApiCall({
-        callId: this.options.idFactory(),
-        taskId: request.taskId,
-        attempt: request.attempt,
-        endpointKey: result.sourceEndpoint,
-        mid: request.ruid,
-        statusCode: result.statusCode,
-        durationMs: result.durationMs,
-        errorType: null,
-        retryable: false,
-        evidenceObjectId: result.evidenceObject.objectId,
-        createdAt: result.capturedAt
-      }, { ...result.evidenceObject, createdAt: result.capturedAt })
-      return result
+      this.ensureRunning()
     } catch (error) {
+      this.ensureRunning()
       this.options.database.insertBilibiliApiCall({
         callId: this.options.idFactory(),
         taskId: request.taskId,
@@ -217,14 +225,22 @@ export class BilibiliLiveRankService {
         endpointKey: request.endpoint ?? (request.family === "GUARD" ? GUARD_ENDPOINT : AUDIENCE_ENDPOINT),
         mid: request.ruid,
         statusCode: errorNumber(error, "statusCode"),
-        durationMs: Math.max(0, Math.round(performance.now() - started)),
+        durationMs: Math.max(0, Math.floor(performance.now() - started)),
         errorType: errorCode(error),
         retryable: errorBoolean(error, "retryable"),
         evidenceObjectId: null,
         createdAt: this.options.now().toISOString()
       })
-      throw error
+      throw new RankFetchFailure(errorCode(error), errorMessage(error))
     }
+    this.options.database.insertBilibiliApiCall({
+      callId: this.options.idFactory(), taskId: request.taskId, attempt: request.attempt,
+      endpointKey: result.sourceEndpoint, mid: request.ruid, statusCode: result.statusCode,
+      durationMs: Math.max(0, Math.floor(performance.now() - started)),
+      errorType: null, retryable: false, evidenceObjectId: result.evidenceObject.objectId,
+      createdAt: result.capturedAt
+    }, { ...result.evidenceObject, createdAt: result.capturedAt })
+    return result
   }
 
   private persist(
@@ -372,12 +388,15 @@ export class BilibiliLiveRankService {
   }
 
   private async acquireRateLimit(): Promise<void> {
-    const minimum = Math.max(0, this.options.requestMinIntervalMs ?? 1_500)
-    const now = this.options.now().getTime()
-    if (this.lastRequestAt !== undefined && now - this.lastRequestAt < minimum) {
-      await (this.options.sleep ?? delay)(minimum - (now - this.lastRequestAt))
+    await this.rateLimiter.acquire({ platformCode: "bilibili-live", policyKey: "live-rank",
+      minIntervalMs: Math.max(0, this.options.requestMinIntervalMs ?? 1_500), signal: this.lifetime.signal,
+      ...(this.options.sleep ? { sleep: this.options.sleep } : {}) })
+  }
+
+  private ensureRunning(): void {
+    if (this.lifetime.signal.aborted) {
+      throw new CoreApplicationError("CORE_STOPPED", "本地榜单采集已停止。", false)
     }
-    this.lastRequestAt = this.options.now().getTime()
   }
 }
 
@@ -428,8 +447,4 @@ function errorNumber(error: unknown, key: string): number | null {
   if (!error || typeof error !== "object" || !(key in error)) return null
   const value = error[key as keyof typeof error]
   return typeof value === "number" ? value : null
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }

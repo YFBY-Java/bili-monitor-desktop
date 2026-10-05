@@ -41,9 +41,21 @@ describe("DesktopWorkspace", () => {
       bind: async () => { throw new Error("not used during server render") },
       workbench: async () => { throw new Error("not used during server render") },
       trends: async () => { throw new Error("not used during server render") },
+      workbenchV2: async () => { throw new Error("not used during server render") },
+      trendsV2: async () => { throw new Error("not used during server render") },
       updateLayout: async () => []
     },
     bilibiliFollowers: {
+      list: async () => ({ items: [], total: 0, snapshotAt: "2026-08-29T12:00:00.000Z" }),
+      add: async () => { throw new Error("not used during server render") },
+      updateStatus: async () => { throw new Error("not used during server render") },
+      updateSettings: async () => { throw new Error("not used during server render") },
+      refresh: async () => { throw new Error("not used during server render") },
+      remove: async () => ({ deleted: true }),
+      trend: async () => { throw new Error("not used during server render") },
+      trends: async () => []
+    },
+    bilibiliFollowersV2: {
       list: async () => ({ items: [], total: 0, snapshotAt: "2026-08-29T12:00:00.000Z" }),
       add: async () => { throw new Error("not used during server render") },
       updateStatus: async () => { throw new Error("not used during server render") },

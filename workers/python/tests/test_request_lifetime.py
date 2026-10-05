@@ -35,18 +35,34 @@ def test_runtime_keep_alive_shared_fixture(fixture):
             RuntimeEnvelope.model_validate(value)
 
 
-def request(keep_alive=True):
+def request(keep_alive=True, message_type="bilibili.live.fetch-room-init"):
     return (
         json.dumps(
             {
                 "id": "request",
-                "type": "bilibili.live.fetch-room-init",
+                "type": message_type,
                 "version": 1,
                 "timestamp": "2026-09-13T00:00:00Z",
                 "correlationId": "correlation",
                 "traceId": "trace",
                 "keepAlive": keep_alive,
-                "payload": {"taskId": "t", "attempt": 1, "leaseId": "l", "roomId": "2"},
+                "payload": {
+                    "taskId": "t",
+                    "attempt": 1,
+                    "leaseId": "l",
+                    "roomId": "2",
+                    **(
+                        {
+                            "ruid": "3",
+                            "family": "GUARD",
+                            "type": "guard_weekly",
+                            "page": 1,
+                            "pageSize": 30,
+                        }
+                        if message_type == "bilibili.live.rank.fetch"
+                        else {}
+                    ),
+                },
             }
         )
         + "\n"
@@ -62,7 +78,12 @@ def test_opt_in_envelope_and_old_output_shape():
     assert "keepAlive" not in old.model_dump(mode="json")
 
 
-def test_live_request_emits_liveness_without_returning_it_as_business_success(tmp_path):
+@pytest.mark.parametrize(
+    "message_type", ["bilibili.live.fetch-room-init", "bilibili.live.rank.fetch"]
+)
+def test_live_request_emits_liveness_without_returning_it_as_business_success(
+    tmp_path, message_type
+):
     async def scenario():
         observed = asyncio.Event()
 
@@ -82,16 +103,48 @@ def test_live_request_emits_liveness_without_returning_it_as_business_success(tm
             )
 
         output = Output()
+
+        async def rank_fetch(payload, directory):
+            return await fetch("xlive/app-room/v2/guardTab/topListNew", payload, directory)
+
         await run_stdio(
-            WorkerRuntime(role="crawler", data_directory=tmp_path, live_fetcher=fetch),
-            io.StringIO(request()),
+            WorkerRuntime(
+                role="crawler", data_directory=tmp_path, live_fetcher=fetch, rank_fetcher=rank_fetch
+            ),
+            io.StringIO(request(message_type=message_type)),
             output,
         )
         messages = [json.loads(line) for line in output.getvalue().splitlines()]
         assert messages[0]["type"] == "worker.request-alive"
-        assert messages[0]["payload"] == {"requestType": "bilibili.live.fetch-room-init"}
+        assert messages[0]["payload"] == {"requestType": message_type}
         assert messages[-1]["type"] == "worker.error"
         assert all(m["id"] == "request" and m["traceId"] == "trace" for m in messages)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("opt_in", [None, False])
+def test_legacy_rank_caller_gets_only_business_response(tmp_path, opt_in):
+    async def scenario():
+        async def fetch(payload, directory):
+            await asyncio.sleep(0)
+            return {"legacy": True}
+
+        value = json.loads(request(message_type="bilibili.live.rank.fetch"))
+        if opt_in is None:
+            del value["keepAlive"]
+        else:
+            value["keepAlive"] = opt_in
+        output = io.StringIO()
+        await run_stdio(
+            WorkerRuntime(role="crawler", data_directory=tmp_path, rank_fetcher=fetch),
+            io.StringIO(json.dumps(value) + "\n"),
+            output,
+        )
+        messages = [json.loads(line) for line in output.getvalue().splitlines()]
+        assert len(messages) == 1
+        assert messages[0]["type"] == "bilibili.live.rank.fetch.result"
+        assert "keepAlive" not in messages[0]
 
     asyncio.run(scenario())
 

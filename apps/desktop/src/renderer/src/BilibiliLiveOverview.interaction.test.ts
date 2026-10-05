@@ -1,12 +1,48 @@
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import react from "@vitejs/plugin-react"
-import { chromium, type Browser, type Page } from "playwright"
+import { chromium, type Browser, type Page, type Request } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
 
+type SetupProbe = {
+  startedAt: number
+  finished: boolean
+  phases: { phase: string; ms: number }[]
+  pendingResources: Map<Request, string>
+  pendingResourceCount: number
+  resourceFailures: { kind: "requestfailed" | "response"; pathname: string; status?: number }[]
+  failureCount: number
+}
+
 describe("original live loadAll and overview", () => {
   let server: ViteDevServer, browser: Browser, page: Page, url: string
+  let setupProbe: SetupProbe | undefined
+  function recordSetupPhase(probe: SetupProbe, phase: string): void {
+    if (probe.phases.length < 100) probe.phases.push({ phase, ms: Math.round(performance.now() - probe.startedAt) })
+  }
+  function watchSetupResources(setupPage: Page, probe: SetupProbe): void {
+    const recordFailure = (failure: SetupProbe["resourceFailures"][number]): void => {
+      probe.failureCount++
+      if (probe.resourceFailures.length < 100) probe.resourceFailures.push(failure)
+    }
+    setupPage.on("request", request => {
+      probe.pendingResourceCount++
+      if (probe.pendingResources.size < 100) probe.pendingResources.set(request, new URL(request.url()).pathname.slice(0, 256))
+    })
+    setupPage.on("requestfinished", request => {
+      probe.pendingResourceCount--
+      probe.pendingResources.delete(request)
+    })
+    setupPage.on("requestfailed", request => {
+      probe.pendingResourceCount--
+      probe.pendingResources.delete(request)
+      recordFailure({ kind: "requestfailed", pathname: new URL(request.url()).pathname.slice(0, 256) })
+    })
+    setupPage.on("response", response => {
+      if (response.status() >= 400) recordFailure({ kind: "response", pathname: new URL(response.url()).pathname.slice(0, 256), status: response.status() })
+    })
+  }
   beforeAll(async () => {
     server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
       cacheDir: resolve("node_modules/.vite-live-overview-test"), plugins: [react()],
@@ -19,13 +55,35 @@ describe("original live loadAll and overview", () => {
   }, 30_000)
   afterAll(async () => { await browser?.close(); await server?.close() })
   beforeEach(async () => {
-    page = await browser.newPage({ viewport: { width: 1600, height: 1100 } })
+    const probe: SetupProbe = { startedAt: performance.now(), finished: false, phases: [], pendingResources: new Map(), pendingResourceCount: 0, resourceFailures: [], failureCount: 0 }
+    setupProbe = probe
+    recordSetupPhase(probe, "page:create")
+    const setupPage = await browser.newPage({ viewport: { width: 1600, height: 1100 } })
+    page = setupPage
+    recordSetupPhase(probe, "page:created")
+    if (probe.finished) console.warn("Late live overview setup page created", { phases: probe.phases })
+    watchSetupResources(setupPage, probe)
     page.setDefaultTimeout(2500)
-    await page.goto(url)
+    // Vite may still be optimizing local modules; the heading below is the UI readiness signal.
+    recordSetupPhase(probe, "navigate:start")
+    await page.goto(url, { waitUntil: "commit" })
+    recordSetupPhase(probe, "navigate:committed")
+    recordSetupPhase(probe, "heading:wait")
     await page.getByRole("heading", { name: "测试主播1", exact: true }).waitFor({ timeout: 15_000 })
+    recordSetupPhase(probe, "heading-ready")
+    recordSetupPhase(probe, "trend:wait")
     await expect.poll(() => page.evaluate(() => window.liveFixture.trendRequests.length)).toBeGreaterThan(0)
+    recordSetupPhase(probe, "trend-ready")
   })
-  afterEach(async () => { await page?.close() })
+  afterEach(async ({ task }) => {
+    const probe = setupProbe
+    if (probe) probe.finished = true
+    if (task.result?.state === "fail" && probe) console.warn("Live overview setup probe", {
+      phases: probe.phases, pendingResourceCount: probe.pendingResourceCount, pendingResources: [...probe.pendingResources.values()],
+      failureCount: probe.failureCount, resourceFailures: probe.resourceFailures
+    })
+    await page?.close()
+  })
   const refresh = () => page.getByRole("button", { name: "刷新监控数据" }).click()
   const roomNames = () => page.locator(".live-room-card h3").allTextContents()
   async function changeProjection() {
@@ -89,7 +147,7 @@ describe("original live loadAll and overview", () => {
   })
 
   it("distinguishes a failed first load from empty rooms or events and can retry", async () => {
-    await page.goto(`${url}?summary-failure`)
+    await page.goto(`${url}?summary-failure`, { waitUntil: "commit" })
     await page.getByRole("alert").filter({ hasText: "首次汇总读取失败" }).waitFor()
     expect(await roomNames()).toEqual([])
     await page.getByText("未能读取直播监控数据", { exact: true }).waitFor()
@@ -146,7 +204,7 @@ describe("original live loadAll and overview", () => {
 
   it("shows original summary fields and same-page event names with a live relative clock", async () => {
     await page.clock.install({ time: new Date("2026-09-13T04:00:00Z") })
-    await page.goto(url)
+    await page.goto(url, { waitUntil: "commit" })
     await page.getByRole("heading", { name: "测试主播1", exact: true }).waitFor()
     await page.evaluate(() => {
       const event = { id: crypto.randomUUID(), monitorId: "018f0f39-7b5e-7cc1-962d-000000000000", uid: "20", roomId: "120",

@@ -32,8 +32,10 @@ export const BilibiliSubjectBindingSchema = z.object({
 
 export const BilibiliSubjectSchema = z.object({
   id: z.uuid(),
-  displayName: z.string().trim().min(1).max(160),
-  avatarUrl: OptionalUrlSchema,
+  // Imported follower profiles are raw text; the database bound is characters,
+  // not UTF-16 units. Keep manual input URL/name validation separate below.
+  displayName: z.string().min(1).refine(value => Array.from(value).length <= 160),
+  avatarUrl: z.string().optional(),
   remark: z.string().optional(),
   tags: z.array(SubjectTagSchema).max(12),
   monitorStatus: BilibiliSubjectStatusSchema,
@@ -116,7 +118,7 @@ export const BilibiliSubjectUserSchema = z.object({
   monitorId: MonitorIdSchema,
   mid: BilibiliUidSchema,
   nickname: z.string(),
-  avatarUrl: OptionalUrlSchema,
+  avatarUrl: z.string().optional(),
   profileUrl: OptionalUrlSchema,
   followerCount: z.number().int().nonnegative().optional(),
   followingCount: z.number().int().nonnegative().optional(),

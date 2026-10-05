@@ -1,0 +1,21 @@
+[
+  { "name": "ordinary name", "input": "合成昵称", "valid": true },
+  { "name": "keep surrounding whitespace", "input": "  合成昵称\t ", "valid": true },
+  { "name": "Java ideographic surrounding whitespace", "input": "\u3000合成昵称\u3000", "valid": true },
+  { "name": "NBSP is not Java blank", "input": "\u00a0", "valid": true },
+  { "name": "figure space is not Java blank", "input": "\u2007", "valid": true },
+  { "name": "narrow NBSP is not Java blank", "input": "\u202f", "valid": true },
+  { "name": "BOM is not Java blank", "input": "\ufeff", "valid": true },
+  { "name": "NEL is not Java blank", "input": "\u0085", "valid": true },
+  { "name": "zero width space is not Java blank", "input": "\u200b", "valid": true },
+  { "name": "empty text", "input": "", "valid": false },
+  { "name": "ASCII blank", "input": " \t\r\n", "valid": false },
+  { "name": "Java blank set", "input": "\u0009\u000a\u000b\u000c\u000d\u001c\u001d\u001e\u001f\u0020\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2008\u2009\u200a\u2028\u2029\u205f\u3000", "valid": false },
+  { "name": "null", "input": null, "valid": false },
+  { "name": "raw boolean is not a typed profile string", "input": true, "valid": false },
+  { "name": "raw number is not a typed profile string", "input": 12, "valid": false },
+  { "name": "raw object is not a typed profile string", "input": {}, "valid": false },
+  { "name": "raw array is not a typed profile string", "input": [], "valid": false },
+  { "name": "ephemeral names have no varchar bound", "input": "名", "repeat": 161, "valid": true },
+  { "name": "supplementary Unicode characters", "input": "🌸", "repeat": 160, "valid": true }
+]

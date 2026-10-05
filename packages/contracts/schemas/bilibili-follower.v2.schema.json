@@ -1,0 +1,426 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bilimonitor.local/schemas/bilibili-follower.v2.schema.json",
+  "title": "BiliMonitor local bilibili-follower contracts v2",
+  "$defs": {
+    "JavaLongString": {
+      "type": "string",
+      "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|9223372036854775807|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6])|-(?:[1-9][0-9]{0,17}|9223372036854775808|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7]))(?![\\s\\S])"
+    },
+    "PositiveJavaLongString": {
+      "type": "string",
+      "pattern": "^(?:[1-9][0-9]{0,17}|9223372036854775807|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6])(?![\\s\\S])"
+    },
+    "BilibiliFollowerProfileV2": {
+      "type": "object",
+      "properties": {
+        "mid": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "nickname": {
+          "type": "string",
+          "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u1680\\u2000-\\u2006\\u2008-\\u200a\\u2028\\u2029\\u205f\\u3000]"
+        }
+      },
+      "required": [
+        "mid",
+        "nickname"
+      ],
+      "additionalProperties": false
+    },
+    "BilibiliFollowerPointV2": {
+      "type": "object",
+      "properties": {
+        "capturedAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:[0-9][0-9][2468][048]|[0-9][0-9][13579][26]|[0-9][0-9]0[48]|[02468][048]00|[13579][26]00)-02-29|[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|(?:02)-(?:0[1-9]|1[0-9]|2[0-8])))T(?:(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\\.[0-9]+)?)?(?:Z))$"
+        },
+        "followerCount": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "followingCount": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "sourceEndpoint": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "capturedAt",
+        "followerCount",
+        "sourceEndpoint"
+      ],
+      "additionalProperties": false
+    },
+    "BilibiliFollowerMonitorV2": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "mid": {
+          "$ref": "#/$defs/PositiveJavaLongString"
+        },
+        "nickname": {
+          "type": "string",
+          "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u1680\\u2000-\\u2006\\u2008-\\u200a\\u2028\\u2029\\u205f\\u3000]",
+          "maxLength": 160
+        },
+        "avatarUrl": {
+          "type": "string",
+          "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u1680\\u2000-\\u2006\\u2008-\\u200a\\u2028\\u2029\\u205f\\u3000]"
+        },
+        "profileUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "currentFollowerCount": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "followingCount": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "deltaSincePrevious": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "growthRateSincePrevious": {
+          "type": "number"
+        },
+        "lastSnapshotAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:[0-9][0-9][2468][048]|[0-9][0-9][13579][26]|[0-9][0-9]0[48]|[02468][048]00|[13579][26]00)-02-29|[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|(?:02)-(?:0[1-9]|1[0-9]|2[0-8])))T(?:(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\\.[0-9]+)?)?(?:Z))$"
+        },
+        "lastSuccessAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:[0-9][0-9][2468][048]|[0-9][0-9][13579][26]|[0-9][0-9]0[48]|[02468][048]00|[13579][26]00)-02-29|[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|(?:02)-(?:0[1-9]|1[0-9]|2[0-8])))T(?:(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\\.[0-9]+)?)?(?:Z))$"
+        },
+        "nextCollectAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:[0-9][0-9][2468][048]|[0-9][0-9][13579][26]|[0-9][0-9]0[48]|[02468][048]00|[13579][26]00)-02-29|[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|(?:02)-(?:0[1-9]|1[0-9]|2[0-8])))T(?:(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\\.[0-9]+)?)?(?:Z))$"
+        },
+        "monitorStatus": {
+          "type": "string",
+          "enum": [
+            "ACTIVE",
+            "PAUSED"
+          ]
+        },
+        "intervalSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2592000
+        },
+        "lastErrorType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lastErrorMessage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lastErrorAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:[0-9][0-9][2468][048]|[0-9][0-9][13579][26]|[0-9][0-9]0[48]|[02468][048]00|[13579][26]00)-02-29|[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|(?:02)-(?:0[1-9]|1[0-9]|2[0-8])))T(?:(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\\.[0-9]+)?)?(?:Z))$"
+        },
+        "sourceEndpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recentTrend": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BilibiliFollowerPointV2"
+          }
+        },
+        "version": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "id",
+        "mid",
+        "nickname",
+        "profileUrl",
+        "monitorStatus",
+        "intervalSeconds",
+        "recentTrend",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "BilibiliFollowerMonitorListV2": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BilibiliFollowerMonitorV2"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "snapshotAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:[0-9][0-9][2468][048]|[0-9][0-9][13579][26]|[0-9][0-9]0[48]|[02468][048]00|[13579][26]00)-02-29|[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|(?:02)-(?:0[1-9]|1[0-9]|2[0-8])))T(?:(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\\.[0-9]+)?)?(?:Z))$"
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "snapshotAt"
+      ],
+      "additionalProperties": false
+    },
+    "BilibiliFollowerTrendV2": {
+      "type": "object",
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/BilibiliFollowerMonitorV2"
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BilibiliFollowerPointV2"
+          }
+        }
+      },
+      "required": [
+        "user",
+        "points"
+      ],
+      "additionalProperties": false
+    },
+    "BilibiliFollowerTrendListV2": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/BilibiliFollowerTrendV2"
+      }
+    },
+    "BilibiliFollowerCollectResultV2": {
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "mid": {
+          "$ref": "#/$defs/PositiveJavaLongString"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "followerCount": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "capturedAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:[0-9][0-9][2468][048]|[0-9][0-9][13579][26]|[0-9][0-9]0[48]|[02468][048]00|[13579][26]00)-02-29|[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|(?:02)-(?:0[1-9]|1[0-9]|2[0-8])))T(?:(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\\.[0-9]+)?)?(?:Z))$"
+        },
+        "sourceEndpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "userId",
+        "mid",
+        "success",
+        "capturedAt",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "BilibiliFollowerFetchedSnapshotV2": {
+      "type": "object",
+      "properties": {
+        "mid": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "nickname": {
+          "type": "string",
+          "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u1680\\u2000-\\u2006\\u2008-\\u200a\\u2028\\u2029\\u205f\\u3000]"
+        },
+        "avatarUrl": {
+          "type": "string",
+          "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u1680\\u2000-\\u2006\\u2008-\\u200a\\u2028\\u2029\\u205f\\u3000]"
+        },
+        "profileUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "followerCount": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "followingCount": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "fetchedAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:[0-9][0-9][2468][048]|[0-9][0-9][13579][26]|[0-9][0-9]0[48]|[02468][048]00|[13579][26]00)-02-29|[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|(?:02)-(?:0[1-9]|1[0-9]|2[0-8])))T(?:(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\\.[0-9]+)?)?(?:Z))$"
+        },
+        "sourceEndpoint": {
+          "type": "string",
+          "enum": [
+            "x/web-interface/card",
+            "x/relation/stat"
+          ]
+        },
+        "evidenceObject": {
+          "type": "object",
+          "properties": {
+            "objectId": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "relativePath": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "sizeBytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "mediaType": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "objectId",
+            "relativePath",
+            "sha256",
+            "sizeBytes",
+            "mediaType"
+          ],
+          "additionalProperties": false
+        },
+        "statusCode": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "mid",
+        "profileUrl",
+        "followerCount",
+        "fetchedAt",
+        "sourceEndpoint",
+        "evidenceObject",
+        "statusCode",
+        "durationMs"
+      ],
+      "additionalProperties": false
+    },
+    "BilibiliFollowerFetchRequestV2": {
+      "type": "object",
+      "properties": {
+        "httpConfiguration": {
+          "type": "object",
+          "properties": {
+            "connectTimeoutMs": {
+              "default": 5000,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "readTimeoutMs": {
+              "default": 10000,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "userAgent": {
+              "default": "SocialDataMonitor/0.1 (+low-frequency public Bilibili follower monitor)",
+              "type": "string",
+              "pattern": "^[\\t\\u0020-\\u007e]*$",
+              "not": {
+                "pattern": "[^\\t\\u0020-\\u007e]"
+              }
+            },
+            "referer": {
+              "default": "https://www.bilibili.com/",
+              "type": "string",
+              "pattern": "^[\\t\\u0020-\\u007e]*$",
+              "not": {
+                "pattern": "[^\\t\\u0020-\\u007e]"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "taskId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "leaseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mid": {
+          "$ref": "#/$defs/PositiveJavaLongString"
+        }
+      },
+      "required": [
+        "taskId",
+        "attempt",
+        "leaseId",
+        "mid"
+      ],
+      "additionalProperties": false
+    },
+    "AddBilibiliFollowerMonitorInputV2": {
+      "type": "object",
+      "properties": {
+        "mid": {
+          "$ref": "#/$defs/PositiveJavaLongString"
+        },
+        "intervalSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2592000
+        }
+      },
+      "required": [
+        "mid"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

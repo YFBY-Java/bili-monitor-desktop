@@ -2,11 +2,26 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import type {
   BilibiliSubject,
-  BilibiliSubjectTrend,
-  BilibiliSubjectWorkbench
+  BilibiliSubjectTrendV2,
+  BilibiliSubjectWorkbenchV2
 } from "@bmd/contracts"
 
 import { BilibiliSubjectListView, BilibiliSubjectWorkbenchView } from "./BilibiliSubjectWorkspace"
+
+it.each(["not-a-url", "false", "file:///D:/synthetic-secret", "javascript:alert(1)"])(
+  "uses the subject fallback for raw follower avatar %s", avatarUrl => {
+    const html = renderToStaticMarkup(<BilibiliSubjectListView subjects={[{ ...subject, avatarUrl }]}
+      loading={false} error={null} onOpen={() => {}} onDelete={() => {}} onRefresh={() => {}} />)
+    expect(html).not.toContain("<img ")
+    expect(html).toContain('class="subject-avatar"><span>碧</span>')
+  })
+it("upgrades the workbench's original HTTP CDN avatar without mutating its data", () => {
+  const raw = { ...subject, avatarUrl: "http://i2.hdslb.com/synthetic.jpg" }
+  const html = renderToStaticMarkup(<BilibiliSubjectListView subjects={[raw]} loading={false} error={null}
+    onOpen={() => {}} onDelete={() => {}} onRefresh={() => {}} />)
+  expect(html).toContain('src="https://i2.hdslb.com/synthetic.jpg"')
+  expect(raw.avatarUrl).toBe("http://i2.hdslb.com/synthetic.jpg")
+})
 
 const timestamp = "2026-08-29T12:00:00.000Z"
 const subjectId = "018f0f39-7b5e-4cc1-862d-9a208b3d0b00"
@@ -37,15 +52,15 @@ const subject: BilibiliSubject = {
   }
 }
 
-const workbench: BilibiliSubjectWorkbench = {
+const workbench: BilibiliSubjectWorkbenchV2 = {
   subject,
   bilibiliBinding: subject.bilibiliBinding,
   bilibiliUser: {
     monitorId: userMonitorId,
     mid: "22",
     nickname: "碧诗",
-    followerCount: 1_000,
-    followerDelta24h: 8,
+    followerCount: "1000",
+    followerDelta24h: "8",
     monitorStatus: "ACTIVE",
     lastSuccessAt: timestamp
   },
@@ -62,8 +77,8 @@ const workbench: BilibiliSubjectWorkbench = {
     lastSuccessAt: timestamp
   },
   summary: {
-    followerCount: 1_000,
-    followerDelta24h: 8,
+    followerCount: "1000",
+    followerDelta24h: "8",
     liveStatus: 1,
     onlineCount: 200,
     onlinePeak24h: 300,
@@ -98,12 +113,12 @@ const workbench: BilibiliSubjectWorkbench = {
   }]
 }
 
-const trend: BilibiliSubjectTrend = {
+const trend: BilibiliSubjectTrendV2 = {
   subjectId,
   metrics: ["follower", "live_online"],
   range: "24h",
   bucket: "5m",
-  points: [{ bucketAt: timestamp, followerCount: 1_000, liveOnlineCount: 200 }]
+  points: [{ bucketAt: timestamp, followerCount: "1000", liveOnlineCount: 200 }]
 }
 
 describe("BilibiliSubjectWorkspace", () => {

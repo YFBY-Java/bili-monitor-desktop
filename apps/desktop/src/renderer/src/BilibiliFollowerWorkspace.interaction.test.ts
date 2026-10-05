@@ -1,7 +1,8 @@
 import { fileURLToPath } from "node:url"
+import { readFileSync } from "node:fs"
 
 import react from "@vitejs/plugin-react"
-import { chromium, type Browser, type Page } from "playwright"
+import { chromium, type Browser, type Page, type Request } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
 
@@ -11,6 +12,7 @@ describe("follower workflow in the renderer", () => {
   let browser: Browser
   let page: Page
   let url: string
+  let setupProbe: { startedAt: number; phases: { phase: string; ms: number }[]; pending: Map<Request, string>; pendingCount: number; failed: string[]; failureCount: number; finished: boolean }
   beforeAll(async () => {
     server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
       plugins: [react()], server: { host: "127.0.0.1", port: 0 }, logLevel: "error" })
@@ -22,11 +24,189 @@ describe("follower workflow in the renderer", () => {
   }, 30_000)
   afterAll(async () => { await browser?.close(); await server?.close() })
   beforeEach(async () => {
+    const probe = { startedAt: performance.now(), phases: [] as { phase: string; ms: number }[], pending: new Map<Request, string>(), pendingCount: 0, failed: [] as string[], failureCount: 0, finished: false }
+    setupProbe = probe
+    const phase = (name: string) => { if (probe.phases.length < 100) probe.phases.push({ phase: name, ms: Math.round(performance.now() - probe.startedAt) }) }
+    phase("page:create")
     page = await browser.newPage()
+    phase("page:created")
+    if (probe.finished) console.warn("Follower workspace page created after teardown", { phases: probe.phases })
+    page.on("request", request => {
+      probe.pendingCount++
+      if (probe.pending.size < 100) probe.pending.set(request, new URL(request.url()).pathname.slice(0, 256))
+    })
+    page.on("requestfinished", request => { probe.pendingCount--; probe.pending.delete(request) })
+    page.on("requestfailed", request => {
+      const path = new URL(request.url()).pathname.slice(0, 256)
+      probe.pendingCount--
+      probe.pending.delete(request)
+      probe.failureCount++
+      if (probe.failed.length < 100) probe.failed.push(`failed:${path}`)
+    })
+    page.on("response", response => {
+      if (response.status() >= 400) {
+        probe.failureCount++
+        if (probe.failed.length < 100) probe.failed.push(`${response.status()}:${new URL(response.url()).pathname.slice(0, 256)}`)
+      }
+    })
+    phase("fixture:navigate")
     await page.goto(url)
+    phase("fixture:loaded")
     await page.getByText("测试用户1", { exact: true }).waitFor()
+    phase("fixture:ready")
   })
-  afterEach(async () => { await page?.close() })
+  afterEach(async ({ task }) => {
+    setupProbe.finished = true
+    if (task.result?.state === "fail") console.warn("Follower workspace setup phases", {
+      phases: setupProbe.phases, pendingCount: setupProbe.pendingCount, pending: [...setupProbe.pending.values()], failureCount: setupProbe.failureCount, failed: setupProbe.failed
+    })
+    await page?.close()
+  })
+
+  it("displays exact Long64 totals, detail values, negative changes and keyboard tooltips", async () => {
+    await page.evaluate(() => {
+      window.followerFixture.patchUser(0, { currentFollowerCount: "9223372036854775807", followingCount: "-9223372036854775808", deltaSincePrevious: "-1" })
+      window.followerFixture.patchUser(1, { currentFollowerCount: "9223372036854775807", deltaSincePrevious: "1" })
+      window.followerFixture.history["2"] = [
+        { capturedAt: "2026-10-05T01:00:00Z", followerCount: "9223372036854775806", sourceEndpoint: "card" },
+        { capturedAt: "2026-10-05T01:01:00Z", followerCount: "9223372036854775807", sourceEndpoint: "card" }
+      ]
+    })
+    await page.getByRole("button", { name: "刷新列表", exact: true }).click()
+    await page.getByRole("button", { name: "展开测试用户1的详情" }).click()
+    await expect.poll(() => page.getByRole("region", { name: "粉丝采集汇总" }).locator("strong").first().textContent())
+      .toBe("18,446,744,073,709,551,914")
+    expect(await page.locator(".follower-counts").textContent()).toContain("9,223,372,036,854,775,807")
+    expect(await page.locator(".follower-counts").textContent()).toContain("关注 -9,223,372,036,854,775,808")
+    expect(await page.locator(".follower-tile-change strong").first().getAttribute("class")).toBe("is-negative")
+    await page.locator('.trend-selector input').first().check()
+    await expect.poll(() => page.locator(".follower-history-svg circle").count()).toBe(2)
+    const circles = page.locator(".follower-history-svg circle")
+    expect(await circles.first().getAttribute("cy")).not.toBe(await circles.last().getAttribute("cy"))
+    await circles.first().focus()
+    expect(await page.getByRole("tooltip").textContent()).toContain("9,223,372,036,854,775,806")
+    await page.keyboard.press("End")
+    expect(await page.getByRole("tooltip").textContent()).toContain("9,223,372,036,854,775,807")
+    expect(await page.locator(".trend-range").textContent()).toContain("区间净变化 +1")
+  })
+
+  it("submits a positive Long64 UID intact and rejects Long overflow before calling the v2 bridge", async () => {
+    await page.getByRole("button", { name: "添加用户", exact: true }).click()
+    const dialog = page.getByRole("dialog", { name: "添加 B站监控用户" })
+    await dialog.getByRole("textbox").fill("9223372036854775808")
+    await dialog.getByRole("button", { name: "添加监控", exact: true }).click()
+    expect(await page.evaluate(() => window.followerFixture.calls.filter(call => call === "add").length)).toBe(0)
+    await dialog.getByRole("alert").waitFor()
+    await dialog.getByRole("textbox").fill("9223372036854775807")
+    await dialog.getByRole("button", { name: "添加监控", exact: true }).click()
+    await dialog.waitFor({ state: "detached" })
+    expect(await page.evaluate(() => window.followerFixture.addRequests.at(-1)?.mid)).toBe("9223372036854775807")
+    expect(await page.evaluate(() => window.followerFixture.legacyCalls)).toEqual([])
+  })
+
+  it("normalizes original integer input forms without rounding the UID", async () => {
+    const inputs = [
+      [" 0002 ", "2"], ["+2", "2"], ["2.0", "2"], ["2.", "2"],
+      ["20e-1", "2"], [".2e1", "2"], ["0x10", "16"], ["0b10", "2"], ["0o10", "8"],
+      ["\uFEFF\u30002\u00A0", "2"], ["9007199254740993", "9007199254740993"],
+      ["9.223372036854775807e18", "9223372036854775807"]
+    ]
+    for (const [raw, canonical] of inputs) {
+      await page.getByRole("button", { name: "添加用户", exact: true }).click()
+      const dialog = page.getByRole("dialog", { name: "添加 B站监控用户" })
+      const input = dialog.getByRole("textbox")
+      await input.fill(raw!)
+      // Native pattern validation must not prevent our precise parser from running.
+      expect(await input.evaluate(element => (element as HTMLInputElement).checkValidity()), raw).toBe(true)
+      await dialog.getByRole("button", { name: "添加监控", exact: true }).click()
+      await dialog.waitFor({ state: "detached" })
+      expect(await page.evaluate(() => window.followerFixture.addRequests.at(-1)?.mid), raw).toBe(canonical)
+    }
+    expect(await page.evaluate(() => window.followerFixture.legacyCalls)).toEqual([])
+    expect(await page.evaluate(() => window.followerFixture.addRequests.length)).toBe(inputs.length)
+  })
+
+  it("shows a UID validation error for blank, fractional, overflow and invalid text without calling IPC", async () => {
+    await page.getByRole("button", { name: "添加用户", exact: true }).click()
+    const dialog = page.getByRole("dialog", { name: "添加 B站监控用户" })
+    for (const raw of ["", "  ", "0", "-2", "2.0000000000000001", "9007199254740991.1", "9223372036854775808", "0x8000000000000000", "1e21", "Infinity", "２", "2 2"]) {
+      const input = dialog.getByRole("textbox")
+      await input.fill(raw)
+      expect(await input.evaluate(element => (element as HTMLInputElement).checkValidity()), raw).toBe(true)
+      await dialog.getByRole("button", { name: "添加监控", exact: true }).click()
+      await expect.poll(() => dialog.getByRole("alert").textContent()).toContain("请输入有效 UID")
+      expect(await input.inputValue()).toBe(raw)
+    }
+    expect(await page.evaluate(() => window.followerFixture.addRequests)).toEqual([])
+    expect(await page.evaluate(() => window.followerFixture.legacyCalls)).toEqual([])
+  })
+
+  it("preserves the original UID and interval drafts after an add failure and retries the same exact UID", async () => {
+    await page.evaluate(() => { window.followerFixture.actionError = "合成添加失败" })
+    await page.getByRole("button", { name: "添加用户", exact: true }).click()
+    const dialog = page.getByRole("dialog", { name: "添加 B站监控用户" })
+    const raw = "+0009007199254740993"
+    await dialog.getByRole("textbox").fill(raw)
+    await dialog.getByRole("spinbutton").fill("120")
+    expect(await dialog.getByRole("textbox").evaluate(element => (element as HTMLInputElement).checkValidity())).toBe(true)
+    await dialog.getByRole("button", { name: "添加监控", exact: true }).click()
+    await dialog.getByRole("alert").filter({ hasText: "合成添加失败" }).waitFor()
+    expect(await dialog.getByRole("textbox").inputValue()).toBe(raw)
+    expect(await dialog.getByRole("spinbutton").inputValue()).toBe("120")
+    await expect.poll(() => dialog.getByRole("button", { name: "添加监控", exact: true }).isEnabled()).toBe(true)
+    await dialog.getByRole("textbox").fill("2.0000000000000001")
+    await dialog.getByRole("button", { name: "添加监控", exact: true }).click()
+    await expect.poll(() => dialog.getByRole("alert").textContent()).toContain("请输入有效 UID")
+    expect(await page.evaluate(() => window.followerFixture.addRequests.length)).toBe(1)
+    await dialog.getByRole("textbox").fill(raw)
+    await page.evaluate(() => { window.followerFixture.actionError = "" })
+    await dialog.getByRole("button", { name: "添加监控", exact: true }).click()
+    await dialog.waitFor({ state: "detached" })
+    expect(await page.evaluate(() => window.followerFixture.addRequests)).toEqual([
+      { mid: "9007199254740993", intervalSeconds: 120 },
+      { mid: "9007199254740993", intervalSeconds: 120 }
+    ])
+    expect(await page.evaluate(() => window.followerFixture.legacyCalls)).toEqual([])
+  })
+
+  it.each(["http://i2.hdslb.com/synthetic-csp-avatar.png", "  http://i0.hdslb.com/synthetic-csp-avatar.png  ", "//i1.hdslb.com/synthetic-csp-avatar.png"])(
+    "displays original CDN avatar %s under the actual production CSP", async raw => {
+      const html = readFileSync(new URL("../index.html", import.meta.url), "utf8")
+      const policy = html.match(/content="(default-src[^\"]+)"/)![1]!
+      const requests: string[] = []
+      await page.route("**/synthetic-csp-avatar.png", async route => {
+        requests.push(route.request().url())
+        await route.fulfill({ contentType: "image/png", body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64") })
+      })
+      await page.evaluate(content => {
+        const meta = document.createElement("meta")
+        meta.httpEquiv = "Content-Security-Policy"
+        meta.content = content
+        document.head.append(meta)
+      }, policy)
+      await page.evaluate(avatarUrl => window.followerFixture.patchUser(0, { avatarUrl }), raw)
+      await page.getByRole("button", { name: "刷新列表", exact: true }).click()
+      const tile = page.locator(".follower-card").first()
+      await expect.poll(() => tile.locator("img").evaluateAll(images => images.length === 1 && (images[0] as HTMLImageElement).naturalWidth > 0)).toBe(true)
+      await tile.locator(".follower-tile-expand").click()
+      await expect.poll(() => page.locator(".follower-monitor-detail img").evaluateAll(images => images.length === 1 && (images[0] as HTMLImageElement).naturalWidth > 0)).toBe(true)
+      expect(requests.length).toBeGreaterThan(0)
+      expect(requests.every(value => value.startsWith("https://"))).toBe(true)
+      await page.unroute("**/synthetic-csp-avatar.png")
+    })
+
+  it.each(["not-a-url", "file:///D:/synthetic-secret", "javascript:alert(1)", "data:image/svg+xml,synthetic"])(
+    "keeps original nickname and uses both avatar fallbacks for %s", async avatarUrl => {
+      await page.evaluate(value => window.followerFixture.patchUser(0, { nickname: "  合成原名  ", avatarUrl: value }), avatarUrl)
+      await page.getByRole("button", { name: "刷新列表", exact: true }).click()
+      const tile = page.locator(".follower-card").first()
+      await expect.poll(() => tile.locator(".follower-tile-identity strong").textContent()).toBe("  合成原名  ")
+      expect(await tile.locator("img").count()).toBe(0)
+      await tile.locator(".follower-tile-expand").click()
+      expect(await page.locator(".follower-monitor-detail img").count()).toBe(0)
+      expect(await page.locator(".follower-monitor-detail .follower-profile a").textContent()).toBe("  合成原名  ")
+    })
 
   it("shows original aggregate metrics and compact user tiles with one keyboard-operable detail", async () => {
     const summary = page.getByRole("region", { name: "粉丝采集汇总" })
@@ -67,7 +247,7 @@ describe("follower workflow in the renderer", () => {
     expect(await page.getByRole("spinbutton").inputValue()).toBe("600")
   })
 
-  it("ticks collection rhythm locally, marks only a real refresh in flight, and respects pause", async () => {
+  it("ticks collection rhythm locally without labelling manual refresh as automatic collection, and respects pause", async () => {
     await page.close()
     page = await browser.newPage()
     // Pin Date, not timers: Query notifications and the real one-second clock keep running.
@@ -87,7 +267,7 @@ describe("follower workflow in the renderer", () => {
     await page.getByRole("button", { name: "展开测试用户1的详情" }).click()
     await page.evaluate(() => { window.followerFixture.holdRefresh = true })
     await page.getByRole("button", { name: "立即刷新", exact: true }).click()
-    expect(await tile.locator(".follower-collect-brief").textContent()).toBe("采集中")
+    expect(await tile.locator(".follower-collect-brief").textContent()).toBe("30 秒后")
     await page.evaluate(() => window.followerFixture.releaseRefresh())
     await expect.poll(() => page.getByRole("button", { name: "暂停监控", exact: true }).isEnabled()).toBe(true)
     await page.getByRole("button", { name: "暂停监控", exact: true }).click()
@@ -110,13 +290,13 @@ describe("follower workflow in the renderer", () => {
     expect(await page.evaluate(() => window.followerFixture.calls.filter(call => call === "delete").length)).toBe(1)
   })
 
-  it("ends the collecting indicator when refresh ends even if projection reload is still pending", async () => {
+  it("does not label manual refresh as automatic collection or lock it during a pending list reload", async () => {
     await page.getByRole("button", { name: "展开测试用户1的详情" }).click()
     await page.evaluate(() => { window.followerFixture.holdListAfterRefresh = true })
     await page.getByRole("button", { name: "立即刷新", exact: true }).click()
     await expect.poll(() => page.evaluate(() => window.followerFixture.listWaiting)).toBe(true)
     expect(await page.locator(".follower-collect-brief").first().textContent()).not.toBe("采集中")
-    expect(await page.getByRole("button", { name: "立即刷新", exact: true }).isDisabled()).toBe(true)
+    expect(await page.getByRole("button", { name: "立即刷新", exact: true }).isEnabled()).toBe(true)
     await page.evaluate(() => window.followerFixture.releaseList())
     await expect.poll(() => page.getByRole("button", { name: "立即刷新", exact: true }).isEnabled()).toBe(true)
   })
@@ -175,7 +355,7 @@ describe("follower workflow in the renderer", () => {
 
   it("shows scheduled collection updates and preserves data if the next read fails", async () => {
     await page.getByRole("button", { name: "展开测试用户1的详情" }).click()
-    await page.evaluate(() => window.followerFixture.updateFirst(34567))
+    await page.evaluate(() => window.followerFixture.updateFirst("34567"))
     await page.getByText("34,567", { exact: true }).waitFor({ timeout: 6000 })
     await page.evaluate(() => { window.followerFixture.readError = "暂时无法读取本地数据" })
     await page.getByText("暂时无法读取本地数据", { exact: false }).waitFor({ timeout: 6000 })
@@ -196,17 +376,19 @@ describe("follower workflow in the renderer", () => {
     expect(await page.getByRole("alert").count()).toBe(0)
   })
 
-  it("validates intervals and keeps edited drafts when background data refreshes", async () => {
+  it("normalizes intervals and keeps edited drafts when background data refreshes", async () => {
     await page.getByRole("button", { name: "展开测试用户1的详情" }).click()
     expect(await page.getByRole("region", { name: "测试用户1监控详情" }).textContent()).toContain("关注 12")
     await page.locator(".follower-settings summary").first().click()
     const input = page.getByRole("spinbutton").first()
-    await page.evaluate(() => window.followerFixture.updateFirst(100, 120))
+    await page.evaluate(() => window.followerFixture.updateFirst("100", 120))
     await expect.poll(() => input.inputValue(), { timeout: 6000 }).toBe("120")
     await input.fill("0")
-    expect(await page.getByRole("button", { name: "保存间隔" }).first().isDisabled()).toBe(true)
+    expect(await page.getByRole("button", { name: "保存间隔" }).first().isDisabled()).toBe(false)
+    await input.press("Tab")
+    expect(await input.inputValue()).toBe("1")
     await input.fill("600")
-    await page.evaluate(() => window.followerFixture.updateFirst(45678, 300))
+    await page.evaluate(() => window.followerFixture.updateFirst("45678", 300))
     await page.getByText("45,678", { exact: true }).waitFor({ timeout: 6000 })
     expect(await input.inputValue()).toBe("600")
     await page.getByRole("button", { name: "保存间隔" }).first().click()

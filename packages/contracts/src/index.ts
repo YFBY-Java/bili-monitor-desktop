@@ -6,12 +6,18 @@ export * from "./bilibili-follower"
 export * from "./bilibili-live"
 export * from "./bilibili-live-configuration"
 export * from "./bilibili-live-http"
+export * from "./bilibili-danmaku-worker"
 export * from "./bilibili-live-danmaku"
 export * from "./bilibili-live-session"
 export * from "./bilibili-live-rank"
 export * from "./bilibili-subject"
+export * from "./subject-monitor-configuration"
+export * from "./bilibili-follower-configuration"
 export * from "./douyin-auth"
 export * from "./runtime-protocol"
+export * from "./java-long"
+export * from "./bilibili-follower-v2"
+export * from "./bilibili-subject-v2"
 
 import type {
   BindSubjectAccountInput,
@@ -154,6 +160,8 @@ export interface DesktopBridge {
     bind: (input: UpdateBilibiliSubjectBindingInput) => Promise<BilibiliSubjectBinding>
     workbench: (input: { subjectId: string }) => Promise<BilibiliSubjectWorkbench>
     trends: (input: QueryBilibiliSubjectTrendsInput) => Promise<BilibiliSubjectTrend>
+    workbenchV2: (input: { subjectId: string }) => Promise<import("./bilibili-subject-v2").BilibiliSubjectWorkbenchV2>
+    trendsV2: (input: QueryBilibiliSubjectTrendsInput) => Promise<import("./bilibili-subject-v2").BilibiliSubjectTrendV2>
     updateLayout: (
       input: UpdateBilibiliSubjectLayoutInput
     ) => Promise<BilibiliSubjectWidgetLayout[]>
@@ -167,6 +175,16 @@ export interface DesktopBridge {
     remove: (input: RefreshBilibiliFollowerMonitorInput) => Promise<DeleteBilibiliFollowerMonitorResult>
     trend: (input: QueryBilibiliFollowerTrendInput) => Promise<BilibiliFollowerTrend>
     trends: (input: QueryBilibiliFollowerTrendsInput) => Promise<BilibiliFollowerTrend[]>
+  }
+  bilibiliFollowersV2: {
+    list: (input?: ListBilibiliFollowerMonitorsInput) => Promise<import("./bilibili-follower-v2").BilibiliFollowerMonitorListV2>
+    add: (input: import("./bilibili-follower-v2").AddBilibiliFollowerMonitorInputV2) => Promise<import("./bilibili-follower-v2").BilibiliFollowerMonitorV2>
+    updateStatus: (input: UpdateBilibiliFollowerMonitorStatusInput) => Promise<import("./bilibili-follower-v2").BilibiliFollowerMonitorV2>
+    updateSettings: (input: UpdateBilibiliFollowerMonitorSettingsInput) => Promise<import("./bilibili-follower-v2").BilibiliFollowerMonitorV2>
+    refresh: (input: RefreshBilibiliFollowerMonitorInput) => Promise<import("./bilibili-follower-v2").BilibiliFollowerCollectResultV2>
+    remove: (input: RefreshBilibiliFollowerMonitorInput) => Promise<DeleteBilibiliFollowerMonitorResult>
+    trend: (input: QueryBilibiliFollowerTrendInput) => Promise<import("./bilibili-follower-v2").BilibiliFollowerTrendV2>
+    trends: (input: QueryBilibiliFollowerTrendsInput) => Promise<import("./bilibili-follower-v2").BilibiliFollowerTrendV2[]>
   }
   bilibiliAuth: {
     startQrLogin: () => Promise<BilibiliQrLoginStart>

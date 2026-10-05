@@ -1,5 +1,5 @@
 import type { BilibiliLiveDanmakuRecent, BilibiliLiveDanmakuStatus, BilibiliLiveRankRefreshInput,
-  BilibiliLiveRankSnapshot, BilibiliLiveRankSummary, BilibiliLiveRoom, BilibiliSubjectWorkbench,
+  BilibiliLiveRankSnapshot, BilibiliLiveRankSummary, BilibiliLiveRoom, BilibiliSubjectWorkbenchV2,
   QueryBilibiliLiveDanmakuRecentInput, StartBilibiliLiveDanmakuInput } from "@bmd/contracts"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useState } from "react"
@@ -31,7 +31,7 @@ const fixture = {
       uid: String(22 + index), roomId: String(33 + index), uname: `合成房间${index + 1}`
     })
   },
-  metadata: () => client.invalidateQueries({ queryKey: ["bilibili-subject-workbench"] })
+  metadata: () => client.invalidateQueries({ queryKey: ["bilibili-subject-workbench-v2"] })
 }
 declare global { interface Window { widgetFixture: typeof fixture } }
 window.widgetFixture = fixture
@@ -71,7 +71,7 @@ function summary(roomMonitorId: string): BilibiliLiveRankSummary {
   return { roomMonitorId, roomId: "33", ruid: "22", audienceCount: 12345, guardCount: 2,
     guardCountText: "2 位", updatedAt: timestamp, snapshots: fixture.noRanks ? [] : snapshots }
 }
-function workbench(): BilibiliSubjectWorkbench {
+function workbench(): BilibiliSubjectWorkbenchV2 {
   const room = rooms.find(item => item.id === fixture.roomId)!
   return {
     subject: { id: "018f0f39-7b5e-4cc1-862d-000000000300", displayName: "合成工作台", tags: [],
@@ -85,8 +85,8 @@ function workbench(): BilibiliSubjectWorkbench {
 }
 const bridge = createBrowserPreviewBridge()
 bridge.bilibiliSubjects = { ...bridge.bilibiliSubjects,
-  list: async () => [workbench().subject], workbench: async () => workbench(),
-  trends: async ({ subjectId }) => ({ subjectId, metrics: ["follower"], range: "24h", bucket: "5m", points: [] }) }
+  list: async () => [workbench().subject], workbenchV2: async () => workbench(),
+  trendsV2: async ({ subjectId }) => ({ subjectId, metrics: ["follower"], range: "24h", bucket: "5m", points: [] }) }
 bridge.bilibiliLive = { ...bridge.bilibiliLive,
   list: async input => {
     const items = input?.limit === undefined ? rooms : rooms.slice(0, input.limit)

@@ -1,5 +1,13 @@
 import {
   AddBilibiliFollowerMonitorInputSchema,
+  AddBilibiliFollowerMonitorInputV2Schema,
+  BilibiliFollowerCollectResultV2Schema,
+  BilibiliFollowerMonitorListV2Schema,
+  BilibiliFollowerMonitorV2Schema,
+  BilibiliFollowerTrendListV2Schema,
+  BilibiliFollowerTrendV2Schema,
+  BilibiliSubjectTrendV2Schema,
+  BilibiliSubjectWorkbenchV2Schema,
   BilibiliAuthRefreshResultSchema,
   BilibiliAuthStatusSchema,
   BilibiliCredentialSchema,
@@ -194,11 +202,43 @@ export function createDesktopBridge(
           QueryBilibiliSubjectTrendsInputSchema.parse(input)
         )
       ),
+      workbenchV2: async (input) => BilibiliSubjectWorkbenchV2Schema.parse(
+        await invoke("bilibili-subjects:workbench.v2", BilibiliSubjectIdInputSchema.parse(input))
+      ),
+      trendsV2: async (input) => BilibiliSubjectTrendV2Schema.parse(
+        await invoke("bilibili-subjects:trends.v2", QueryBilibiliSubjectTrendsInputSchema.parse(input))
+      ),
       updateLayout: async (input) => BilibiliSubjectWidgetLayoutSchema.array().parse(
         await invoke(
           "bilibili-subjects:layout-update",
           UpdateBilibiliSubjectLayoutInputSchema.parse(input)
         )
+      )
+    },
+    bilibiliFollowersV2: {
+      list: async (input) => BilibiliFollowerMonitorListV2Schema.parse(
+        await invoke("bilibili-followers:list.v2", ListBilibiliFollowerMonitorsInputSchema.parse(input ?? {}))
+      ),
+      add: async (input) => BilibiliFollowerMonitorV2Schema.parse(
+        await invoke("bilibili-followers:add.v2", AddBilibiliFollowerMonitorInputV2Schema.parse(input))
+      ),
+      updateStatus: async (input) => BilibiliFollowerMonitorV2Schema.parse(
+        await invoke("bilibili-followers:update-status.v2", UpdateBilibiliFollowerMonitorStatusInputSchema.parse(input))
+      ),
+      updateSettings: async (input) => BilibiliFollowerMonitorV2Schema.parse(
+        await invoke("bilibili-followers:update-settings.v2", UpdateBilibiliFollowerMonitorSettingsInputSchema.parse(input))
+      ),
+      refresh: async (input) => BilibiliFollowerCollectResultV2Schema.parse(
+        await invoke("bilibili-followers:refresh.v2", BilibiliFollowerMonitorIdInputSchema.parse(input))
+      ),
+      remove: async (input) => DeleteBilibiliFollowerMonitorResultSchema.parse(
+        await invoke("bilibili-followers:delete.v2", BilibiliFollowerMonitorIdInputSchema.parse(input))
+      ),
+      trend: async (input) => BilibiliFollowerTrendV2Schema.parse(
+        await invoke("bilibili-followers:trend.v2", QueryBilibiliFollowerTrendInputSchema.parse(input))
+      ),
+      trends: async (input) => BilibiliFollowerTrendListV2Schema.parse(
+        await invoke("bilibili-followers:trends.v2", QueryBilibiliFollowerTrendsInputSchema.parse(input))
       )
     },
     bilibiliFollowers: {

@@ -1,3 +1,4 @@
+import { BilibiliLiveHttpConfigurationSchema, type BilibiliLiveHttpConfiguration } from "@bmd/contracts"
 import type {
   BilibiliLiveDanmakuSource,
   BilibiliLiveDanmakuSourceEvent,
@@ -12,7 +13,8 @@ export class BilibiliLiveDanmakuWorkerSource implements BilibiliLiveDanmakuSourc
   private stopped = false
   private stopPromise: Promise<void> | undefined
 
-  constructor(private readonly transport: RealtimeWorkerTransport) {}
+  constructor(private readonly transport: RealtimeWorkerTransport,
+    private readonly httpConfiguration?: BilibiliLiveHttpConfiguration) {}
 
   async start(
     input: BilibiliLiveDanmakuSourceStartInput,
@@ -26,6 +28,7 @@ export class BilibiliLiveDanmakuWorkerSource implements BilibiliLiveDanmakuSourc
     ))
     try {
       const result = await this.transport.request("start", {
+        ...(this.httpConfiguration ? { httpConfiguration: BilibiliLiveHttpConfigurationSchema.parse(this.httpConfiguration) } : {}),
         connectionId: input.connectionId,
         roomId: input.roomId,
         ...(input.protocolVersion === undefined ? {} : { protocolVersion: input.protocolVersion }),

@@ -1,8 +1,10 @@
 # BiliMonitor Desktop
 
+2026-10-06 按用户要求保存本地提交快照，业务迁移保持暂停：最新完成[粉丝立即刷新](docs/implementation/2026-10-05-follower-manual-refresh-audit.md)的原业务对齐及定向回归，此前[间隔保存](docs/implementation/2026-10-05-follower-interval-audit.md)、[添加成功链](docs/implementation/2026-10-05-follower-add-flow-audit.md)、[Long64精确链路](docs/implementation/2026-10-05-follower-long64-audit.md)与[UID输入](docs/implementation/2026-10-05-follower-uid-input-audit.md)保留。提交前完整检查仍有1项旧趋势测试超时；类型检查、Python1003项及生产构建单独通过，不冒称全量绿色。当前状态、提交范围及恢复顺序见[提交快照](docs/implementation/2026-10-06-commit-snapshot.md)和[全量台账](docs/implementation/2026-09-13-full-migration-tracker.md)。本次不推送GitHub、不更新已安装客户端，不代表粉丝模块或全部业务迁移完成。
+
 BiliMonitor Desktop 是把原 BiliMonitor B/S 项目的真实业务改造成完全本地桌面应用的独立仓库。它不依赖远程业务后端，也不要求本机维护数据库服务、消息队列、容器或 WSL。
 
-当前导航只显示已接到本地 Contract、Core、SQLite、Worker、IPC 与真实 UI 的原业务：B站用户工作台、粉丝监控、扫码登录、直播间 REST、实时弹幕、观众/大航海榜、直播场次、数据中心、场次洞察与导出，以及抖音本人 Web/OAuth 登录态。源码中的 SQLite schema 为 v13；敏感凭据由 Electron `safeStorage` 封装的本机密钥进行 AES-256-GCM 加密。B站真人扫码和抖音真人扫码/开放平台授权仍是发布前手工验收项，不把未执行的人机操作写成已通过。
+当前导航只显示已接到本地 Contract、Core、SQLite、Worker、IPC 与真实 UI 的原业务：B站用户工作台、粉丝监控、扫码登录、直播间 REST、实时弹幕、观众/大航海榜、直播场次、数据中心、场次洞察与导出，以及抖音本人 Web/OAuth 登录态。源码中的 SQLite schema 为 v14；敏感凭据由 Electron `safeStorage` 封装的本机密钥进行 AES-256-GCM 加密。B站真人扫码和抖音真人扫码/开放平台授权仍是发布前手工验收项，不把未执行的人机操作写成已通过。
 
 原项目更新至 `fa2faa6` 后正在重新逐项迁移、验收，已有入口不代表全部业务等价。最新范围及未完成项见 [全量迁移台账](docs/implementation/2026-09-13-full-migration-tracker.md)。当前场次面板读取最近 20 场，数据中心/分析可选择最近 200 场；查询数量非正数回退 20、超过 200 截断为 200。
 
@@ -16,11 +18,17 @@ BiliMonitor Desktop 是把原 BiliMonitor B/S 项目的真实业务改造成完�
 
 [直播Python与Worker链路](docs/implementation/2026-09-13-live-worker-audit.md)已补0分区/short ID、昵称与字段回退、时间解析、旧接口空结果及原错误分类；共享契约校验输入/输出，真实Python子进程→NDJSON→Core→SQLite验证中文、错误metadata与原始响应证据。测试仅替换外部HTTP，不能代替真人平台/原生安装包验收。原宽松数值范围、边缘解析与配置仍在M08待办中，不代表全量迁移完成。
 
-v13 按原业务保留接口返回的有符号热度/关注计数，不用负值错误拒绝整批采集；契约、房间/快照存储和用户工作台投影同步兼容。升级仅移除两张直播表的非负计数约束，保留记录、rowid、索引和关联，并在事务提交前检查外键。新代码启动时才执行升级，本轮没有打开用户实际数据库或更新已安装客户端；超过 JavaScript 安全整数范围仍待完整迁移。
+v13 按原业务保留接口返回的有符号热度/关注计数，不用负值错误拒绝整批采集；契约、房间/快照存储和用户工作台投影同步兼容。升级仅移除两张直播表的非负计数约束，保留记录、rowid、索引和关联，并在事务提交前检查外键。新代码启动时才执行升级；直播计数超过 JavaScript 安全整数范围仍待完整迁移。
+
+v14 仅移除粉丝监控/快照四个计数的额外非负约束，保留监控/绑定正 UID、记录身份、rowid、索引、触发器、视图及外键；失败原子回滚，重开幂等。粉丝计数在内核/SQLite 使用 bigint，在 v2 通信使用精确十进制字符串，覆盖原 signed64 数值与回绕差分；旧 v1 无法准确表示的值明确失败，不静默舍入。粉丝及工作台的文本、合计、排序、趋势轴和提示也走精确路径。没有打开用户实际数据库、制作安装包或更新已安装客户端，原生及真人验收仍未完成。
+
+粉丝页[添加UID输入](docs/implementation/2026-10-05-follower-uid-input-audit.md)按用户确认保留精度，兼容前导零、空白、正号及结果为整数的科学/进制写法；真实小数、非正数和Long越界在本地拒绝，不发采集请求。未恢复原网页的Number舍入缺陷；失败保留草稿。[添加成功链](docs/implementation/2026-10-05-follower-add-flow-audit.md)已恢复提交清UID/保留间隔、共享读完成后清理与最多4人自动选择、raw-ID趋势请求及独立成功确认；旧请求不影响新抽屉。重读失败保留旧数据且不回滚或重试成功添加，不代表M06已完整验收。
 
 [直播调度与退出恢复](docs/implementation/2026-09-13-live-lifecycle-audit.md)已恢复原默认每秒到期扫描，按每批完成后的固定延迟执行，保留1500ms接口限流。关闭Core立即停止直播采集，取消限流/重试等待，迟到成功或失败不再写库；重启按本地保存的启用、间隔、到期和退避状态恢复。实际Python子进程退出已自动验证，原生安装应用验收仍单列。
 
-[直播自动采集配置](docs/implementation/2026-09-13-live-collection-configuration-audit.md)从实际D盘数据目录的 `config/bilibili-live-collection.json` 读取，重启生效；[示例文件](config/bilibili-live-collection.example.json)包含已实现的 `enabled`、`schedulerDelayMs`、`dueBatchSize`、`statusBatchSize`，缺省分别true/1000/20/30，支持原同名环境变量覆盖。关闭自动REST不禁用手工操作或粉丝/弹幕调度；30只是默认批量，不再是Worker硬上限。配置错误在建库前拒绝，并经bootstrap返回不含堆栈/启动诊断的明确提示。后续已接入[间隔、限流、重试与失败退避策略](docs/implementation/2026-09-13-live-collection-policy-audit.md)，并接入[四个REST端点的HTTP配置与请求存活](docs/implementation/2026-09-13-live-http-lifetime-audit.md)，示例共包含16项配置。配置默认值不改已有房间排程，手工输入/数据库仍限1..2592000秒；其他HTTP消费者、真实管道失联验收、storageEnabled等仍在M08待办中。
+[直播自动采集配置](docs/implementation/2026-09-13-live-collection-configuration-audit.md)从实际D盘数据目录的 `config/bilibili-live-collection.json` 读取，重启生效；[示例文件](config/bilibili-live-collection.example.json)包含已实现的 `enabled`、`schedulerDelayMs`、`dueBatchSize`、`statusBatchSize`，缺省分别true/1000/20/30，支持原同名环境变量覆盖。关闭自动REST不禁用手工操作或粉丝/弹幕调度；30只是默认批量，不再是Worker硬上限。配置错误在建库前拒绝，并经bootstrap返回不含堆栈/启动诊断的明确提示。后续已接入[间隔、限流、重试与失败退避策略](docs/implementation/2026-09-13-live-collection-policy-audit.md)，并接入[四个REST端点的HTTP配置与请求存活](docs/implementation/2026-09-13-live-http-lifetime-audit.md)，示例现包含17项配置。配置默认值不改已有房间排程，手工输入/数据库仍限1..2592000秒；[榜单及其WBI HTTP配置、长请求/退出处理](docs/implementation/2026-09-13-rank-http-audit.md)随后已接入，并补真实Python管道失联验证；[Node弹幕三端点HTTP配置、请求存活与在途取消](docs/implementation/2026-09-25-danmaku-http-audit.md)已接入；随后接入[storageEnabled及工作台开关](docs/implementation/2026-09-25-live-storage-audit.md)：直播存储关闭时不创建相关服务/调度，原工作台必须显式一并关闭（`config/subject-monitor.json` 的 `enabled=false`），冲突在建库前报错；关闭不删除历史。完整弹幕业务及原生应用验收仍未完成。
+
+[粉丝监控启动配置](docs/implementation/2026-09-26-follower-configuration-audit.md)独立支持16项原设置及环境覆盖：区分停止自动扫描与关闭全部粉丝存储业务，工作台依赖同时校验，关闭再启用保留历史/绑定。默认启动即扫描、每批完成后等待1秒；间隔、批量、重试/退避和HTTP设置贯通到Python。直播遮罩昵称使用独立无落盘查询，不要求开启粉丝存储，也不产生无引用原始响应文件；长请求保活、父管道失联取消和迟到写库保护已有自动回归。完整Spring绑定、解析域及共享限流仍在后续清单。
 
 [直播监控操作区](docs/implementation/2026-09-13-live-monitor-panel-audit.md)现按原页面显示横向房间列表、默认首房详情、八项事实字段与完整性提示；卡片每秒显示采集节奏，优先显示暂停/异常，倒计时不发起采集。间隔草稿跨收起、切房及页签保留，成功保存后清理，失败不丢失；按原规则夹取1..2592000秒并使用相对步长，滚轮不会误改值。添加成功展开实际返回房间，包含复用已有房间；浅粉白/深色与窄窗口已做浏览器回归。详情场次区仍保留在M11，不等于全量迁移完成。
 
@@ -30,7 +38,7 @@ v13 按原业务保留接口返回的有符号热度/关注计数，不用负值
 
 粉丝查询默认返回全部监控用户，不再默默截断为 100/500 人；界面仍最多选 4 人对比。历史查询未传/非正数取最近 500 点，最大 2000 点，按时间升序返回；`from/to` 包含边界并支持时区和微秒精度。页面沿用原项目的最近 500 点查询，不是固定小时范围。采集仅重试网络、HTTP 限流与服务端错误；卡片成功但无头像时清掉旧值，relation/stat 回退保留原资料。
 
-粉丝页现按原业务展示总粉丝、最近净增、最早排程及间隔汇总；横向用户块显示每秒更新的采集节奏，点击或键盘展开一位用户的详情。切换/收起保留各用户未保存的间隔草稿，后台重读不覆盖草稿，删除仍需确认。界面倒计时不发起采集，只有实际手动刷新请求在途显示“采集中”，本地投影重读仍由独立忙碌状态保护。
+粉丝页现按原业务展示总粉丝、最近净增、最早排程及间隔汇总；横向用户块显示每秒更新的采集节奏，点击或键盘展开一位用户的详情。切换/收起保留各用户未保存的间隔草稿，后台重读不覆盖草稿，删除仍需确认。界面倒计时不发起采集；手动立即刷新按原页面不设置自动“采集中”标记或重复点击锁，失败不重读，成功等待共享列表读取但不等待历史，列表读取失败仍确认已完成刷新。
 
 勾选用户后在同页显示趋势：1人单图、2人双列、3人主次、4人网格；拖动或键盘按钮交换位置。图表按真实时间间距、原数值/时间轴留白显示最近500点，支持万/亿刻度和鼠标/键盘数值提示；无完整历史时依次使用最近快照、已知当前值单点（标为“当前值参考”，不落库伪造快照）。本地历史读取按180ms合并、单请求在途、120ms补读，刷新提示至少700ms、结果提示900ms；失败保留已有图，迟到数据和旧错误不串到新用户，清空选择/离开页面停止后续读取。
 

@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
+
+from .bilibili_follower_errors import JAVA_BLANK, error_message, response_code
+from .bilibili_follower_http import BilibiliFollowerHttpConfiguration, BilibiliFollowerHttpRequest
+from .bilibili_follower_json import decode_follower_json
+from .bilibili_follower_long import MAX_SAFE_INTEGER, parse_java_long, positive_long_string
+from .bilibili_follower_response_text import follower_response_text
 
 CARD_ENDPOINT = "x/web-interface/card"
 RELATION_STAT_ENDPOINT = "x/relation/stat"
@@ -18,13 +24,37 @@ CARD_URL = "https://api.bilibili.com/x/web-interface/card"
 RELATION_STAT_URL = "https://api.bilibili.com/x/relation/stat"
 
 
-class BilibiliFollowerFetchRequest(BaseModel):
+class BilibiliFollowerFetchRequest(BilibiliFollowerHttpRequest):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     task_id: str = Field(alias="taskId", min_length=1)
     attempt: int = Field(ge=1)
     lease_id: str = Field(alias="leaseId", min_length=1)
     mid: str = Field(pattern=r"^[1-9]\d*$")
+
+    @field_validator("mid")
+    @classmethod
+    def positive_source_long(cls, value: str) -> str:
+        parsed = parse_java_long(value)
+        if parsed is None or parsed <= 0:
+            raise ValueError("Follower request MID must fit a positive Long64")
+        return value
+
+
+class BilibiliFollowerProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mid: StrictStr = Field(pattern=r"^[1-9]\d*$")
+    nickname: StrictStr
+
+    @field_validator("nickname")
+    @classmethod
+    def nonblank_nickname(cls, value: str) -> str:
+        # Rust's length validator rejects isolated UTF-16 units accepted by
+        # Jackson StringNode. Keep strict type checks, but check presence here.
+        if not value or JAVA_BLANK.fullmatch(value):
+            raise ValueError("Follower profile nickname must not be Java blank.")
+        return value
 
 
 class BilibiliCrawlerError(Exception):
@@ -46,23 +76,48 @@ class BilibiliCrawlerError(Exception):
         self.bili_code = bili_code
 
 
+def legacy_follower_result(
+    value: dict[str, Any], endpoint: str, *, profile: bool = False
+) -> dict[str, Any]:
+    """An explicit v1 projection; incompatible values never become rounded JSON numbers."""
+    try:
+        positive_long_string(value.get("mid"))
+        if not profile:
+            for field in ("followerCount", "followingCount"):
+                if field not in value:
+                    continue
+                count = value[field]
+                if (
+                    isinstance(count, bool)
+                    or not isinstance(count, int)
+                    or not 0 <= count <= MAX_SAFE_INTEGER
+                ):
+                    raise ValueError("The legacy contract cannot represent this follower count")
+    except ValueError as error:
+        raise BilibiliCrawlerError(
+            "WORKER_CONTRACT_PRECISION_UNSUPPORTED",
+            "This follower result requires the Long64 v2 Worker contract.",
+            retryable=False,
+            endpoint=endpoint,
+            status_code=200,
+        ) from error
+    return value
+
+
 def _optional_text(value: object) -> str | None:
-    if value is None:
+    # JsonNode.asText(null) has no object/array representation. isBlank checks
+    # presence, not normalization: retain nonblank strings exactly as returned.
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if not isinstance(value, (str, int, float)):
         return None
-    text = str(value).strip()
-    return text or None
+    text = str(value)
+    # Exact Jackson Double.toString formatting remains a separate numeric slice.
+    return None if JAVA_BLANK.fullmatch(text) else text
 
 
 def _optional_int(value: object) -> int | None:
-    if value is None or isinstance(value, bool):
-        return None
-    if not isinstance(value, (int, float, str)):
-        return None
-    try:
-        number = int(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return number if number >= 0 else None
+    return parse_java_long(value)
 
 
 def _object(value: object) -> dict[str, Any]:
@@ -80,50 +135,39 @@ def _ensure_success(root: dict[str, Any], endpoint: str) -> None:
             status_code=200,
             bili_code=0,
         )
-    code = root.get("code")
+    code = response_code(root.get("code"))
     if code == 0:
         return
-    bili_code = int(code) if isinstance(code, int) and not isinstance(code, bool) else None
-    error_code = (
-        "BILIBILI_API_ERROR"
-        if bili_code is None
-        else {
-            -101: "BILIBILI_AUTH_EXPIRED",
-            -352: "BILIBILI_RISK_CONTROL",
-            -412: "BILIBILI_RISK_CONTROL",
-        }.get(bili_code, "BILIBILI_API_ERROR")
-    )
-    message = _optional_text(root.get("message")) or f"Bilibili API error: {code}"
+    error_code = {
+        -101: "BILIBILI_AUTH_EXPIRED",
+        -352: "BILIBILI_RISK_CONTROL",
+        -412: "BILIBILI_RISK_CONTROL",
+    }.get(code, "BILIBILI_UNKNOWN_ERROR")
+    message = error_message(root.get("message"), code)
     raise BilibiliCrawlerError(
         error_code,
         message,
-        retryable=bili_code is not None and bili_code >= 500,
+        retryable=code >= 500,
         endpoint=endpoint,
         status_code=200,
-        bili_code=bili_code,
+        bili_code=code,
     )
 
 
 def _decode_json(raw: str, endpoint: str) -> dict[str, Any]:
     try:
-        decoded = json.loads(raw)
+        decoded = decode_follower_json(raw)
     except json.JSONDecodeError as error:
         raise BilibiliCrawlerError(
             "BILIBILI_PARSE_ERROR",
-            f"Unable to parse Bilibili response: {error.msg}",
+            "Unable to parse Bilibili response.",
             retryable=False,
             endpoint=endpoint,
             status_code=200,
         ) from error
-    if not isinstance(decoded, dict):
-        raise BilibiliCrawlerError(
-            "BILIBILI_PARSE_ERROR",
-            "Bilibili response root must be an object.",
-            retryable=False,
-            endpoint=endpoint,
-            status_code=200,
-        )
-    return decoded
+    # JsonNode.path on scalar/array/null/MissingNode has no code/data. The
+    # existing ensureSuccess gate must classify that as UNKNOWN, not PARSE.
+    return _object(decoded)
 
 
 def parse_card_response(raw: str, fetched_at: str) -> dict[str, object]:
@@ -131,12 +175,12 @@ def parse_card_response(raw: str, fetched_at: str) -> dict[str, object]:
     _ensure_success(root, CARD_ENDPOINT)
     data = _object(root.get("data"))
     card = _object(data.get("card"))
-    mid = _optional_text(card.get("mid"))
+    mid_value = _optional_int(card.get("mid"))
     nickname = _optional_text(card.get("name"))
     follower_count = _optional_int(data.get("follower"))
     if follower_count is None:
         follower_count = _optional_int(card.get("fans"))
-    if mid is None or not mid.isdigit() or int(mid) <= 0:
+    if mid_value is None:
         raise BilibiliCrawlerError(
             "BILIBILI_PARSE_ERROR",
             "Missing card.mid",
@@ -160,6 +204,7 @@ def parse_card_response(raw: str, fetched_at: str) -> dict[str, object]:
             endpoint=CARD_ENDPOINT,
             status_code=200,
         )
+    mid = str(mid_value)
     result: dict[str, object] = {
         "mid": mid,
         "nickname": nickname,
@@ -183,9 +228,9 @@ def parse_relation_stat_response(raw: str, fetched_at: str) -> dict[str, object]
     root = _decode_json(raw, RELATION_STAT_ENDPOINT)
     _ensure_success(root, RELATION_STAT_ENDPOINT)
     data = _object(root.get("data"))
-    mid = _optional_text(data.get("mid"))
+    mid_value = _optional_int(data.get("mid"))
     follower_count = _optional_int(data.get("follower"))
-    if mid is None or not mid.isdigit() or int(mid) <= 0 or follower_count is None:
+    if mid_value is None or follower_count is None:
         raise BilibiliCrawlerError(
             "BILIBILI_PARSE_ERROR",
             "Missing data.mid or data.follower",
@@ -193,6 +238,7 @@ def parse_relation_stat_response(raw: str, fetched_at: str) -> dict[str, object]
             endpoint=RELATION_STAT_ENDPOINT,
             status_code=200,
         )
+    mid = str(mid_value)
     result: dict[str, object] = {
         "mid": mid,
         "profileUrl": f"https://space.bilibili.com/{mid}",
@@ -224,11 +270,11 @@ def _write_object_sync(data_directory: Path, raw: bytes) -> dict[str, object]:
     }
 
 
-async def fetch_follower_endpoint(
+async def _fetch_follower_response(
     endpoint: str,
     mid: str,
-    data_directory: Path,
-) -> dict[str, Any]:
+    http_configuration: BilibiliFollowerHttpConfiguration | None = None,
+) -> tuple[dict[str, object], bytes, int, int]:
     if endpoint == CARD_ENDPOINT:
         url = CARD_URL
         parameters = {"mid": mid, "photo": "true"}
@@ -243,15 +289,12 @@ async def fetch_follower_endpoint(
             endpoint=endpoint,
         )
 
+    configuration = http_configuration or BilibiliFollowerHttpConfiguration()
     started = time.perf_counter()
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0, connect=5.0),
-            headers={
-                "Accept": "application/json",
-                "User-Agent": "BiliMonitorDesktop/0.1 (+low-frequency public Bilibili follower monitor)",
-                "Referer": "https://www.bilibili.com/",
-            },
+            timeout=configuration.timeout(),
+            headers=configuration.headers(),
         ) as client:
             response = await client.get(url, params=parameters)
     except httpx.RequestError as error:
@@ -263,6 +306,18 @@ async def fetch_follower_endpoint(
         ) from error
 
     duration_ms = int((time.perf_counter() - started) * 1000)
+    try:
+        raw = follower_response_text(response)
+    except LookupError as error:
+        # A charset conversion failure is not malformed JSON and must never
+        # trigger relation fallback. Keep the Worker alive with a safe error.
+        raise BilibiliCrawlerError(
+            "BILIBILI_UNKNOWN_ERROR",
+            "Unsupported Bilibili response charset.",
+            retryable=False,
+            endpoint=endpoint,
+            status_code=response.status_code,
+        ) from error
     if response.status_code >= 400:
         if response.status_code == 429:
             code = "BILIBILI_RATE_LIMITED"
@@ -271,7 +326,7 @@ async def fetch_follower_endpoint(
             code = "BILIBILI_SERVER_ERROR"
             retryable = True
         else:
-            code = "BILIBILI_HTTP_ERROR"
+            code = "BILIBILI_UNKNOWN_ERROR"
             retryable = False
         raise BilibiliCrawlerError(
             code,
@@ -282,17 +337,48 @@ async def fetch_follower_endpoint(
         )
 
     raw_bytes = response.content
-    raw = raw_bytes.decode("utf-8")
+    if raw is None:
+        raise BilibiliCrawlerError(
+            "BILIBILI_PARSE_ERROR",
+            "Unable to parse an empty Bilibili response body.",
+            retryable=False,
+            endpoint=endpoint,
+            status_code=200,
+        )
     fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     parsed = (
         parse_card_response(raw, fetched_at)
         if endpoint == CARD_ENDPOINT
         else parse_relation_stat_response(raw, fetched_at)
     )
+    return parsed, raw_bytes, response.status_code, duration_ms
+
+
+async def fetch_follower_profile(
+    mid: str, http_configuration: BilibiliFollowerHttpConfiguration | None = None
+) -> dict[str, Any]:
+    parsed, _, _, _ = await _fetch_follower_response(CARD_ENDPOINT, mid, http_configuration)
+    # Live name lookup is ephemeral, not a follower snapshot/evidence collection operation.
+    legacy_follower_result(parsed, CARD_ENDPOINT, profile=True)
+    return BilibiliFollowerProfile.model_validate(
+        {"mid": parsed["mid"], "nickname": parsed["nickname"]}
+    ).model_dump()
+
+
+async def fetch_follower_endpoint(
+    endpoint: str,
+    mid: str,
+    data_directory: Path,
+    http_configuration: BilibiliFollowerHttpConfiguration | None = None,
+) -> dict[str, Any]:
+    parsed, raw_bytes, status_code, duration_ms = await _fetch_follower_response(
+        endpoint, mid, http_configuration
+    )
+    legacy_follower_result(parsed, endpoint)
     evidence = await asyncio.to_thread(_write_object_sync, data_directory, raw_bytes)
     return {
         **parsed,
         "evidenceObject": evidence,
-        "statusCode": response.status_code,
+        "statusCode": status_code,
         "durationMs": duration_ms,
     }

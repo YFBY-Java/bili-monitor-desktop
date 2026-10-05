@@ -1,22 +1,17 @@
 import { createInterface } from "node:readline"
 
-import {
-  startBilibiliDanmakuConnection,
-  type BilibiliDanmakuConnectionEvent,
-  type RunningBilibiliDanmakuConnection
-} from "./bilibili-danmaku-connection"
+import { RealtimeWorkerRequestSchema, REQUEST_KEEP_ALIVE_INTERVAL_MS, type RealtimeWorkerRequest } from "@bmd/contracts"
+import type { BilibiliDanmakuConnectionEvent } from "./bilibili-danmaku-connection"
+import { RealtimeSessionManager } from "./realtime-session-manager"
 
-interface WorkerRequest {
-  id: string
-  type: "start" | "stop" | "stopAll"
-  payload: Record<string, unknown>
-}
-
-const connections = new Map<string, RunningBilibiliDanmakuConnection>()
+const manager = new RealtimeSessionManager()
+const aliveTimers = new Set<NodeJS.Timeout>()
 let shuttingDown = false
 
 function send(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value)}\n`)
+  if (shuttingDown) return
+  if (process.stdout.destroyed || process.stdout.writableLength > 4 * 1024 * 1024) { void shutdown(1); return }
+  process.stdout.write(`${JSON.stringify(value)}\n`, error => { if (error) void shutdown(1) })
 }
 
 function sendError(id: string, error: unknown): void {
@@ -30,26 +25,19 @@ function sendError(id: string, error: unknown): void {
   })
 }
 
-async function handle(request: WorkerRequest): Promise<void> {
+async function handle(request: RealtimeWorkerRequest): Promise<void> {
+  let alive: NodeJS.Timeout | undefined
   try {
+    if (shuttingDown) return
     if (request.type === "start") {
-      const connectionId = requiredString(request.payload.connectionId, "connectionId")
-      await connections.get(connectionId)?.stop()
-      const credentialValue = request.payload.credential
-      const credential = isRecord(credentialValue)
-        ? {
-            cookieHeader: requiredString(credentialValue.cookieHeader, "credential.cookieHeader"),
-            authUid: requiredString(credentialValue.authUid, "credential.authUid")
-          }
-        : undefined
-      const connection = await startBilibiliDanmakuConnection({
-        roomId: requiredString(request.payload.roomId, "roomId"),
-        ...(typeof request.payload.protocolVersion === "number"
-          ? { protocolVersion: request.payload.protocolVersion }
-          : {}),
-        ...(credential ? { credential } : {})
-      }, (event) => sendEvent(connectionId, event))
-      connections.set(connectionId, connection)
+      const { connectionId } = request.payload
+      if (request.keepAlive === true) {
+        const report = () => send({ id: request.id, type: "request-alive", requestType: "start", connectionId })
+        report()
+        alive = setInterval(report, REQUEST_KEEP_ALIVE_INTERVAL_MS)
+        aliveTimers.add(alive)
+      }
+      const connection = await manager.start(request.payload, event => sendEvent(connectionId, event))
       send({
         id: request.id,
         ok: true,
@@ -63,19 +51,16 @@ async function handle(request: WorkerRequest): Promise<void> {
       return
     }
     if (request.type === "stop") {
-      const connectionId = requiredString(request.payload.connectionId, "connectionId")
-      const connection = connections.get(connectionId)
-      connections.delete(connectionId)
-      await connection?.stop()
+      await manager.stop(request.payload.connectionId)
       send({ id: request.id, ok: true, result: { stopped: true } })
       return
     }
-    const current = [...connections.values()]
-    connections.clear()
-    await Promise.all(current.map((connection) => connection.stop()))
+    await manager.stopAll()
     send({ id: request.id, ok: true, result: { stopped: true } })
   } catch (error) {
     sendError(request.id, error)
+  } finally {
+    if (alive) { clearInterval(alive); aliveTimers.delete(alive) }
   }
 }
 
@@ -88,34 +73,30 @@ lines.on("line", (line) => {
   try {
     const request = JSON.parse(line) as unknown
     if (!isRecord(request)) return
-    const id = requiredString(request.id, "id")
-    const type = request.type
-    if (type !== "start" && type !== "stop" && type !== "stopAll") {
-      throw new Error("Unknown realtime worker request type.")
+    const parsed = RealtimeWorkerRequestSchema.safeParse(request)
+    if (!parsed.success) {
+      if (typeof request.id === "string") sendError(request.id,
+        Object.assign(new Error("Invalid realtime worker request."), { code: "REALTIME_WORKER_INVALID_REQUEST" }))
+      return
     }
-    void handle({ id, type, payload: isRecord(request.payload) ? request.payload : {} })
-  } catch (error) {
-    process.stderr.write(`realtime worker request rejected: ${error instanceof Error ? error.message : String(error)}\n`)
+    void handle(parsed.data)
+  } catch {
+    process.stderr.write("realtime worker request rejected: invalid JSON\n")
   }
 })
 lines.once("close", () => void shutdown())
 
-async function shutdown(): Promise<void> {
+async function shutdown(exitCode = 0): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
-  const current = [...connections.values()]
-  connections.clear()
-  await Promise.all(current.map((connection) => connection.stop()))
-  process.exit(0)
+  for (const timer of aliveTimers) clearInterval(timer)
+  aliveTimers.clear()
+  try { await manager.shutdown() } finally { process.exit(exitCode) }
 }
 
 process.once("SIGINT", () => void shutdown())
 process.once("SIGTERM", () => void shutdown())
-
-function requiredString(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${label} is required.`)
-  return value
-}
+process.stdout.on("error", () => void shutdown(1))
 
 function errorCode(error: unknown): string | undefined {
   return typeof error === "object" && error !== null && "code" in error

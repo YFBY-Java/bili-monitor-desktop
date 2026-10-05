@@ -1,4 +1,4 @@
-import type { BilibiliFollowerMonitor, BilibiliFollowerTrend } from "@bmd/contracts"
+import type { BilibiliFollowerMonitorV2, BilibiliFollowerTrendV2 } from "@bmd/contracts"
 import { ArrowLeft, ArrowRight, Grip, TrendingUp } from "lucide-react"
 import type { FollowerResourceState } from "./BilibiliFollowerWorkspace"
 import { FollowerTrendChart } from "./FollowerTrendChart"
@@ -9,7 +9,7 @@ import type { FollowerTrendIndicator } from "./use-follower-trends"
 import "./follower-trend-board.css"
 
 export function BilibiliFollowerTrendBoard({ users, trends, indicator = "idle", now, onSwap, onReload }: {
-  users: BilibiliFollowerMonitor[]; trends: FollowerResourceState<BilibiliFollowerTrend[]>; now: number
+  users: BilibiliFollowerMonitorV2[]; trends: FollowerResourceState<BilibiliFollowerTrendV2[]>; now: number
   indicator?: FollowerTrendIndicator | undefined; onSwap?: ((source: string, target: string) => void) | undefined
   onReload?: (() => void) | undefined
 }) {

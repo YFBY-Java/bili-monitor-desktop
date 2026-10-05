@@ -2,19 +2,25 @@ import {
   BilibiliSubjectSchema,
   BilibiliSubjectTrendSchema,
   BilibiliSubjectWorkbenchSchema,
+  BilibiliSubjectTrendV2Schema,
+  BilibiliSubjectWorkbenchV2Schema,
   CreateBilibiliSubjectInputSchema,
   QueryBilibiliSubjectTrendsInputSchema,
   UpdateBilibiliSubjectBindingInputSchema,
   UpdateBilibiliSubjectInputSchema,
   UpdateBilibiliSubjectLayoutInputSchema,
   createRuntimeEnvelope,
+  javaLongDelta,
+  javaLongToLegacyNumber,
   type BilibiliLiveDanmakuRecent,
   type BilibiliLiveDanmakuStatus,
   type BilibiliSubject,
   type BilibiliSubjectBinding,
   type BilibiliSubjectTrend,
+  type BilibiliSubjectTrendV2,
   type BilibiliSubjectWidgetLayout,
   type BilibiliSubjectWorkbench,
+  type BilibiliSubjectWorkbenchV2,
   type CreateBilibiliSubjectInput,
   type QueryBilibiliSubjectTrendsInput,
   type UpdateBilibiliSubjectBindingInput,
@@ -202,6 +208,14 @@ export class BilibiliSubjectService {
   }
 
   workbench(subjectId: string): BilibiliSubjectWorkbench {
+    const view = this.workbenchV2(subjectId)
+    return BilibiliSubjectWorkbenchSchema.parse({ ...view,
+      ...(view.bilibiliUser ? { bilibiliUser: { ...view.bilibiliUser,
+        ...legacyFollowerFields(view.bilibiliUser) } } : {}),
+      summary: { ...view.summary, ...legacyFollowerFields(view.summary) } })
+  }
+
+  workbenchV2(subjectId: string): BilibiliSubjectWorkbenchV2 {
     let subject = this.requireSubject(subjectId)
     const binding = this.options.database.findBilibiliSubjectBinding(subjectId)
     const user = this.resolveStoredUser(binding)
@@ -219,7 +233,7 @@ export class BilibiliSubjectService {
       : []
     const firstFollower = followerSnapshots.find((item) => item.followerCount !== null)?.followerCount
     const firstOnline = liveSnapshots.find((item) => item.onlineCount !== null)?.onlineCount
-    const followerDelta24h = delta(user?.currentFollowerCount, firstFollower)
+    const followerDelta24h = followerDelta(user?.currentFollowerCount, firstFollower)
     const onlineDelta24h = delta(room?.onlineCount, firstOnline)
     const onlinePeak24h = liveSnapshots
       .map((item) => item.onlineCount)
@@ -244,7 +258,7 @@ export class BilibiliSubjectService {
     if (room) enabledModuleCount += 1
     if (binding?.danmuEnabled) enabledModuleCount += 1
 
-    return BilibiliSubjectWorkbenchSchema.parse({
+    return BilibiliSubjectWorkbenchV2Schema.parse({
       subject: this.toSubject(subject, binding),
       ...(binding ? { bilibiliBinding: this.toBinding(binding) } : {}),
       ...(user ? { bilibiliUser: {
@@ -253,8 +267,8 @@ export class BilibiliSubjectService {
         nickname: user.nickname,
         ...(user.avatarUrl ? { avatarUrl: user.avatarUrl } : {}),
         ...(user.profileUrl ? { profileUrl: user.profileUrl } : {}),
-        ...(user.currentFollowerCount !== null ? { followerCount: user.currentFollowerCount } : {}),
-        ...(user.followingCount !== null ? { followingCount: user.followingCount } : {}),
+        ...(user.currentFollowerCount !== null ? { followerCount: user.currentFollowerCount.toString() } : {}),
+        ...(user.followingCount !== null ? { followingCount: user.followingCount.toString() } : {}),
         ...(followerDelta24h !== undefined ? { followerDelta24h } : {}),
         monitorStatus: user.monitorStatus,
         ...(user.lastSuccessAt ? { lastSuccessAt: user.lastSuccessAt } : {}),
@@ -286,7 +300,7 @@ export class BilibiliSubjectService {
       } } : {}),
       summary: {
         ...(user?.currentFollowerCount !== null && user?.currentFollowerCount !== undefined
-          ? { followerCount: user.currentFollowerCount }
+          ? { followerCount: user.currentFollowerCount.toString() }
           : {}),
         ...(followerDelta24h !== undefined ? { followerDelta24h } : {}),
         ...(room ? { liveStatus: room.liveStatus } : {}),
@@ -315,6 +329,12 @@ export class BilibiliSubjectService {
   }
 
   trends(input: QueryBilibiliSubjectTrendsInput): BilibiliSubjectTrend {
+    const view = this.trendsV2(input)
+    return BilibiliSubjectTrendSchema.parse({ ...view, points: view.points.map(point => ({ ...point,
+      ...(point.followerCount !== undefined ? { followerCount: javaLongToLegacyNumber(point.followerCount) } : {}) })) })
+  }
+
+  trendsV2(input: QueryBilibiliSubjectTrendsInput): BilibiliSubjectTrendV2 {
     const parsed = QueryBilibiliSubjectTrendsInputSchema.parse(input)
     this.requireSubject(parsed.subjectId)
     const binding = this.options.database.findBilibiliSubjectBinding(parsed.subjectId)
@@ -323,7 +343,7 @@ export class BilibiliSubjectService {
     const to = this.options.now()
     const from = new Date(to.getTime() - parseDurationMs(parsed.range))
     const bucketMs = Math.max(60_000, parseDurationMs(parsed.bucket))
-    const points = new Map<string, { bucketAt: string; followerCount?: number; liveOnlineCount?: number }>()
+    const points = new Map<string, { bucketAt: string; followerCount?: string; liveOnlineCount?: number }>()
     const pointAt = (capturedAt: string) => {
       const bucketAt = new Date(Math.floor(new Date(capturedAt).getTime() / bucketMs) * bucketMs)
         .toISOString()
@@ -334,7 +354,7 @@ export class BilibiliSubjectService {
     if (user && parsed.metrics.includes("follower")) {
       for (const snapshot of this.options.database.findBilibiliFollowerSnapshots(user.monitorId, {
         from: from.toISOString(), to: to.toISOString(), limit: 3_000
-      })) pointAt(snapshot.capturedAt).followerCount = snapshot.followerCount
+      })) pointAt(snapshot.capturedAt).followerCount = snapshot.followerCount.toString()
     }
     if (room && parsed.metrics.includes("live_online")) {
       for (const snapshot of this.options.database.findBilibiliLiveRoomSnapshots(room.monitorId, {
@@ -346,13 +366,13 @@ export class BilibiliSubjectService {
     if (points.size === 0 && (user || room)) {
       const point = pointAt(to.toISOString())
       if (user?.currentFollowerCount !== null && user?.currentFollowerCount !== undefined) {
-        point.followerCount = user.currentFollowerCount
+        point.followerCount = user.currentFollowerCount.toString()
       }
       if (room?.onlineCount !== null && room?.onlineCount !== undefined) {
         point.liveOnlineCount = room.onlineCount
       }
     }
-    return BilibiliSubjectTrendSchema.parse({
+    return BilibiliSubjectTrendV2Schema.parse({
       subjectId: parsed.subjectId,
       metrics: parsed.metrics,
       range: parsed.range,
@@ -371,7 +391,7 @@ export class BilibiliSubjectService {
       throw new CoreApplicationError("BILIBILI_FOLLOWER_NOT_FOUND", "B站粉丝监控用户不存在。")
     }
     if (!user && payload.mid) {
-      const created = await this.options.followers.addUser({ mid: payload.mid })
+      const created = await this.options.followers.addUserV2({ mid: payload.mid })
       user = this.options.database.findBilibiliFollowerMonitorById(created.id)
     }
     let mid = user?.mid ?? payload.mid
@@ -402,7 +422,7 @@ export class BilibiliSubjectService {
     }
     if (!user && mid) {
       const existing = this.options.database.findBilibiliFollowerMonitorByMid(mid)
-      const created = existing ? undefined : await this.options.followers.addUser({ mid })
+      const created = existing ? undefined : await this.options.followers.addUserV2({ mid })
       user = existing ?? (created
         ? this.options.database.findBilibiliFollowerMonitorById(created.id)
         : undefined)
@@ -650,7 +670,9 @@ export class BilibiliSubjectService {
     resolved: ResolvedBinding | undefined
   ): string {
     return this.blankToNull(requested)
-      ?? this.blankToNull(resolved?.user?.nickname)
+      // Source SubjectService tests presence but returns the stored nickname
+      // itself. It is already non-Java-blank and VARCHAR-validated by followers.
+      ?? resolved?.user?.nickname
       ?? this.blankToNull(resolved?.room?.uname)
       ?? (resolved?.mid ? `Bilibili UID ${resolved.mid}` : undefined)
       ?? (() => { throw new CoreApplicationError("BAD_REQUEST", "用户监控名称不能为空。") })()
@@ -700,6 +722,21 @@ function delta(current: number | null | undefined, previous: number | null | und
   return current === null || current === undefined || previous === null || previous === undefined
     ? undefined
     : current - previous
+}
+
+function followerDelta(current: bigint | null | undefined, previous: bigint | null | undefined): string | undefined {
+  return current === null || current === undefined || previous === null || previous === undefined
+    ? undefined
+    : javaLongDelta(current, previous).toString()
+}
+
+// Only the explicit old wire exit performs this narrower safe-number projection.
+function legacyFollowerFields(value: { followerCount?: string | undefined; followingCount?: string | undefined; followerDelta24h?: string | undefined }) {
+  return {
+    ...(value.followerCount !== undefined ? { followerCount: javaLongToLegacyNumber(value.followerCount) } : {}),
+    ...(value.followingCount !== undefined ? { followingCount: javaLongToLegacyNumber(value.followingCount) } : {}),
+    ...(value.followerDelta24h !== undefined ? { followerDelta24h: javaLongToLegacyNumber(value.followerDelta24h) } : {})
+  }
 }
 
 function maxIso(left: string | null | undefined, right: string | null | undefined): string | undefined {

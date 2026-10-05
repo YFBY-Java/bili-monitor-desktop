@@ -14,7 +14,7 @@ describe("ControlDatabase", () => {
     if (directory) await rm(directory, { recursive: true, force: true })
   })
 
-  it("creates the WAL control database and applies signed live counter schema version 13", async () => {
+  it("creates the WAL control database and applies signed follower counter schema version 14", async () => {
     const testDirectory = await mkdtemp(resolve(tmpdir(), "bmd-control-"))
     directory = testDirectory
     const database = await ControlDatabase.open(testDirectory)
@@ -22,7 +22,7 @@ describe("ControlDatabase", () => {
       expect(database.status()).toEqual({
         databasePath: resolve(testDirectory, "control.db"),
         journalMode: "wal",
-        schemaVersion: 13
+        schemaVersion: 14
       })
       expect(database.listWorkerStatuses()).toEqual([])
 
@@ -234,10 +234,7 @@ describe("ControlDatabase", () => {
         DROP TABLE douyin_auth_credential;
         DROP TABLE douyin_auth_session;
         DROP TABLE bilibili_live_export_daily_counter;
-        DELETE FROM schema_migration WHERE version = 12;
-        DELETE FROM schema_migration WHERE version = 11;
-        DELETE FROM schema_migration WHERE version = 10;
-        DELETE FROM schema_migration WHERE version = 9;
+        DELETE FROM schema_migration WHERE version >= 9;
         PRAGMA user_version = 8;
       `)
     } finally {
@@ -246,7 +243,7 @@ describe("ControlDatabase", () => {
 
     const upgraded = await ControlDatabase.open(testDirectory)
     try {
-      expect(upgraded.status().schemaVersion).toBe(13)
+      expect(upgraded.status().schemaVersion).toBe(14)
       expect(upgraded.listBilibiliLiveSessions(monitorId, 10)).toMatchObject([
         {
           state: "OPEN",
@@ -492,8 +489,8 @@ describe("ControlDatabase", () => {
         monitorId: "018f0f39-7b5e-7cc1-962d-9a208b3d0200",
         mid: "2",
         nickname: "碧诗",
-        currentFollowerCount: 1_395_836,
-        followingCount: 423,
+        currentFollowerCount: 1_395_836n,
+        followingCount: 423n,
         monitorStatus: "ACTIVE",
         intervalSeconds: 3600,
         sourceEndpoint: "x/web-interface/card"
@@ -502,8 +499,8 @@ describe("ControlDatabase", () => {
         "018f0f39-7b5e-7cc1-962d-9a208b3d0200",
         { limit: 30 }
       )).toMatchObject([{
-        followerCount: 1_395_836,
-        followingCount: 423,
+        followerCount: 1_395_836n,
+        followingCount: 423n,
         capturedAt: "2026-08-29T12:00:00.123Z"
       }])
       expect(store.listPendingOutbox().at(-1)?.topic).toBe("bilibili.follower.snapshot-collected")

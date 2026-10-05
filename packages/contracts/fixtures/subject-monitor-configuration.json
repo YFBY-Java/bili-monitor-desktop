@@ -1,0 +1,11 @@
+[
+  { "name": "defaults", "input": {}, "valid": true },
+  { "name": "enabled", "input": { "enabled": true }, "valid": true },
+  { "name": "disabled", "input": { "enabled": false }, "valid": true },
+  { "name": "null", "input": null, "valid": false },
+  { "name": "array", "input": [], "valid": false },
+  { "name": "null switch", "input": { "enabled": null }, "valid": false },
+  { "name": "string switch", "input": { "enabled": "false" }, "valid": false },
+  { "name": "numeric switch", "input": { "enabled": 0 }, "valid": false },
+  { "name": "unknown key", "input": { "enabled": false, "storageEnabled": true }, "valid": false }
+]

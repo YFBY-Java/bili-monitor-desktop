@@ -1,0 +1,11 @@
+[
+  { "name": "unicode display name", "input": { "mid": "99", "nickname": "合成昵称" }, "valid": true },
+  { "name": "ASCII display name", "input": { "mid": "2", "nickname": "a" }, "valid": true },
+  { "name": "missing name", "input": { "mid": "99" }, "valid": false },
+  { "name": "empty name", "input": { "mid": "99", "nickname": "" }, "valid": false },
+  { "name": "null name", "input": { "mid": "99", "nickname": null }, "valid": false },
+  { "name": "numeric name", "input": { "mid": "99", "nickname": 123 }, "valid": false },
+  { "name": "invalid uid", "input": { "mid": "0", "nickname": "合成" }, "valid": false },
+  { "name": "numeric uid", "input": { "mid": 99, "nickname": "合成" }, "valid": false },
+  { "name": "no evidence payload", "input": { "mid": "99", "nickname": "合成", "evidenceObject": {} }, "valid": false }
+]

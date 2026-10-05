@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { createInterface } from "node:readline"
+import { RealtimeRequestAliveSchema } from "@bmd/contracts"
 
 import { safeWorkerEnvironment } from "./worker-environment"
 
@@ -8,6 +9,8 @@ interface PendingRequest {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
   timeout: NodeJS.Timeout
+  type: "start" | "stop" | "stopAll"
+  connectionId: string | undefined
 }
 
 export interface RealtimeWorkerTransport {
@@ -37,16 +40,21 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
     type: "start" | "stop" | "stopAll",
     payload: Record<string, unknown>
   ): Promise<unknown> {
+    // Reserve a bounded control lane; a saturated start queue must still be stoppable.
+    if (this.pending.size >= (type === "start" ? 100 : 120)) throw Object.assign(new Error("Realtime Worker request queue is full."),
+      { code: "REALTIME_WORKER_BUSY", retryable: true })
     const child = this.ensureStarted()
     const id = randomUUID()
     const timeoutMs = Math.max(1_000, this.options.requestTimeoutMs ?? 30_000)
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        this.pending.delete(id)
-        reject(new Error(`Realtime Worker request ${type} timed out after ${timeoutMs} ms.`))
+        this.handleExit(child, null, Object.assign(new Error(`Realtime Worker did not respond for ${timeoutMs} ms.`),
+          { code: "REALTIME_WORKER_TIMEOUT", retryable: true }))
+        child.kill()
       }, timeoutMs)
-      this.pending.set(id, { resolve, reject, timeout })
-      child.stdin.write(`${JSON.stringify({ id, type, payload })}\n`)
+      this.pending.set(id, { resolve, reject, timeout, type,
+        connectionId: typeof payload.connectionId === "string" ? payload.connectionId : undefined })
+      child.stdin.write(`${JSON.stringify({ id, type, payload, ...(type === "start" ? { keepAlive: true } : {}) })}\n`)
     })
   }
 
@@ -102,12 +110,18 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
     })
     this.child = child
     child.stderr.on("data", (chunk: Buffer | string) => {
+      if (this.child !== child) return
       this.stderrTail = `${this.stderrTail}${chunk.toString()}`.slice(-4_096)
     })
     const lines = createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY })
     lines.on("line", (line) => { if (this.child === child) this.handleLine(line) })
     child.once("exit", (code) => this.handleExit(child, code))
     child.once("error", (error) => this.handleExit(child, null, error))
+    child.stdin.on("error", () => {
+      if (this.child !== child) return
+      this.handleExit(child, null)
+      child.kill()
+    })
     return child
   }
 
@@ -119,6 +133,13 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
       return
     }
     if (!isRecord(value)) return
+    if (value.type === "request-alive") {
+      const parsed = RealtimeRequestAliveSchema.safeParse(value)
+      if (!parsed.success) return
+      const pending = this.pending.get(parsed.data.id)
+      if (pending?.type === "start" && pending.connectionId === parsed.data.connectionId) pending.timeout.refresh()
+      return
+    }
     if (value.type === "event" && typeof value.connectionId === "string") {
       for (const listener of this.listeners.get(value.connectionId) ?? []) listener(value.event)
       return
@@ -149,12 +170,8 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
   ): void {
     if (this.child !== child) return
     this.child = undefined
-    const details = this.stderrTail.trim()
-    const error = cause ?? new Error(
-      details
-        ? `Realtime Worker exited with code ${code}. ${details}`
-        : `Realtime Worker exited with code ${code}.`
-    )
+    const error = cause && "code" in cause && cause.code === "REALTIME_WORKER_TIMEOUT" ? cause
+      : Object.assign(new Error(`Realtime Worker exited with code ${code}.`), { code: "REALTIME_WORKER_EXITED", retryable: true })
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout)
       pending.reject(error)

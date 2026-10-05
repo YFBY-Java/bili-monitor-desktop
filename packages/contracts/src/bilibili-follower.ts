@@ -1,6 +1,16 @@
 import { z } from "zod"
+import { BilibiliFollowerHttpConfigurationSchema } from "./bilibili-follower-configuration"
 
 export const BilibiliUidSchema = z.string().trim().regex(/^[1-9]\d*$/, "Bilibili UID 必须是大于 0 的数字。")
+// Original optionalText uses Java String.isBlank but does not trim the result.
+const FollowerProfileTextSchema = z.string().regex(
+  /[^\u0009-\u000d\u001c-\u0020\u1680\u2000-\u2006\u2008-\u200a\u2028\u2029\u205f\u3000]/,
+  "粉丝资料必须包含非 Java 空白字符。")
+export const BilibiliFollowerProfileSchema = z.object({
+  mid: BilibiliUidSchema,
+  nickname: FollowerProfileTextSchema
+}).strict()
+export type BilibiliFollowerProfile = z.infer<typeof BilibiliFollowerProfileSchema>
 export const BilibiliFollowerIntervalSecondsSchema = z.number().int().min(1).max(2_592_000)
 export const BilibiliFollowerMonitorStatusSchema = z.enum(["ACTIVE", "PAUSED"])
 
@@ -22,8 +32,9 @@ export const BilibiliFollowerPointSchema = z.object({
 export const BilibiliFollowerMonitorSchema = z.object({
   id: z.uuid(),
   mid: BilibiliUidSchema,
-  nickname: z.string().trim().min(1).max(160),
-  avatarUrl: z.url().optional(),
+  nickname: FollowerProfileTextSchema.refine(value => Array.from(value).length <= 160,
+    "已存储昵称最多 160 个 Unicode 字符。"),
+  avatarUrl: FollowerProfileTextSchema.optional(),
   profileUrl: z.url(),
   currentFollowerCount: z.number().int().nonnegative().optional(),
   followingCount: z.number().int().nonnegative().optional(),
@@ -113,6 +124,7 @@ export const QueryBilibiliFollowerTrendsInputSchema = z.object({
 }).strict()
 
 export const BilibiliFollowerFetchRequestSchema = z.object({
+  httpConfiguration: BilibiliFollowerHttpConfigurationSchema.optional(),
   taskId: z.string().min(1),
   attempt: z.number().int().positive(),
   leaseId: z.string().min(1),
@@ -121,8 +133,8 @@ export const BilibiliFollowerFetchRequestSchema = z.object({
 
 export const BilibiliFollowerFetchedSnapshotSchema = z.object({
   mid: BilibiliUidSchema,
-  nickname: z.string().trim().min(1).max(160).optional(),
-  avatarUrl: z.url().optional(),
+  nickname: FollowerProfileTextSchema.optional(),
+  avatarUrl: FollowerProfileTextSchema.optional(),
   profileUrl: z.url(),
   followerCount: z.number().int().nonnegative(),
   followingCount: z.number().int().nonnegative().optional(),

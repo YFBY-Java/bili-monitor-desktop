@@ -25,12 +25,18 @@ describe("Python request watchdog with opt-in liveness frames", () => {
     }
     return { frames, child, respond }
   }
-  it("keeps healthy active and queued live requests pending past the old total limit", async () => {
+  it.each([
+    ["bilibili.live.rank.fetch", "bilibili.live.fetch-room-info"],
+    ["bilibili.follower.fetch-card", "bilibili.follower.fetch-relation-stat"],
+    ["bilibili.follower.fetch-profile", "bilibili.follower.fetch-card"],
+    ["bilibili.follower.fetch-card.v2", "bilibili.follower.fetch-relation-stat.v2"],
+    ["bilibili.follower.fetch-profile.v2", "bilibili.follower.fetch-card.v2"]
+  ])("keeps healthy active %s and queued %s pending past the old total limit", async (firstType, secondType) => {
     const f = setup()
     const settled: unknown[] = []
-    const first = transport.request("bilibili.live.fetch-room-init", {}).then(value => { settled.push(value); return value })
+    const first = transport.request(firstType, {}).then(value => { settled.push(value); return value })
       .catch((error: unknown) => { settled.push(error); return error })
-    const second = transport.request("bilibili.live.fetch-room-info", {}).then(value => { settled.push(value); return value })
+    const second = transport.request(secondType, {}).then(value => { settled.push(value); return value })
       .catch((error: unknown) => { settled.push(error); return error })
     expect(f.frames.every(frame => frame.keepAlive === true)).toBe(true)
     for (let index = 0; index < 4; index++) {

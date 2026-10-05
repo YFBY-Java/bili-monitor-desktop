@@ -17,7 +17,8 @@ describe("BilibiliFollowerWorkerSource", () => {
       mid: "2",
       nickname: "碧诗",
       profileUrl: "https://space.bilibili.com/2",
-      followerCount: 100,
+      followerCount: "9007199254740993",
+      followingCount: "-9223372036854775808",
       fetchedAt: "2026-08-29T12:00:00.000Z",
       sourceEndpoint: "x/web-interface/card",
       evidenceObject: {
@@ -41,8 +42,8 @@ describe("BilibiliFollowerWorkerSource", () => {
     expect(await source.fetchCard(input)).toMatchObject(result)
     expect(await source.fetchRelationStat(input)).toMatchObject(result)
     expect(requests).toEqual([
-      { type: "bilibili.follower.fetch-card", payload: input },
-      { type: "bilibili.follower.fetch-relation-stat", payload: input }
+      { type: "bilibili.follower.fetch-card.v2", payload: input },
+      { type: "bilibili.follower.fetch-relation-stat.v2", payload: input }
     ])
   })
 })

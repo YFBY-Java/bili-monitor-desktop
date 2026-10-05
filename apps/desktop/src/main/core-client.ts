@@ -2,6 +2,14 @@ import { randomUUID } from "node:crypto"
 
 import {
   AddBilibiliFollowerMonitorInputSchema,
+  AddBilibiliFollowerMonitorInputV2Schema,
+  BilibiliFollowerCollectResultV2Schema,
+  BilibiliFollowerMonitorListV2Schema,
+  BilibiliFollowerMonitorV2Schema,
+  BilibiliFollowerTrendListV2Schema,
+  BilibiliFollowerTrendV2Schema,
+  BilibiliSubjectTrendV2Schema,
+  BilibiliSubjectWorkbenchV2Schema,
   BilibiliAuthRefreshResultSchema,
   BilibiliAuthStatusSchema,
   BilibiliCredentialSchema,
@@ -31,6 +39,7 @@ import {
   RuntimeErrorSchema,
   SubjectListSchema,
   SubjectSummarySchema,
+  startupConfigurationErrorMessage,
   UpdateBilibiliFollowerMonitorSettingsInputSchema,
   UpdateBilibiliFollowerMonitorStatusInputSchema,
   AddBilibiliLiveRoomInputSchema,
@@ -101,7 +110,7 @@ import {
   DouyinValidationResultSchema,
   RevokeDouyinCredentialResultSchema,
   createRuntimeEnvelope,
-  LIVE_HTTP_CORE_REQUESTS,
+  HTTP_CORE_REQUESTS,
   RequestKeepAliveSchema,
   type BootstrapResponse,
   type RuntimeError,
@@ -141,6 +150,8 @@ class CoreRequestError extends Error {
 const LONG_RUNNING_CORE_REQUESTS = new Set([
   "bilibili-followers.add",
   "bilibili-followers.refresh",
+  "bilibili-followers.add.v2",
+  "bilibili-followers.refresh.v2",
   "bilibili-auth.qr.start",
   "bilibili-auth.qr.poll",
   "bilibili-auth.status",
@@ -237,7 +248,7 @@ export class LocalCoreController {
     } catch (error) {
       await this.forceStop()
       // Known actionable configuration errors already carry a fixed, safe protocol message.
-      if (error instanceof CoreRequestError && error.code === "BILIBILI_LIVE_CONFIG_INVALID") throw error
+      if (error instanceof CoreRequestError && startupConfigurationErrorMessage(error.code) !== undefined) throw error
       const message = error instanceof Error ? error.message : String(error)
       const details = this.stderrTail.trim()
       throw new Error(details ? `${message}\n${details}` : message)
@@ -355,6 +366,56 @@ export class LocalCoreController {
       UpdateBilibiliSubjectLayoutInputSchema.parse(input)
     )
     return BilibiliSubjectWidgetLayoutSchema.array().parse(envelope.payload)
+  }
+
+  async getBilibiliSubjectWorkbenchV2(input: unknown) {
+    const envelope = await this.request("bilibili-subjects.workbench.v2", BilibiliSubjectIdInputSchema.parse(input))
+    return BilibiliSubjectWorkbenchV2Schema.parse(envelope.payload)
+  }
+
+  async queryBilibiliSubjectTrendsV2(input: unknown) {
+    const envelope = await this.request("bilibili-subjects.trends.v2", QueryBilibiliSubjectTrendsInputSchema.parse(input))
+    return BilibiliSubjectTrendV2Schema.parse(envelope.payload)
+  }
+
+  async listBilibiliFollowerMonitorsV2(input: unknown) {
+    const envelope = await this.request("bilibili-followers.list.v2", ListBilibiliFollowerMonitorsInputSchema.parse(input ?? {}))
+    return BilibiliFollowerMonitorListV2Schema.parse(envelope.payload)
+  }
+
+  async addBilibiliFollowerMonitorV2(input: unknown) {
+    const envelope = await this.request("bilibili-followers.add.v2", AddBilibiliFollowerMonitorInputV2Schema.parse(input))
+    return BilibiliFollowerMonitorV2Schema.parse(envelope.payload)
+  }
+
+  async updateBilibiliFollowerMonitorStatusV2(input: unknown) {
+    const envelope = await this.request("bilibili-followers.update-status.v2", UpdateBilibiliFollowerMonitorStatusInputSchema.parse(input))
+    return BilibiliFollowerMonitorV2Schema.parse(envelope.payload)
+  }
+
+  async updateBilibiliFollowerMonitorSettingsV2(input: unknown) {
+    const envelope = await this.request("bilibili-followers.update-settings.v2", UpdateBilibiliFollowerMonitorSettingsInputSchema.parse(input))
+    return BilibiliFollowerMonitorV2Schema.parse(envelope.payload)
+  }
+
+  async refreshBilibiliFollowerMonitorV2(input: unknown) {
+    const envelope = await this.request("bilibili-followers.refresh.v2", BilibiliFollowerMonitorIdInputSchema.parse(input))
+    return BilibiliFollowerCollectResultV2Schema.parse(envelope.payload)
+  }
+
+  async deleteBilibiliFollowerMonitorV2(input: unknown) {
+    const envelope = await this.request("bilibili-followers.delete.v2", BilibiliFollowerMonitorIdInputSchema.parse(input))
+    return DeleteBilibiliFollowerMonitorResultSchema.parse(envelope.payload)
+  }
+
+  async queryBilibiliFollowerTrendV2(input: unknown) {
+    const envelope = await this.request("bilibili-followers.trend.v2", QueryBilibiliFollowerTrendInputSchema.parse(input))
+    return BilibiliFollowerTrendV2Schema.parse(envelope.payload)
+  }
+
+  async queryBilibiliFollowerTrendsV2(input: unknown) {
+    const envelope = await this.request("bilibili-followers.trends.v2", QueryBilibiliFollowerTrendsInputSchema.parse(input))
+    return BilibiliFollowerTrendListV2Schema.parse(envelope.payload)
   }
 
   async listBilibiliFollowerMonitors(input: unknown) {
@@ -735,7 +796,7 @@ export class LocalCoreController {
       timestamp: new Date().toISOString(),
       correlationId: id,
       traceId: randomUUID(),
-      ...(LIVE_HTTP_CORE_REQUESTS.some(request => request === type) ? { keepAlive: true } : {}),
+      ...(HTTP_CORE_REQUESTS.some(request => request === type) ? { keepAlive: true } : {}),
       payload
     })
 
@@ -757,20 +818,22 @@ export class LocalCoreController {
     const envelope = parsed.data as RuntimeEnvelope
     const pending = this.pending.get(envelope.id)
     if (!pending) return
+    if (envelope.traceId !== pending.envelope.traceId || envelope.correlationId !== pending.envelope.correlationId) return
     if (envelope.type === "core.request-alive") {
       const payload = RequestKeepAliveSchema.safeParse(envelope.payload)
-      if (pending.envelope.keepAlive && payload.success && payload.data.requestType === pending.envelope.type
-        && envelope.traceId === pending.envelope.traceId && envelope.correlationId === pending.envelope.correlationId) {
+      if (pending.envelope.keepAlive && payload.success && payload.data.requestType === pending.envelope.type) {
         pending.timeout.refresh()
       }
       return
     }
+    if (envelope.type !== "core.error" && envelope.type !== `${pending.envelope.type}.result`) return
+    const runtimeError = envelope.type === "core.error" ? RuntimeErrorSchema.safeParse(envelope.payload) : undefined
+    if (runtimeError && !runtimeError.success) return
 
     clearTimeout(pending.timeout)
     this.pending.delete(envelope.id)
-    if (envelope.type === "core.error") {
-      const runtimeError = RuntimeErrorSchema.parse(envelope.payload)
-      pending.reject(new CoreRequestError(runtimeError))
+    if (runtimeError?.success) {
+      pending.reject(new CoreRequestError(runtimeError.data))
       return
     }
     pending.resolve(envelope)

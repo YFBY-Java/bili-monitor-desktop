@@ -64,7 +64,7 @@ describe("v13 original signed live counters", () => {
         raw.exec(`DROP TABLE ${table}; ALTER TABLE ${table}_v12_fixture RENAME TO ${table};`)
         for (const index of indexes) raw.exec(String(index.sql))
       }
-      raw.exec(`DELETE FROM schema_migration WHERE version=13; PRAGMA user_version=12; COMMIT; PRAGMA foreign_keys=ON;
+      raw.exec(`DELETE FROM schema_migration WHERE version>=13; PRAGMA user_version=12; COMMIT; PRAGMA foreign_keys=ON;
         INSERT INTO object_artifact(object_id, relative_path, media_type, size_bytes, sha256, created_at)
         VALUES ('${artifactId}', 'objects/synthetic.json', 'application/json', 2, '${"a".repeat(64)}', '2026-09-13T00:00:00Z');
         INSERT INTO bilibili_live_room_monitor(rowid, monitor_id, uid, room_id, uname, live_status, online_count, attention_count,
@@ -84,7 +84,7 @@ describe("v13 original signed live counters", () => {
         "bilibili_live_danmaku_recent", "object_artifact"].map(table => [table, raw.prepare(`SELECT rowid, * FROM ${table}`).all()]))
       raw.close()
       const upgraded = await ControlDatabase.open(directory)
-      try { expect(upgraded.status().schemaVersion).toBe(13) } finally { upgraded.close() }
+      try { expect(upgraded.status().schemaVersion).toBe(14) } finally { upgraded.close() }
       const verify = new DatabaseSync(path)
       try {
         for (const [table, rows] of Object.entries(before)) expect(verify.prepare(`SELECT rowid, * FROM ${table}`).all()).toEqual(rows)

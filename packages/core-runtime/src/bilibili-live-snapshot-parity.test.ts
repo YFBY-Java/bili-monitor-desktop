@@ -123,7 +123,10 @@ describe("original live snapshot application semantics", () => {
     vi.setSystemTime(new Date("2026-09-05T02:00:00.000Z"))
     const requests = ["22", "23", "24"].map((uid) => f.service.addRoom({ uid }))
     await vi.advanceTimersByTimeAsync(5000)
-    await Promise.all(requests)
     expect(f.statusCalls.map((time) => time - f.statusCalls[0]!)).toEqual([0, 1500, 3000])
+    // The original shared acquisition lock queues detail calls after the status calls;
+    // their permits arrive at 3000/4500/6000, not independently at 0/1500/3000.
+    await vi.advanceTimersByTimeAsync(1000)
+    await Promise.all(requests)
   })
 })

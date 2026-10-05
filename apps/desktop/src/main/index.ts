@@ -259,6 +259,12 @@ if (ownsPrimaryInstance) {
     ipcMain.handle("bilibili-subjects:trends", async (_event, input: unknown) =>
       (await getReadyCore()).queryBilibiliSubjectTrends(input)
     )
+    ipcMain.handle("bilibili-subjects:workbench.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).getBilibiliSubjectWorkbenchV2(input)
+    )
+    ipcMain.handle("bilibili-subjects:trends.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).queryBilibiliSubjectTrendsV2(input)
+    )
     ipcMain.handle("bilibili-subjects:layout-update", async (_event, input: unknown) =>
       (await getReadyCore()).updateBilibiliSubjectLayout(input)
     )
@@ -285,6 +291,30 @@ if (ownsPrimaryInstance) {
     )
     ipcMain.handle("bilibili-followers:trends", async (_event, input: unknown) =>
       (await getReadyCore()).queryBilibiliFollowerTrends(input)
+    )
+    ipcMain.handle("bilibili-followers:list.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).listBilibiliFollowerMonitorsV2(input)
+    )
+    ipcMain.handle("bilibili-followers:add.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).addBilibiliFollowerMonitorV2(input)
+    )
+    ipcMain.handle("bilibili-followers:update-status.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).updateBilibiliFollowerMonitorStatusV2(input)
+    )
+    ipcMain.handle("bilibili-followers:update-settings.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).updateBilibiliFollowerMonitorSettingsV2(input)
+    )
+    ipcMain.handle("bilibili-followers:refresh.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).refreshBilibiliFollowerMonitorV2(input)
+    )
+    ipcMain.handle("bilibili-followers:delete.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).deleteBilibiliFollowerMonitorV2(input)
+    )
+    ipcMain.handle("bilibili-followers:trend.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).queryBilibiliFollowerTrendV2(input)
+    )
+    ipcMain.handle("bilibili-followers:trends.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).queryBilibiliFollowerTrendsV2(input)
     )
     ipcMain.handle("bilibili-auth:qr-start", async () =>
       (await getReadyCore()).startBilibiliQrLogin()

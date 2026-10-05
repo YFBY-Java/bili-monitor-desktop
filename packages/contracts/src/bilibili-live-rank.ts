@@ -2,6 +2,7 @@ import { z } from "zod"
 
 import { ObjectRefSchema } from "./bilibili-follower"
 import { BilibiliLiveNumericIdSchema } from "./bilibili-live"
+import { BilibiliLiveHttpConfigurationSchema } from "./bilibili-live-http"
 
 export const BilibiliLiveRankFamilySchema = z.enum(["AUDIENCE", "GUARD"])
 export const BilibiliLiveRankEndpointSchema = z.enum([
@@ -82,6 +83,7 @@ export const BilibiliLiveRankRefreshResultSchema = z.object({
 }).strict()
 
 export const BilibiliLiveRankWorkerRequestSchema = z.object({
+  httpConfiguration: BilibiliLiveHttpConfigurationSchema.optional(),
   taskId: z.string().min(1),
   attempt: z.number().int().positive(),
   leaseId: z.string().min(1),

@@ -1,0 +1,267 @@
+[
+  {
+    "name": "defaults",
+    "input": {},
+    "valid": true
+  },
+  {
+    "name": "full valid original properties",
+    "input": {
+      "enabled": true,
+      "storageEnabled": true,
+      "schedulerDelayMs": 1000,
+      "dueBatchSize": 10,
+      "defaultIntervalSeconds": 3600,
+      "minIntervalSeconds": 1,
+      "maxIntervalSeconds": 2592000,
+      "shortIntervalWarningSeconds": 60,
+      "failureBackoffSeconds": 900,
+      "requestMinIntervalMs": 1500,
+      "maxAttempts": 3,
+      "retryBackoffMs": 1500,
+      "connectTimeoutMs": 5000,
+      "readTimeoutMs": 10000,
+      "userAgent": "SocialDataMonitor/0.1 (+low-frequency public Bilibili follower monitor)",
+      "referer": "https://www.bilibili.com/"
+    },
+    "valid": true
+  },
+  {
+    "name": "disabled monitor and storage",
+    "input": {
+      "enabled": false,
+      "storageEnabled": false
+    },
+    "valid": true
+  },
+  {
+    "name": "signed consumer normalized policies",
+    "input": {
+      "dueBatchSize": -1,
+      "defaultIntervalSeconds": -2147483648,
+      "minIntervalSeconds": -2,
+      "maxIntervalSeconds": -1,
+      "shortIntervalWarningSeconds": -4,
+      "failureBackoffSeconds": -1,
+      "requestMinIntervalMs": -2,
+      "maxAttempts": 0,
+      "retryBackoffMs": -3
+    },
+    "valid": true
+  },
+  {
+    "name": "maximum integer policies",
+    "input": {
+      "dueBatchSize": 2147483647,
+      "defaultIntervalSeconds": 2147483647,
+      "retryBackoffMs": 2147483647
+    },
+    "valid": true
+  },
+  {
+    "name": "small scheduler interval",
+    "input": {
+      "schedulerDelayMs": 1
+    },
+    "valid": true
+  },
+  {
+    "name": "zero HTTP timeouts",
+    "input": {
+      "connectTimeoutMs": 0,
+      "readTimeoutMs": 0
+    },
+    "valid": true
+  },
+  {
+    "name": "maximum HTTP timeouts",
+    "input": {
+      "connectTimeoutMs": 2147483647,
+      "readTimeoutMs": 2147483647
+    },
+    "valid": true
+  },
+  {
+    "name": "empty and tab headers",
+    "input": {
+      "userAgent": "",
+      "referer": "\t"
+    },
+    "valid": true
+  },
+  {
+    "name": "null root",
+    "input": null,
+    "valid": false
+  },
+  {
+    "name": "unknown property",
+    "input": {
+      "statusBatchSize": 20
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid enabled null",
+    "input": {
+      "enabled": null
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid enabled \"false\"",
+    "input": {
+      "enabled": "false"
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid enabled 0",
+    "input": {
+      "enabled": 0
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid storageEnabled null",
+    "input": {
+      "storageEnabled": null
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid storageEnabled \"false\"",
+    "input": {
+      "storageEnabled": "false"
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid storageEnabled 0",
+    "input": {
+      "storageEnabled": 0
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid schedulerDelayMs 20",
+    "input": {
+      "schedulerDelayMs": "20"
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid schedulerDelayMs 1.5",
+    "input": {
+      "schedulerDelayMs": 1.5
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid schedulerDelayMs 2147483648",
+    "input": {
+      "schedulerDelayMs": 2147483648
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid dueBatchSize 20",
+    "input": {
+      "dueBatchSize": "20"
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid dueBatchSize 1.5",
+    "input": {
+      "dueBatchSize": 1.5
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid dueBatchSize 2147483648",
+    "input": {
+      "dueBatchSize": 2147483648
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid retryBackoffMs 20",
+    "input": {
+      "retryBackoffMs": "20"
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid retryBackoffMs 1.5",
+    "input": {
+      "retryBackoffMs": 1.5
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid retryBackoffMs 2147483648",
+    "input": {
+      "retryBackoffMs": 2147483648
+    },
+    "valid": false
+  },
+  {
+    "name": "zero scheduler delay",
+    "input": {
+      "schedulerDelayMs": 0
+    },
+    "valid": false
+  },
+  { "name": "negative active scheduler delay", "input": { "schedulerDelayMs": -1 }, "valid": false },
+  { "name": "disabled automatic scheduler permits zero", "input": { "enabled": false, "schedulerDelayMs": 0 }, "valid": true },
+  { "name": "disabled automatic scheduler permits int32 minimum", "input": { "enabled": false, "schedulerDelayMs": -2147483648 }, "valid": true },
+  { "name": "disabled storage permits zero delay", "input": { "storageEnabled": false, "schedulerDelayMs": 0 }, "valid": true },
+  { "name": "disabled storage permits negative delay", "input": { "storageEnabled": false, "schedulerDelayMs": -1 }, "valid": true },
+  { "name": "both disabled permit negative delay", "input": { "enabled": false, "storageEnabled": false, "schedulerDelayMs": -1 }, "valid": true },
+  { "name": "disabled scheduler still rejects int32 underflow", "input": { "enabled": false, "schedulerDelayMs": -2147483649 }, "valid": false },
+  { "name": "disabled scheduler still rejects string delay", "input": { "enabled": false, "schedulerDelayMs": "0" }, "valid": false },
+  { "name": "disabled storage still rejects negative HTTP timeout", "input": { "storageEnabled": false, "connectTimeoutMs": -1 }, "valid": false },
+  {
+    "name": "negative connect timeout",
+    "input": {
+      "connectTimeoutMs": -1
+    },
+    "valid": false
+  },
+  {
+    "name": "boolean read timeout",
+    "input": {
+      "readTimeoutMs": true
+    },
+    "valid": false
+  },
+  {
+    "name": "null timeout",
+    "input": {
+      "readTimeoutMs": null
+    },
+    "valid": false
+  },
+  {
+    "name": "newline header",
+    "input": {
+      "userAgent": "unsafe\n"
+    },
+    "valid": false
+  },
+  {
+    "name": "carriage return header",
+    "input": {
+      "referer": "unsafe\r"
+    },
+    "valid": false
+  },
+  {
+    "name": "unicode header",
+    "input": {
+      "userAgent": "合成"
+    },
+    "valid": false
+  }
+]

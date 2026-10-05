@@ -1,12 +1,54 @@
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import react from "@vitejs/plugin-react"
-import { chromium, type Browser, type Page } from "playwright"
+import { chromium, type Browser, type Page, type Request } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
 
+type SetupProbe = {
+  startedAt: number
+  finished: boolean
+  phases: { phase: string; ms: number }[]
+  pendingResources: Map<Request, string>
+  pendingResourceCount: number
+  resourceFailures: { kind: "requestfailed" | "response"; pathname: string; status?: number }[]
+  failureCount: number
+}
+
+function recordSetupPhase(probe: SetupProbe, phase: string): void {
+  if (probe.phases.length < 100) probe.phases.push({ phase, ms: Math.round(performance.now() - probe.startedAt) })
+}
+
+function watchSetupResources(setupPage: Page, probe: SetupProbe): void {
+  setupPage.on("request", request => {
+    probe.pendingResourceCount++
+    if (probe.pendingResources.size < 100) probe.pendingResources.set(request, new URL(request.url()).pathname.slice(0, 256))
+  })
+  setupPage.on("requestfinished", request => {
+    probe.pendingResourceCount--
+    probe.pendingResources.delete(request)
+  })
+  setupPage.on("requestfailed", request => {
+    probe.pendingResourceCount--
+    probe.pendingResources.delete(request)
+    probe.failureCount++
+    if (probe.resourceFailures.length < 100) probe.resourceFailures.push({
+      kind: "requestfailed", pathname: new URL(request.url()).pathname.slice(0, 256)
+    })
+  })
+  setupPage.on("response", response => {
+    const status = response.status()
+    if (status < 400) return
+    probe.failureCount++
+    if (probe.resourceFailures.length < 100) probe.resourceFailures.push({
+      kind: "response", pathname: new URL(response.url()).pathname.slice(0, 256), status
+    })
+  })
+}
+
 describe("shared original live data widget in real desktop pages", () => {
   let server: ViteDevServer, browser: Browser, page: Page, url: string
+  let setupProbe: SetupProbe
   beforeAll(async () => {
     server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
       cacheDir: resolve("node_modules/.vite-widget-test"), plugins: [react()],
@@ -19,13 +61,42 @@ describe("shared original live data widget in real desktop pages", () => {
   }, 30000)
   afterAll(async () => { await browser?.close(); await server?.close() })
   beforeEach(async () => {
-    page = await browser.newPage({ viewport: { width: 1500, height: 1100 } })
+    const probe: SetupProbe = {
+      startedAt: performance.now(), finished: false, phases: [], pendingResources: new Map(), pendingResourceCount: 0,
+      resourceFailures: [], failureCount: 0
+    }
+    setupProbe = probe
+    recordSetupPhase(probe, "page:create")
+    const setupPage = await browser.newPage({ viewport: { width: 1500, height: 1100 } })
+    page = setupPage
+    recordSetupPhase(probe, "page:created")
+    if (probe.finished) console.warn("Late live data widget setup page created", { phases: probe.phases })
+    watchSetupResources(setupPage, probe)
     page.setDefaultTimeout(2500)
+    // Synthetic rank avatars must never escape the local fixture server.
+    recordSetupPhase(probe, "route:start")
+    await page.route("**/*", route => new URL(route.request().url()).origin === new URL(url).origin
+      ? route.continue() : route.abort())
+    recordSetupPhase(probe, "route:ready")
+    recordSetupPhase(probe, "clock:start")
     await page.clock.install()
-    await page.goto(url)
+    recordSetupPhase(probe, "clock:ready")
+    // Vite may still be optimizing local modules; the heading below is the UI readiness signal.
+    recordSetupPhase(probe, "navigate:start")
+    await page.goto(url, { waitUntil: "commit" })
+    recordSetupPhase(probe, "navigate:committed")
     await page.getByRole("heading", { name: "合成工作台", exact: true }).waitFor({ timeout: 15000 })
+    recordSetupPhase(probe, "heading-ready")
   })
-  afterEach(async () => { await page?.close() })
+  afterEach(async ({ task }) => {
+    setupProbe.finished = true
+    if (task.result?.state === "fail") console.warn("Live data widget fixture setup", {
+      phases: setupProbe.phases, pendingResourceCount: setupProbe.pendingResourceCount,
+      pendingResources: [...setupProbe.pendingResources.values()], failureCount: setupProbe.failureCount,
+      resourceFailures: setupProbe.resourceFailures
+    })
+    await page?.close()
+  })
 
   it("offers the 505th live room in the actual subject binding drawer", async () => {
     await page.evaluate(() => window.widgetFixture.expandRoomList())

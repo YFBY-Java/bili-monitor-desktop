@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto"
+import { BilibiliLiveHttpConfigurationSchema, type BilibiliLiveHttpConfiguration } from "@bmd/contracts"
 
 import WebSocket, { type RawData } from "ws"
+import { getBilibiliJson, ensureNotCancelled, danmakuCancelled } from "./bilibili-http"
 
 import { parseBilibiliDanmakuEvents, type ParsedBilibiliDanmakuEvent } from "./bilibili-danmaku-event"
 import {
@@ -11,7 +13,6 @@ import {
   type ParsedBilibiliDanmakuPacket
 } from "./bilibili-danmaku-packet"
 
-const USER_AGENT = "BiliMonitorDesktop/0.1 (+local Bilibili live danmaku monitor)"
 const MIXIN_KEY_ENC_TAB = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
   27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
@@ -25,6 +26,8 @@ export interface BilibiliDanmakuConnectionInput {
   credential?: { cookieHeader: string; authUid: string }
   connectTimeoutMs?: number
   heartbeatSeconds?: number
+  httpConfiguration?: BilibiliLiveHttpConfiguration
+  signal?: AbortSignal
 }
 
 export type BilibiliDanmakuConnectionEvent =
@@ -56,11 +59,14 @@ export async function startBilibiliDanmakuConnection(
   input: BilibiliDanmakuConnectionInput,
   onEvent: (event: BilibiliDanmakuConnectionEvent) => void
 ): Promise<RunningBilibiliDanmakuConnection> {
-  const info = await fetchDanmuInfoWithFallback(input.roomId, input.credential)
+  ensureNotCancelled(input.signal)
+  const configuration = BilibiliLiveHttpConfigurationSchema.parse(input.httpConfiguration ?? {})
+  const info = await fetchDanmuInfoWithFallback(input.roomId, configuration, input.credential, input.signal)
   const candidates = protocolCandidates(input.protocolVersion)
   let lastError: unknown
   for (const protocolVersion of candidates) {
     for (const connectHost of info.hosts) {
+      ensureNotCancelled(input.signal)
       try {
         const socket = await authenticateSocket({
           connectHost,
@@ -69,6 +75,7 @@ export async function startBilibiliDanmakuConnection(
           info,
           connectTimeoutMs: Math.max(1_000, input.connectTimeoutMs ?? 8_000),
           heartbeatSeconds: Math.max(5, input.heartbeatSeconds ?? 30),
+          signal: input.signal,
           onEvent
         })
         return {
@@ -79,6 +86,7 @@ export async function startBilibiliDanmakuConnection(
           stop: () => closeSocket(socket)
         }
       } catch (error) {
+        ensureNotCancelled(input.signal)
         lastError = error
       }
     }
@@ -91,34 +99,41 @@ export async function startBilibiliDanmakuConnection(
 
 async function fetchDanmuInfoWithFallback(
   roomId: string,
-  credential?: { cookieHeader: string; authUid: string }
+  configuration: BilibiliLiveHttpConfiguration,
+  credential?: { cookieHeader: string; authUid: string },
+  signal?: AbortSignal
 ): Promise<DanmuInfo> {
   if (credential) {
     try {
-      return await fetchDanmuInfo(roomId, credential, false)
+      return await fetchDanmuInfo(roomId, credential, false, configuration, signal)
     } catch (error) {
+      ensureNotCancelled(signal)
       if (!isCredentialFallbackError(error)) throw error
       cachedWbiKeys = undefined
       cachedBuvid = undefined
     }
   }
   try {
-    return await fetchDanmuInfo(roomId, undefined, false)
+    return await fetchDanmuInfo(roomId, undefined, false, configuration, signal)
   } catch (error) {
+    ensureNotCancelled(signal)
     if (!isRiskError(error)) throw error
     cachedWbiKeys = undefined
     cachedBuvid = undefined
-    return fetchDanmuInfo(roomId, undefined, true)
+    return fetchDanmuInfo(roomId, undefined, true, configuration, signal)
   }
 }
 
 async function fetchDanmuInfo(
   roomId: string,
   credential: { cookieHeader: string; authUid: string } | undefined,
-  forceRefresh: boolean
+  forceRefresh: boolean,
+  configuration: BilibiliLiveHttpConfiguration,
+  signal?: AbortSignal
 ): Promise<DanmuInfo> {
-  const buvid = await getBuvid(forceRefresh)
-  const keys = await getWbiKeys(forceRefresh, credential?.cookieHeader)
+  ensureNotCancelled(signal)
+  const buvid = await getBuvid(forceRefresh, configuration, signal)
+  const keys = await getWbiKeys(forceRefresh, configuration, credential?.cookieHeader, signal)
   const parameters = signWbiParams({
     id: roomId,
     type: "0",
@@ -126,17 +141,18 @@ async function fetchDanmuInfo(
   }, keys.imgKey, keys.subKey)
   const url = new URL("https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo")
   for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, value)
-  const response = await fetch(url, {
+  const response = await getBilibiliJson(url, {
+    configuration,
     headers: {
       Accept: "application/json",
-      Referer: "https://live.bilibili.com/",
-      "User-Agent": USER_AGENT,
+      Referer: configuration.referer,
+      "User-Agent": configuration.userAgent,
       Cookie: mergeCookies(
         credential?.cookieHeader,
         `buvid3=${buvid.buvid3}${buvid.buvid4 ? `; buvid4=${buvid.buvid4}` : ""}`
       )
     },
-    signal: AbortSignal.timeout(10_000)
+    ...(signal ? { signal } : {})
   })
   if (!response.ok) {
     throw withCode(
@@ -177,11 +193,13 @@ async function fetchDanmuInfo(
   }
 }
 
-async function getBuvid(forceRefresh: boolean): Promise<{ buvid3: string; buvid4?: string }> {
+async function getBuvid(forceRefresh: boolean, configuration: BilibiliLiveHttpConfiguration, signal?: AbortSignal): Promise<{ buvid3: string; buvid4?: string }> {
+  ensureNotCancelled(signal)
   if (!forceRefresh && cachedBuvid && cachedBuvid.expiresAt > Date.now()) return cachedBuvid
-  const response = await fetch("https://api.bilibili.com/x/frontend/finger/spi", {
-    headers: { Accept: "application/json", Referer: "https://www.bilibili.com/", "User-Agent": USER_AGENT },
-    signal: AbortSignal.timeout(10_000)
+  const response = await getBilibiliJson("https://api.bilibili.com/x/frontend/finger/spi", {
+    configuration,
+    headers: { Accept: "application/json", Referer: "https://www.bilibili.com/", "User-Agent": configuration.userAgent },
+    ...(signal ? { signal } : {})
   })
   if (!response.ok) throw withCode(`Bilibili buvid returned HTTP ${response.status}.`, "BILIBILI_HTTP_ERROR")
   const root = await response.json() as unknown
@@ -195,17 +213,21 @@ async function getBuvid(forceRefresh: boolean): Promise<{ buvid3: string; buvid4
 
 async function getWbiKeys(
   forceRefresh: boolean,
-  cookieHeader?: string
+  configuration: BilibiliLiveHttpConfiguration,
+  cookieHeader?: string,
+  signal?: AbortSignal
 ): Promise<{ imgKey: string; subKey: string }> {
+  ensureNotCancelled(signal)
   if (!forceRefresh && cachedWbiKeys && cachedWbiKeys.expiresAt > Date.now()) return cachedWbiKeys
-  const response = await fetch("https://api.bilibili.com/x/web-interface/nav", {
+  const response = await getBilibiliJson("https://api.bilibili.com/x/web-interface/nav", {
+    configuration,
     headers: {
       Accept: "application/json",
       Referer: "https://www.bilibili.com/",
-      "User-Agent": USER_AGENT,
+      "User-Agent": configuration.userAgent,
       ...(cookieHeader ? { Cookie: cookieHeader } : {})
     },
-    signal: AbortSignal.timeout(10_000)
+    ...(signal ? { signal } : {})
   })
   if (!response.ok) throw withCode(`Bilibili WBI nav returned HTTP ${response.status}.`, "BILIBILI_HTTP_ERROR")
   const root = await response.json() as unknown
@@ -246,8 +268,10 @@ async function authenticateSocket(input: {
   info: DanmuInfo
   connectTimeoutMs: number
   heartbeatSeconds: number
+  signal: AbortSignal | undefined
   onEvent: (event: BilibiliDanmakuConnectionEvent) => void
 }): Promise<WebSocket> {
+  ensureNotCancelled(input.signal)
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(input.connectHost, { handshakeTimeout: input.connectTimeoutMs })
     let authenticated = false
@@ -256,7 +280,7 @@ async function authenticateSocket(input: {
     const timeout = setTimeout(() => {
       if (!authenticated) {
         completed = true
-        socket.close(1000, "authentication timeout")
+        socket.terminate()
         reject(withCode("Bilibili danmaku authentication timed out.", "BILIBILI_DANMAKU_AUTH_TIMEOUT"))
       }
     }, input.connectTimeoutMs)
@@ -274,7 +298,10 @@ async function authenticateSocket(input: {
         })
       }
     }
+    const onAbort = () => { fail(danmakuCancelled()); socket.terminate() }
+    input.signal?.addEventListener("abort", onAbort, { once: true })
     socket.once("open", () => {
+      if (completed || input.signal?.aborted) return
       socket.send(buildBilibiliDanmakuAuthPacket({
         roomId: input.roomId,
         uid: input.info.authUid,
@@ -285,6 +312,7 @@ async function authenticateSocket(input: {
       }))
     })
     socket.on("message", (raw, isBinary) => {
+      if (input.signal?.aborted || (completed && !authenticated)) return
       const receivedAt = new Date().toISOString()
       const bytes = rawDataBuffer(raw)
       const packets: ParsedBilibiliDanmakuPacket[] = isBinary === false
@@ -322,12 +350,14 @@ async function authenticateSocket(input: {
     })
     socket.once("error", fail)
     socket.once("close", (code, reason) => {
+      input.signal?.removeEventListener("abort", onAbort)
       clearTimeout(timeout)
       if (heartbeat) clearInterval(heartbeat)
       if (!authenticated) {
         fail(withCode(`Bilibili danmaku socket closed before authentication (${code}).`, "BILIBILI_DANMAKU_CLOSED"))
         return
       }
+      if (input.signal?.aborted) return
       input.onEvent({
         type: "closed",
         receivedAt: new Date().toISOString(),
@@ -341,7 +371,7 @@ async function authenticateSocket(input: {
 function closeSocket(socket: WebSocket): Promise<void> {
   if (socket.readyState === WebSocket.CLOSED) return Promise.resolve()
   return new Promise((resolve) => {
-    const timeout = setTimeout(resolve, 1_500)
+    const timeout = setTimeout(() => { socket.terminate(); resolve() }, 1_500)
     socket.once("close", () => {
       clearTimeout(timeout)
       resolve()

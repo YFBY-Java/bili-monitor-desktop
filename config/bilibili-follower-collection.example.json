@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "storageEnabled": true,
+  "schedulerDelayMs": 1000,
+  "dueBatchSize": 10,
+  "defaultIntervalSeconds": 3600,
+  "minIntervalSeconds": 1,
+  "maxIntervalSeconds": 2592000,
+  "shortIntervalWarningSeconds": 60,
+  "failureBackoffSeconds": 900,
+  "requestMinIntervalMs": 1500,
+  "maxAttempts": 3,
+  "retryBackoffMs": 1500,
+  "connectTimeoutMs": 5000,
+  "readTimeoutMs": 10000,
+  "userAgent": "SocialDataMonitor/0.1 (+low-frequency public Bilibili follower monitor)",
+  "referer": "https://www.bilibili.com/"
+}

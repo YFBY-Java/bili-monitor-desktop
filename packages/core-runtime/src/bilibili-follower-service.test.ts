@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { resolve } from "node:path"
 
 import { ControlDatabase } from "@bmd/storage"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { BilibiliFollowerMonitorService } from "./bilibili-follower-service"
 import * as coreRuntime from "./index"
@@ -12,6 +12,7 @@ describe("BilibiliFollowerMonitorService", () => {
   let directory: string | undefined
 
   afterEach(async () => {
+    vi.restoreAllMocks()
     if (directory) await rm(directory, { recursive: true, force: true })
   })
 
@@ -19,6 +20,8 @@ describe("BilibiliFollowerMonitorService", () => {
     const testDirectory = await mkdtemp(resolve(tmpdir(), "bmd-follower-service-"))
     directory = testDirectory
     const database = await ControlDatabase.open(testDirectory)
+    let elapsed = 0
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed)
     try {
       const exported = coreRuntime as unknown as Record<string, unknown>
       expect(typeof exported.BilibiliFollowerMonitorService).toBe("function")
@@ -43,6 +46,7 @@ describe("BilibiliFollowerMonitorService", () => {
       source: {
         fetchCard: async (request: { mid: string }) => {
           calls.push(`card:${request.mid}`)
+          elapsed += 40
           return {
             mid: "2",
             nickname: "碧诗",
@@ -89,7 +93,7 @@ describe("BilibiliFollowerMonitorService", () => {
         endpointKey: "x/web-interface/card",
         mid: "2",
         statusCode: 200,
-        durationMs: 28,
+        durationMs: 40,
         errorType: null,
         retryable: false,
         evidenceObjectId: `sha256:${"a".repeat(64)}`

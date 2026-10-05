@@ -5,7 +5,7 @@ import { parse, resolve } from "node:path"
 import {
   RuntimeEnvelopeSchema,
   RequestKeepAliveSchema,
-  LIVE_HTTP_WORKER_REQUESTS,
+  HTTP_WORKER_REQUESTS,
   createRuntimeEnvelope,
   type RuntimeEnvelope
 } from "@bmd/contracts"
@@ -77,7 +77,7 @@ export class NdjsonPythonWorkerTransport implements WorkerRequestTransport {
       timestamp: new Date().toISOString(),
       correlationId: id,
       traceId: randomUUID(),
-      ...(LIVE_HTTP_WORKER_REQUESTS.some(request => request === type) ? { keepAlive: true } : {}),
+      ...(HTTP_WORKER_REQUESTS.some(request => request === type) ? { keepAlive: true } : {}),
       payload
     })
 

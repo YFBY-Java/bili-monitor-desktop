@@ -7,7 +7,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Literal, NoReturn, TextIO
+from typing import Any, Awaitable, Callable, Literal, NoReturn, Protocol, TextIO
 
 from pydantic import ValidationError
 
@@ -23,6 +23,15 @@ from .bilibili_follower import (
     BilibiliCrawlerError,
     BilibiliFollowerFetchRequest,
     fetch_follower_endpoint,
+    fetch_follower_profile,
+    legacy_follower_result,
+)
+from .bilibili_follower_http import BilibiliFollowerHttpConfiguration
+from .bilibili_follower_v2 import (
+    BilibiliFollowerFetchRequestV2,
+    fetch_follower_endpoint_v2,
+    fetch_follower_profile_v2,
+    validate_follower_v2_result,
 )
 from .bilibili_live import (
     ROOM_INFO_ENDPOINT,
@@ -41,12 +50,26 @@ from .protocol import RuntimeEnvelope
 from .request_lifetime import handle_with_liveness
 
 WorkerRole = Literal["agent", "auth", "crawler", "data"]
-FollowerFetcher = Callable[[str, str, Path], Awaitable[dict[str, Any]]]
+
+
+class FollowerFetcher(Protocol):
+    async def __call__(
+        self,
+        endpoint: str,
+        mid: str,
+        data_directory: Path,
+        http_configuration: BilibiliFollowerHttpConfiguration | None = None,
+    ) -> dict[str, Any]: ...
+
+
 LiveFetcher = Callable[[str, dict[str, object], Path], Awaitable[dict[str, Any]]]
 RankFetcher = Callable[[dict[str, object], Path], Awaitable[dict[str, Any]]]
 AuthGenerator = Callable[[], Awaitable[dict[str, Any]]]
 AuthPoller = Callable[[str, list[dict[str, Any]]], Awaitable[dict[str, Any]]]
 AuthValidator = Callable[[list[dict[str, Any]]], Awaitable[dict[str, Any]]]
+ProfileFetcher = Callable[
+    [str, BilibiliFollowerHttpConfiguration | None], Awaitable[dict[str, Any]]
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,11 +79,14 @@ class WorkerRuntime:
     role: WorkerRole
     data_directory: Path | None = None
     follower_fetcher: FollowerFetcher = fetch_follower_endpoint
+    profile_fetcher: ProfileFetcher = fetch_follower_profile
     live_fetcher: LiveFetcher = fetch_live_endpoint
     rank_fetcher: RankFetcher = fetch_live_rank
     auth_generator: AuthGenerator = generate_qr_login
     auth_poller: AuthPoller = poll_qr_login
     auth_validator: AuthValidator = validate_credential
+    follower_fetcher_v2: FollowerFetcher = fetch_follower_endpoint_v2
+    profile_fetcher_v2: ProfileFetcher = fetch_follower_profile_v2
 
     async def handle(self, request: RuntimeEnvelope) -> RuntimeEnvelope:
         if request.type == "worker.ping":
@@ -83,6 +109,10 @@ class WorkerRuntime:
                 "crawler": [
                     "bilibili.follower.fetch-card",
                     "bilibili.follower.fetch-relation-stat",
+                    "bilibili.follower.fetch-profile",
+                    "bilibili.follower.fetch-card.v2",
+                    "bilibili.follower.fetch-relation-stat.v2",
+                    "bilibili.follower.fetch-profile.v2",
                     "bilibili.live.fetch-room-init",
                     "bilibili.live.fetch-room-info",
                     "bilibili.live.fetch-room-info-old",
@@ -99,6 +129,10 @@ class WorkerRuntime:
         if request.type in {
             "bilibili.follower.fetch-card",
             "bilibili.follower.fetch-relation-stat",
+            "bilibili.follower.fetch-profile",
+            "bilibili.follower.fetch-card.v2",
+            "bilibili.follower.fetch-relation-stat.v2",
+            "bilibili.follower.fetch-profile.v2",
         }:
             if self.role != "crawler":
                 return self._response(
@@ -110,15 +144,37 @@ class WorkerRuntime:
                         "retryable": False,
                     },
                 )
-            payload = BilibiliFollowerFetchRequest.model_validate(request.payload)
+            is_v2 = request.type.endswith(".v2")
+            operation = request.type.removesuffix(".v2")
+            payload = (
+                BilibiliFollowerFetchRequestV2.model_validate(request.payload)
+                if is_v2
+                else BilibiliFollowerFetchRequest.model_validate(request.payload)
+            )
             endpoint = (
                 CARD_ENDPOINT
-                if request.type == "bilibili.follower.fetch-card"
+                if operation != "bilibili.follower.fetch-relation-stat"
                 else RELATION_STAT_ENDPOINT
             )
-            data_directory = self.data_directory or _data_directory_from_environment()
             try:
-                result = await self.follower_fetcher(endpoint, payload.mid, data_directory)
+                profile = operation == "bilibili.follower.fetch-profile"
+                if profile:
+                    profile_fetcher = self.profile_fetcher_v2 if is_v2 else self.profile_fetcher
+                    result = await profile_fetcher(payload.mid, payload.http_configuration)
+                else:
+                    follower_fetcher = self.follower_fetcher_v2 if is_v2 else self.follower_fetcher
+                    data_directory = self.data_directory or _data_directory_from_environment()
+                    if payload.http_configuration is None:
+                        result = await follower_fetcher(endpoint, payload.mid, data_directory)
+                    else:
+                        result = await follower_fetcher(
+                            endpoint, payload.mid, data_directory, payload.http_configuration
+                        )
+                result = (
+                    validate_follower_v2_result(endpoint, result, profile=profile)
+                    if is_v2
+                    else legacy_follower_result(result, endpoint, profile=profile)
+                )
             except BilibiliCrawlerError as error:
                 error_payload: dict[str, object] = {
                     "code": error.code,
@@ -369,7 +425,7 @@ async def run_stdio(runtime: WorkerRuntime, stdin: TextIO, stdout: TextIO) -> No
             # Keep the stdio wire format ASCII-only. Windows virtual-environment launchers can
             # still inherit GBK for stdout even when the parent requested UTF-8; JSON escapes
             # make the protocol byte-stable and JSON.parse restores the original Unicode text.
-            serialized = response.model_dump_json(ensure_ascii=True)
+            serialized = response.to_wire_json()
         except (ValidationError, json.JSONDecodeError) as error:
             serialized = json.dumps(
                 {

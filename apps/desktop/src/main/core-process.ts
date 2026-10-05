@@ -1,8 +1,8 @@
 import {
-  BILIBILI_LIVE_CONFIG_ERROR_MESSAGE,
+  startupConfigurationErrorMessage,
   RuntimeEnvelopeSchema,
   createRuntimeEnvelope,
-  LIVE_HTTP_CORE_REQUESTS,
+  HTTP_CORE_REQUESTS,
   REQUEST_KEEP_ALIVE_INTERVAL_MS,
   type RuntimeEnvelope,
   type RuntimeError
@@ -22,9 +22,11 @@ const runtime = await LocalCoreRuntime.start({
   dataDirectory,
   version: process.env.BMD_CORE_VERSION ?? "0.2.0"
 }).catch((error: unknown) => {
-  if (applicationErrorDetails(error)?.code !== "BILIBILI_LIVE_CONFIG_INVALID") throw error
+  const details = applicationErrorDetails(error)
+  const message = startupConfigurationErrorMessage(details?.code)
+  if (!details || message === undefined) throw error
   // Keep the bootstrap channel alive for this actionable startup error. No raw stderr/stack.
-  startupError = { code: "BILIBILI_LIVE_CONFIG_INVALID", message: BILIBILI_LIVE_CONFIG_ERROR_MESSAGE, retryable: false }
+  startupError = { code: details.code, message, retryable: false }
   return undefined
 })
 
@@ -71,7 +73,7 @@ async function handleMessage(message: unknown): Promise<void> {
       parentPort.postMessage(response(request, "core.bootstrap.result", runtime.bootstrap()))
       return
     }
-    if (request.keepAlive && LIVE_HTTP_CORE_REQUESTS.some(type => type === request.type)) {
+    if (request.keepAlive && HTTP_CORE_REQUESTS.some(type => type === request.type)) {
       const report = () => parentPort.postMessage(response(request, "core.request-alive", { requestType: request.type }))
       report()
       heartbeat = setInterval(() => {

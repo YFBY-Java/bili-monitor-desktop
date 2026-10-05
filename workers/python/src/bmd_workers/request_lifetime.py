@@ -10,14 +10,23 @@ LIVE_HTTP_REQUESTS = frozenset(
         "bilibili.live.fetch-room-info",
         "bilibili.live.fetch-room-info-old",
         "bilibili.live.fetch-status-by-uids",
+        "bilibili.live.rank.fetch",
     }
 )
+HTTP_REQUESTS = LIVE_HTTP_REQUESTS | {
+    "bilibili.follower.fetch-card",
+    "bilibili.follower.fetch-relation-stat",
+    "bilibili.follower.fetch-profile",
+    "bilibili.follower.fetch-card.v2",
+    "bilibili.follower.fetch-relation-stat.v2",
+    "bilibili.follower.fetch-profile.v2",
+}
 
 
 async def handle_with_liveness(
     request: RuntimeEnvelope, operation: Coroutine[Any, Any, RuntimeEnvelope], stdout: TextIO
 ) -> RuntimeEnvelope:
-    if not request.keep_alive or request.type not in LIVE_HTTP_REQUESTS:
+    if not request.keep_alive or request.type not in HTTP_REQUESTS:
         return await operation
 
     async def pulse() -> None:
@@ -30,7 +39,7 @@ async def handle_with_liveness(
                 trace_id=request.trace_id,
                 causation_id=request.id,
             )
-            stdout.write(frame.model_dump_json(ensure_ascii=True) + "\n")
+            stdout.write(frame.to_wire_json() + "\n")
             stdout.flush()
             await asyncio.sleep(KEEP_ALIVE_INTERVAL_SECONDS)
 

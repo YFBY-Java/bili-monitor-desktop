@@ -2,15 +2,51 @@ import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import react from "@vitejs/plugin-react"
-import { chromium, type Browser, type Page } from "playwright"
+import { chromium, type Browser, type Page, type Request } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+
+type SetupProbe = {
+  startedAt: number
+  finished: boolean
+  phases: { phase: string; ms: number }[]
+  pendingResources: Map<Request, string>
+  pendingResourceCount: number
+  resourceFailures: { kind: "requestfailed" | "response"; pathname: string; status?: number }[]
+  failureCount: number
+}
 
 describe("original live-room renderer workflows", () => {
   let server: ViteDevServer
   let browser: Browser
   let page: Page
   let url: string
+  let setupProbe: SetupProbe | undefined
+  function recordSetupPhase(probe: SetupProbe, phase: string): void {
+    if (probe.phases.length < 100) probe.phases.push({ phase, ms: Math.round(performance.now() - probe.startedAt) })
+  }
+  function watchSetupResources(setupPage: Page, probe: SetupProbe): void {
+    const recordFailure = (failure: SetupProbe["resourceFailures"][number]): void => {
+      probe.failureCount++
+      if (probe.resourceFailures.length < 100) probe.resourceFailures.push(failure)
+    }
+    setupPage.on("request", request => {
+      probe.pendingResourceCount++
+      if (probe.pendingResources.size < 100) probe.pendingResources.set(request, new URL(request.url()).pathname.slice(0, 256))
+    })
+    setupPage.on("requestfinished", request => {
+      probe.pendingResourceCount--
+      probe.pendingResources.delete(request)
+    })
+    setupPage.on("requestfailed", request => {
+      probe.pendingResourceCount--
+      probe.pendingResources.delete(request)
+      recordFailure({ kind: "requestfailed", pathname: new URL(request.url()).pathname.slice(0, 256) })
+    })
+    setupPage.on("response", response => {
+      if (response.status() >= 400) recordFailure({ kind: "response", pathname: new URL(response.url()).pathname.slice(0, 256), status: response.status() })
+    })
+  }
   beforeAll(async () => {
     server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
       cacheDir: resolve("node_modules/.vite-live-test"), plugins: [react()],
@@ -23,13 +59,32 @@ describe("original live-room renderer workflows", () => {
   }, 30_000)
   afterAll(async () => { await browser?.close(); await server?.close() })
   beforeEach(async () => {
-    page = await browser.newPage()
+    const probe: SetupProbe = { startedAt: performance.now(), finished: false, phases: [], pendingResources: new Map(), pendingResourceCount: 0, resourceFailures: [], failureCount: 0 }
+    setupProbe = probe
+    recordSetupPhase(probe, "page:create")
+    const setupPage = await browser.newPage()
+    page = setupPage
+    recordSetupPhase(probe, "page:created")
+    if (probe.finished) console.warn("Late live workspace setup page created", { phases: probe.phases })
+    watchSetupResources(setupPage, probe)
     page.setDefaultTimeout(3000)
     page.setDefaultNavigationTimeout(15000)
+    recordSetupPhase(probe, "navigate:start")
     await page.goto(url)
+    recordSetupPhase(probe, "navigate:loaded")
+    recordSetupPhase(probe, "heading:wait")
     await page.getByRole("heading", { name: "测试主播1", exact: true }).waitFor({ timeout: 15_000 })
+    recordSetupPhase(probe, "heading-ready")
   })
-  afterEach(async () => { await page?.close() })
+  afterEach(async ({ task }) => {
+    const probe = setupProbe
+    if (probe) probe.finished = true
+    if (task.result?.state === "fail" && probe) console.warn("Live workspace setup probe", {
+      phases: probe.phases, pendingResourceCount: probe.pendingResourceCount, pendingResources: [...probe.pendingResources.values()],
+      failureCount: probe.failureCount, resourceFailures: probe.resourceFailures
+    })
+    await page?.close()
+  })
 
   it("opens the first room, supports keyboard collapse/switch, and restores it after a successful reread", async () => {
     await page.getByRole("region", { name: "测试主播1房间详情" }).waitFor()

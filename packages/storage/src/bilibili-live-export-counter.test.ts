@@ -45,7 +45,7 @@ describe("persistent daily live export counter", () => {
     try {
       raw.exec(`
         DROP TABLE IF EXISTS bilibili_live_export_daily_counter;
-        DELETE FROM schema_migration WHERE version = 12;
+        DELETE FROM schema_migration WHERE version >= 12;
         PRAGMA user_version = 11;
         INSERT INTO worker_status(worker_id, worker_type, state, restart_count, updated_at)
         VALUES ('migration-fixture', 'python', 'stopped', 2, '2026-09-13T00:00:00.000Z');
@@ -53,7 +53,7 @@ describe("persistent daily live export counter", () => {
     } finally { raw.close() }
     let upgraded = await ControlDatabase.open(directory)
     try {
-      expect(upgraded.status().schemaVersion).toBe(13)
+      expect(upgraded.status().schemaVersion).toBe(14)
       expect(upgraded.listWorkerStatuses()).toMatchObject([{ workerId: "migration-fixture", restartCount: 2 }])
       expect(upgraded.allocateBilibiliLiveExportNumber("22", "2026-09-13")).toBe(1)
       upgraded.close()

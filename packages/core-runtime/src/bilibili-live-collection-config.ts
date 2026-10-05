@@ -5,6 +5,7 @@ import { CoreApplicationError } from "./account-subject-service"
 
 const environmentKeys = {
   enabled: "SOCIAL_MONITOR_BILIBILI_LIVE_MONITOR_ENABLED",
+  storageEnabled: "SOCIAL_MONITOR_BILIBILI_LIVE_STORAGE_ENABLED",
   schedulerDelayMs: "SOCIAL_MONITOR_BILIBILI_LIVE_SCHEDULER_DELAY_MS",
   dueBatchSize: "SOCIAL_MONITOR_BILIBILI_LIVE_DUE_BATCH_SIZE",
   statusBatchSize: "SOCIAL_MONITOR_BILIBILI_LIVE_STATUS_BATCH_SIZE",
@@ -46,7 +47,7 @@ export async function loadLiveCollectionConfiguration(
         continue
       }
       const text = value.trim()
-      if (key === "enabled") {
+      if (key === "enabled" || key === "storageEnabled") {
         if (!/^(true|false)$/iu.test(text)) throw new Error("Invalid boolean configuration")
         overrides[key] = text.toLowerCase() === "true"
       } else {

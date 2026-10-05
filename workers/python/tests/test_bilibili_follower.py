@@ -103,7 +103,7 @@ def test_relation_snapshot_does_not_invent_profile_fields_or_missing_counts() ->
         ({"code": -352}, "BILIBILI_RISK_CONTROL", False),
         ({"code": -412}, "BILIBILI_RISK_CONTROL", False),
         ({"code": -101}, "BILIBILI_AUTH_EXPIRED", False),
-        ({"code": 500}, "BILIBILI_API_ERROR", True),
+        ({"code": 500}, "BILIBILI_UNKNOWN_ERROR", True),
     ],
 )
 def test_original_api_error_categories(payload: dict, code: str, retryable: bool) -> None:
@@ -160,7 +160,7 @@ def test_http_request_and_raw_evidence_stay_local(
     [
         (429, "BILIBILI_RATE_LIMITED", True),
         (503, "BILIBILI_SERVER_ERROR", True),
-        (403, "BILIBILI_HTTP_ERROR", False),
+        (403, "BILIBILI_UNKNOWN_ERROR", False),
     ],
 )
 def test_original_http_error_categories(

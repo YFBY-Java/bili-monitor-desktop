@@ -22,7 +22,8 @@ describe("original live trend board", () => {
   beforeEach(async () => {
     page = await browser.newPage({ viewport: { width: 1600, height: 1100 } })
     page.setDefaultTimeout(3000)
-    await page.goto(url)
+    // Vite may still be optimizing local modules; the heading below is the UI readiness signal.
+    await page.goto(url, { waitUntil: "commit" })
     await page.getByRole("heading", { name: "测试主播1", exact: true }).waitFor({ timeout: 15_000 })
   })
   afterEach(async () => { await page?.close() })

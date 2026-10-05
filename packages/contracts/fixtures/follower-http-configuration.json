@@ -1,0 +1,157 @@
+[
+  {
+    "name": "old request without HTTP settings",
+    "input": {},
+    "valid": true
+  },
+  {
+    "name": "empty settings use follower defaults",
+    "input": {
+      "httpConfiguration": {}
+    },
+    "valid": true
+  },
+  {
+    "name": "custom headers and split timeouts",
+    "input": {
+      "httpConfiguration": {
+        "connectTimeoutMs": 1250,
+        "readTimeoutMs": 0,
+        "userAgent": "Fixture follower/2",
+        "referer": "https://www.bilibili.com/configured-follower"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "zero connect and positive read",
+    "input": {
+      "httpConfiguration": {
+        "connectTimeoutMs": 0,
+        "readTimeoutMs": 750
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "maximum timeouts",
+    "input": {
+      "httpConfiguration": {
+        "connectTimeoutMs": 2147483647,
+        "readTimeoutMs": 2147483647
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "empty header",
+    "input": {
+      "httpConfiguration": {
+        "userAgent": ""
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "invalid settings null",
+    "input": {
+      "httpConfiguration": null
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid settings true",
+    "input": {
+      "httpConfiguration": true
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid settings \"config\"",
+    "input": {
+      "httpConfiguration": "config"
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid timeout -1",
+    "input": {
+      "httpConfiguration": {
+        "readTimeoutMs": -1
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid timeout true",
+    "input": {
+      "httpConfiguration": {
+        "readTimeoutMs": true
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid timeout \"100\"",
+    "input": {
+      "httpConfiguration": {
+        "readTimeoutMs": "100"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid timeout 2147483648",
+    "input": {
+      "httpConfiguration": {
+        "readTimeoutMs": 2147483648
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid timeout 0.1",
+    "input": {
+      "httpConfiguration": {
+        "readTimeoutMs": 0.1
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid timeout null",
+    "input": {
+      "httpConfiguration": {
+        "readTimeoutMs": null
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown nested field",
+    "input": {
+      "httpConfiguration": {
+        "cookies": "synthetic"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "newline user agent",
+    "input": {
+      "httpConfiguration": {
+        "userAgent": "unsafe\n"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "unicode referer",
+    "input": {
+      "httpConfiguration": {
+        "referer": "樱花"
+      }
+    },
+    "valid": false
+  }
+]

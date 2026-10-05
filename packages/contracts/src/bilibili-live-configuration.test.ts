@@ -11,7 +11,7 @@ describe("portable live collection configuration", () => {
   })
   it("keeps original defaults without normalizing batch values before their consumer", () => {
     expect(BilibiliLiveCollectionConfigurationSchema.parse({})).toEqual({
-      enabled: true, schedulerDelayMs: 1000, dueBatchSize: 20, statusBatchSize: 30,
+      enabled: true, storageEnabled: true, schedulerDelayMs: 1000, dueBatchSize: 20, statusBatchSize: 30,
       defaultIntervalSeconds: 300, minIntervalSeconds: 1, maxIntervalSeconds: 2592000,
       shortIntervalWarningSeconds: 120, failureBackoffSeconds: 900, requestMinIntervalMs: 1500,
       maxAttempts: 3, retryBackoffMs: 1500,

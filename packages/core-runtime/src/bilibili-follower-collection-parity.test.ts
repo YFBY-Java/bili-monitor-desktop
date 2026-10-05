@@ -9,8 +9,8 @@ describe("original follower retry and persistence rules", () => {
     fixture = await followerMigrationFixture()
     const user = await fixture.service.addUser({ mid: "2" })
     fixture.calls.length = 0
-    fixture.state.cardError = followerError("BILIBILI_API_ERROR", true)
-    await expect(fixture.service.refreshNow(user.id)).rejects.toMatchObject({ code: "BILIBILI_API_ERROR" })
+    fixture.state.cardError = followerError("BILIBILI_UNKNOWN_ERROR", true)
+    await expect(fixture.service.refreshNow(user.id)).rejects.toMatchObject({ code: "BILIBILI_UNKNOWN_ERROR" })
     expect(fixture.calls).toHaveLength(1)
     expect(fixture.waits).toEqual([])
   })

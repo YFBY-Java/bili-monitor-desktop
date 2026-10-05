@@ -9,6 +9,7 @@ const ConfigurationIntegerSchema = z.number().int().min(-2_147_483_648).max(2_14
 export const BilibiliLiveCollectionConfigurationSchema = z.object({
   ...BilibiliLiveHttpConfigurationSchema.shape,
   enabled: z.boolean().default(true),
+  storageEnabled: z.boolean().default(true),
   schedulerDelayMs: ConfigurationIntegerSchema.min(1).default(1000),
   dueBatchSize: ConfigurationIntegerSchema.default(20),
   statusBatchSize: ConfigurationIntegerSchema.default(30),

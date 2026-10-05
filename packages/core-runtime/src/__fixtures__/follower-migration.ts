@@ -15,7 +15,8 @@ export async function followerMigrationFixture(maxAttempts = 3) {
   const state = {
     now: "2026-09-13T04:00:00.000Z", fetchedAt: "2026-09-13T04:00:00.000Z",
     count: 100, avatar: "https://example.com/synthetic-avatar.png" as string | undefined,
-    cardError: undefined as Error | undefined, relationError: undefined as Error | undefined
+    cardError: undefined as Error | undefined, relationError: undefined as Error | undefined,
+    beforeCard: undefined as ((request: BilibiliFollowerFetchRequest) => Promise<void>) | undefined
   }
   const snapshot = (mid: string, endpoint: "x/web-interface/card" | "x/relation/stat"): BilibiliFollowerFetchedSnapshot => ({
     mid, ...(endpoint === "x/web-interface/card" ? { nickname: `合成粉丝用户${mid}`, ...(state.avatar ? { avatarUrl: state.avatar } : {}) } : {}),
@@ -33,6 +34,7 @@ export async function followerMigrationFixture(maxAttempts = 3) {
     source: {
       fetchCard: async request => {
         calls.push({ endpoint: "x/web-interface/card", request })
+        await state.beforeCard?.(request)
         if (state.cardError) throw state.cardError
         return snapshot(request.mid, "x/web-interface/card")
       },

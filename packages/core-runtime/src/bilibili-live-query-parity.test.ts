@@ -34,14 +34,53 @@ describe("original live room query semantics on actual SQLite", () => {
       offlineRooms: 3, totalOnlineCount: 400, errorRooms: 0 })
   })
 
+  it("seeds batched query history with the same snapshot and monitor fields as an actual refresh", async () => {
+    f = await liveQueryFixture()
+    const room = await f.service.addRoom({ uid: "1" })
+    const capturedAt = "2026-09-13T04:00:01.123456Z"
+    f.seedHistory(room.id, [{ capturedAt, onlineCount: 200 }])
+    const snapshot = f.database.findBilibiliLiveRoomSnapshots(room.id, { limit: 2000 }).at(-1)
+    const monitor = f.database.findBilibiliLiveRoomById(room.id)!
+    f.state.fetchedAt = capturedAt; f.state.onlineCount = 200
+    await f.service.refreshNow(room.id)
+    expect(f.database.findBilibiliLiveRoomSnapshots(room.id, { limit: 2000 }).at(-1)).toEqual(snapshot)
+    expect(f.database.findBilibiliLiveRoomById(room.id)).toEqual({ ...monitor, version: monitor.version + 1 })
+    expect(f.service.trend({ roomMonitorId: room.id }).points).toHaveLength(2)
+  })
+
+  it("rolls back the complete batched query fixture if a later history point is invalid", async () => {
+    f = await liveQueryFixture()
+    const room = await f.service.addRoom({ uid: "1" })
+    const monitor = f.database.findBilibiliLiveRoomById(room.id)
+    const snapshots = f.database.findBilibiliLiveRoomSnapshots(room.id, { limit: 2000 })
+    const outbox = f.database.listPendingOutbox()
+    expect(() => f.seedHistory(room.id, [
+      { capturedAt: "2026-09-13T04:00:01.000Z", onlineCount: 200 },
+      { capturedAt: "invalid fixture timestamp", onlineCount: 300 }
+    ])).toThrow(RangeError)
+    expect(f.database.findBilibiliLiveRoomById(room.id)).toEqual(monitor)
+    expect(f.database.findBilibiliLiveRoomSnapshots(room.id, { limit: 2000 })).toEqual(snapshots)
+    expect(f.database.listPendingOutbox()).toEqual(outbox)
+  })
+
   it("takes the latest normalized 500/2000 points and returns chronological points and matching room projection", async () => {
     f = await liveQueryFixture()
     const room = await f.service.addRoom({ uid: "1" })
-    for (let index = 1; index <= 2004; index++) {
-      f.state.fetchedAt = new Date(Date.parse(f.state.now) + index * 1000).toISOString()
-      f.state.onlineCount = index + 100
-      await f.service.refreshNow(room.id)
-    }
+    f.seedHistory(room.id, Array.from({ length: 2003 }, (_, index) => ({
+      capturedAt: new Date(Date.parse(f.state.now) + (index + 1) * 1000).toISOString(),
+      onlineCount: index + 101
+    })))
+    // Keep the first/last samples on the real collection path; only the bulk
+    // middle history skips synthetic API logs unrelated to query normalization.
+    f.state.fetchedAt = new Date(Date.parse(f.state.now) + 2004 * 1000).toISOString()
+    f.state.onlineCount = 2104
+    expect(await f.service.refreshNow(room.id)).toMatchObject({ success: true, message: "ok",
+      roomMonitorId: room.id, uid: room.uid, roomId: room.roomId,
+      onlineCount: 2104, capturedAt: f.state.fetchedAt, sourceEndpoint: "room/v1/Room/get_status_info_by_uids" })
+    expect(f.database.findBilibiliLiveRoomSnapshots(room.id, { limit: 3000 })).toHaveLength(2005)
+    expect(f.database.findBilibiliLiveRoomById(room.id)).toMatchObject({ monitorId: room.id,
+      uid: room.uid, roomId: room.roomId, onlineCount: 2104, lastSnapshotAt: f.state.fetchedAt,
+      lastSuccessAt: f.state.fetchedAt, sourceEndpoint: "room/v1/Room/get_status_info_by_uids" })
     const trend = f.service.trend({ roomMonitorId: room.id, limit: -1 })
     expect(trend.points).toHaveLength(500)
     expect(trend.points[0]?.onlineCount).toBe(1605)

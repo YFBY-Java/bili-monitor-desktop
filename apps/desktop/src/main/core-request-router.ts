@@ -1,5 +1,14 @@
 import {
   AddBilibiliFollowerMonitorInputSchema,
+  AddBilibiliFollowerMonitorInputV2Schema,
+  BilibiliFollowerCollectResultV2Schema,
+  BilibiliFollowerMonitorListV2Schema,
+  BilibiliFollowerMonitorV2Schema,
+  BilibiliFollowerTrendListV2Schema,
+  BilibiliFollowerTrendV2Schema,
+  BilibiliSubjectTrendV2Schema,
+  BilibiliSubjectWorkbenchV2Schema,
+  DeleteBilibiliFollowerMonitorResultSchema,
   BilibiliQrLoginIdInputSchema,
   BilibiliFollowerMonitorIdInputSchema,
   BindSubjectAccountInputSchema,
@@ -139,6 +148,75 @@ export function dispatchBusinessRequest(
       return {
         responseType: "bilibili-subjects.layout.update.result",
         payload: runtime.updateBilibiliSubjectLayout(input)
+      }
+    }
+    case "bilibili-subjects.workbench.v2": {
+      const input = BilibiliSubjectIdInputSchema.parse(request.payload)
+      return {
+        responseType: "bilibili-subjects.workbench.v2.result",
+        payload: BilibiliSubjectWorkbenchV2Schema.parse(runtime.getBilibiliSubjectWorkbenchV2(input.subjectId))
+      }
+    }
+    case "bilibili-subjects.trends.v2": {
+      const input = QueryBilibiliSubjectTrendsInputSchema.parse(request.payload)
+      return {
+        responseType: "bilibili-subjects.trends.v2.result",
+        payload: BilibiliSubjectTrendV2Schema.parse(runtime.queryBilibiliSubjectTrendsV2(input))
+      }
+    }
+    case "bilibili-followers.list.v2":
+      return {
+        responseType: "bilibili-followers.list.v2.result",
+        payload: BilibiliFollowerMonitorListV2Schema.parse(runtime.listBilibiliFollowerMonitorsV2(
+          ListBilibiliFollowerMonitorsInputSchema.parse(request.payload)
+        ))
+      }
+    case "bilibili-followers.add.v2":
+      return runtime.addBilibiliFollowerMonitorV2(AddBilibiliFollowerMonitorInputV2Schema.parse(request.payload))
+        .then(payload => ({ responseType: "bilibili-followers.add.v2.result", payload: BilibiliFollowerMonitorV2Schema.parse(payload) }))
+    case "bilibili-followers.update-status.v2": {
+      const input = UpdateBilibiliFollowerMonitorStatusInputSchema.parse(request.payload)
+      return {
+        responseType: "bilibili-followers.update-status.v2.result",
+        payload: BilibiliFollowerMonitorV2Schema.parse(runtime.updateBilibiliFollowerMonitorStatusV2(input.userId, input.enabled))
+      }
+    }
+    case "bilibili-followers.update-settings.v2": {
+      const input = UpdateBilibiliFollowerMonitorSettingsInputSchema.parse(request.payload)
+      return {
+        responseType: "bilibili-followers.update-settings.v2.result",
+        payload: BilibiliFollowerMonitorV2Schema.parse(runtime.updateBilibiliFollowerMonitorSettingsV2(input.userId, input.intervalSeconds))
+      }
+    }
+    case "bilibili-followers.refresh.v2": {
+      const input = BilibiliFollowerMonitorIdInputSchema.parse(request.payload)
+      return runtime.refreshBilibiliFollowerMonitorV2(input.userId)
+        .then(payload => ({ responseType: "bilibili-followers.refresh.v2.result", payload: BilibiliFollowerCollectResultV2Schema.parse(payload) }))
+    }
+    case "bilibili-followers.delete.v2": {
+      const input = BilibiliFollowerMonitorIdInputSchema.parse(request.payload)
+      runtime.deleteBilibiliFollowerMonitor(input.userId)
+      return {
+        responseType: "bilibili-followers.delete.v2.result",
+        payload: DeleteBilibiliFollowerMonitorResultSchema.parse({ deleted: true })
+      }
+    }
+    case "bilibili-followers.trend.v2": {
+      const input = QueryBilibiliFollowerTrendInputSchema.parse(request.payload)
+      return {
+        responseType: "bilibili-followers.trend.v2.result",
+        payload: BilibiliFollowerTrendV2Schema.parse(runtime.queryBilibiliFollowerTrendV2(input.userId, {
+          ...(input.from ? { from: input.from } : {}),
+          ...(input.to ? { to: input.to } : {}),
+          limit: input.limit
+        }))
+      }
+    }
+    case "bilibili-followers.trends.v2": {
+      const input = QueryBilibiliFollowerTrendsInputSchema.parse(request.payload)
+      return {
+        responseType: "bilibili-followers.trends.v2.result",
+        payload: BilibiliFollowerTrendListV2Schema.parse(runtime.queryBilibiliFollowerTrendsV2(input))
       }
     }
     case "bilibili-followers.list":

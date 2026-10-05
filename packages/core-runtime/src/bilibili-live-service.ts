@@ -42,6 +42,7 @@ import {
 } from "@bmd/storage"
 
 import { CoreApplicationError } from "./account-subject-service"
+import { LocalRequestRateLimiter } from "./local-request-rate-limiter"
 
 const STATUS_ENDPOINT = "room/v1/Room/get_status_info_by_uids" as const
 const INIT_ENDPOINT = "room/v1/Room/room_init" as const
@@ -63,6 +64,7 @@ export interface BilibiliLiveMonitorServiceOptions {
   now: () => Date
   idFactory: () => string
   sleep?: (milliseconds: number) => Promise<void>
+  rateLimiter?: LocalRequestRateLimiter
   requestMinIntervalMs?: number
   maxAttempts?: number
   retryBackoffMs?: number
@@ -111,11 +113,13 @@ class LiveFetchFailure extends Error {
 }
 
 export class BilibiliLiveMonitorService {
-  private readonly nextRequestAt = new Map<string, number>()
+  private readonly rateLimiter: LocalRequestRateLimiter
   private readonly lifetime = new AbortController()
   private stopPromise: Promise<void> | undefined
 
-  constructor(private readonly options: BilibiliLiveMonitorServiceOptions) {}
+  constructor(private readonly options: BilibiliLiveMonitorServiceOptions) {
+    this.rateLimiter = options.rateLimiter ?? new LocalRequestRateLimiter(options.now)
+  }
 
   async addRoom(input: AddBilibiliLiveRoomInput): Promise<BilibiliLiveRoom> {
     this.ensureRunning()
@@ -446,9 +450,9 @@ export class BilibiliLiveMonitorService {
     const maxAttempts = Math.max(1, this.options.maxAttempts ?? 3)
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       this.ensureRunning()
+      const startedAt = performance.now()
       await this.acquireRateLimit(endpoint)
       this.ensureRunning()
-      const startedAt = performance.now()
       let result: T
       try {
         const response = await operation({
@@ -473,7 +477,7 @@ export class BilibiliLiveMonitorService {
           endpointKey: failure.endpoint,
           mid: identifier,
           statusCode: this.errorNumber(error, "statusCode"),
-          durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+          durationMs: Math.max(0, Math.floor(performance.now() - startedAt)),
           errorType: details.code,
           retryable: details.retryable,
           evidenceObjectId: null,
@@ -489,7 +493,7 @@ export class BilibiliLiveMonitorService {
       }
       this.options.database.insertBilibiliApiCall({
         callId: this.options.idFactory(), taskId, attempt, endpointKey: endpoint, mid: identifier,
-        statusCode: result.statusCode, durationMs: result.durationMs, errorType: null, retryable: false,
+        statusCode: result.statusCode, durationMs: Math.max(0, Math.floor(performance.now() - startedAt)), errorType: null, retryable: false,
         evidenceObjectId: result.evidenceObject.objectId, createdAt: result.fetchedAt
       }, { ...result.evidenceObject, createdAt: result.fetchedAt })
       return result
@@ -498,11 +502,9 @@ export class BilibiliLiveMonitorService {
   }
 
   private async acquireRateLimit(endpoint: string): Promise<void> {
-    const minimum = Math.max(0, this.options.requestMinIntervalMs ?? 1_500)
-    const now = this.options.now().getTime()
-    const allowedAt = Math.max(now, this.nextRequestAt.get(endpoint) ?? now)
-    this.nextRequestAt.set(endpoint, allowedAt + minimum)
-    if (allowedAt > now) await this.wait(allowedAt - now)
+    await this.rateLimiter.acquire({ platformCode: "bilibili-live", policyKey: endpoint,
+      minIntervalMs: Math.max(0, this.options.requestMinIntervalMs ?? 1_500), signal: this.lifetime.signal,
+      ...(this.options.sleep ? { sleep: this.options.sleep } : {}) })
   }
 
   private ensureRunning(): void {

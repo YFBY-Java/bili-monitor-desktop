@@ -1,10 +1,11 @@
 import type {
-  AddBilibiliFollowerMonitorInput,
-  BilibiliFollowerMonitor,
-  BilibiliFollowerTrend,
+  AddBilibiliFollowerMonitorInputV2,
+  BilibiliFollowerMonitorV2,
+  BilibiliFollowerTrendV2,
   DesktopBridge,
   UpdateBilibiliFollowerMonitorSettingsInput
 } from "@bmd/contracts"
+import { AddBilibiliFollowerMonitorInputV2Schema } from "@bmd/contracts"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Activity,
@@ -20,12 +21,15 @@ import {
   UsersRound,
   X
 } from "lucide-react"
-import { useEffect, useMemo, useRef, useState, type FormEvent, type JSX } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type JSX } from "react"
 import { FollowerCollectionSummary, FollowerRhythm, FollowerUserStrip, useFollowerClock } from "./BilibiliFollowerMonitorPanel"
-import { followerSchedule } from "./follower-monitor-presentation"
+import { followerSchedule, formatFollowerCount, formatFollowerInterval, safeFollowerAvatar } from "./follower-monitor-presentation"
 import { BilibiliFollowerTrendBoard } from "./BilibiliFollowerTrendBoard"
 import { swapFollowerTrends } from "./follower-trend-presentation"
 import { useFollowerTrends, type FollowerTrendIndicator } from "./use-follower-trends"
+import { normalizeFollowerUidInput } from "./follower-uid-input"
+import { FollowerIntervalInput } from "./FollowerIntervalInput"
+import { clampFollowerInterval, syncFollowerIntervalDrafts, type FollowerIntervalDraft, type FollowerIntervalDrafts } from "./follower-interval-draft"
 
 export type FollowerResourceState<T> =
   | { phase: "loading" }
@@ -34,19 +38,25 @@ export type FollowerResourceState<T> =
 
 export interface BilibiliFollowerWorkspaceProps {
   view: "监控用户" | "趋势对比"
-  monitors: FollowerResourceState<BilibiliFollowerMonitor[]>
-  trends: FollowerResourceState<BilibiliFollowerTrend[]>
+  monitors: FollowerResourceState<BilibiliFollowerMonitorV2[]>
+  trends: FollowerResourceState<BilibiliFollowerTrendV2[]>
   creationOpen: boolean
   mutationError: string | undefined
+  addSuccess?: boolean
+  settingsSuccess?: string
+  refreshSuccess?: boolean
   actionError?: string | undefined
   busyUserIds: string[]
+  savingIntervalUserIds: string[]
+  intervalDrafts: FollowerIntervalDrafts
+  onIntervalDraftChange: (user: BilibiliFollowerMonitorV2, value: number) => void
   collectingUserIds?: string[]
   selectedUserIds?: string[]
   trendIndicator?: FollowerTrendIndicator
   onSwapTrends?: (source: string, target: string) => void
   onReloadTrends?: () => void
   onCloseCreation: () => void
-  onAdd: (input: AddBilibiliFollowerMonitorInput) => Promise<void>
+  onAdd: (input: AddBilibiliFollowerMonitorInputV2, onCommitted?: () => void) => Promise<void>
   onRefreshUser: (userId: string) => Promise<void>
   onUpdateStatus: (userId: string, enabled: boolean) => Promise<void>
   onUpdateSettings: (input: UpdateBilibiliFollowerMonitorSettingsInput) => Promise<void>
@@ -55,13 +65,13 @@ export interface BilibiliFollowerWorkspaceProps {
   onToggleTrendUser?: (userId: string) => void
 }
 
-function formatCount(value: number | undefined): string {
-  return value === undefined ? "—" : new Intl.NumberFormat("zh-CN").format(value)
+function formatCount(value: string | undefined): string {
+  return formatFollowerCount(value)
 }
 
-function formatDelta(value: number | undefined): string {
+function formatDelta(value: string | undefined): string {
   if (value === undefined) return "暂无对比"
-  return `${value >= 0 ? "+" : ""}${new Intl.NumberFormat("zh-CN").format(value)}`
+  return `${BigInt(value) >= 0n ? "+" : ""}${formatFollowerCount(value)}`
 }
 
 function formatTime(value: string | undefined): string {
@@ -102,31 +112,65 @@ function MonitorState({ monitors, onReload }: Pick<BilibiliFollowerWorkspaceProp
 
 function AddMonitorForm({
   mutationError,
+  mid,
+  intervalSeconds,
+  onMidChange,
+  onIntervalChange,
   onClose,
   onAdd
 }: {
   mutationError: string | undefined
+  mid: string
+  intervalSeconds: number
+  onMidChange: (value: string) => void
+  onIntervalChange: (value: number) => void
   onClose: () => void
-  onAdd: (input: AddBilibiliFollowerMonitorInput) => Promise<void>
+  onAdd: BilibiliFollowerWorkspaceProps["onAdd"]
 }): JSX.Element {
-  const [mid, setMid] = useState("")
-  const [intervalSeconds, setIntervalSeconds] = useState(3_600)
   const [submitting, setSubmitting] = useState(false)
+  const [committed, setCommitted] = useState(false)
   const [submissionError, setSubmissionError] = useState<string>()
+  const mounted = useRef(true)
+  useLayoutEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
   const submit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault()
-    setSubmitting(true)
     setSubmissionError(undefined)
-    void onAdd({ mid, intervalSeconds })
-      .catch((error: unknown) => setSubmissionError(errorMessage(error)))
-      .finally(() => setSubmitting(false))
+    const normalizedMid = normalizeFollowerUidInput(mid)
+    if (normalizedMid === undefined) {
+      setSubmissionError("请输入有效 UID（1 至 9223372036854775807 的整数）。")
+      return
+    }
+    const parsed = AddBilibiliFollowerMonitorInputV2Schema.safeParse({ mid: normalizedMid, intervalSeconds })
+    if (!parsed.success) {
+      setSubmissionError(parsed.error.issues[0]?.message ?? "请输入有效的正 Long64 UID 和采集间隔。")
+      return
+    }
+    setSubmitting(true)
+    setCommitted(false)
+    let didCommit = false
+    void onAdd(parsed.data, () => {
+      didCommit = true
+      if (!mounted.current) return
+      onMidChange("")
+      setCommitted(true)
+    })
+      .then(() => {
+        if (!mounted.current) return
+        if (!didCommit) onMidChange("")
+        onClose()
+      })
+      .catch((error: unknown) => { if (mounted.current) setSubmissionError(errorMessage(error)) })
+      .finally(() => { if (mounted.current) setSubmitting(false) })
   }
 
   return (
     <form className="creation-form" onSubmit={submit}>
       <label>
         <span>B站 UID</span>
-        <input required inputMode="numeric" pattern="[1-9][0-9]*" value={mid} onChange={(event) => setMid(event.target.value)} placeholder="例如：672328094" />
+        <input aria-required="true" inputMode="numeric" value={mid} onChange={(event) => onMidChange(event.target.value)} placeholder="例如：672328094" />
       </label>
       <label>
         <span>采集间隔</span>
@@ -137,15 +181,15 @@ function AddMonitorForm({
           max={2_592_000}
           step={1}
           value={intervalSeconds}
-          onChange={(event) => setIntervalSeconds(Number(event.target.value))}
+          onChange={(event) => onIntervalChange(Number(event.target.value))}
         />
       </label>
       {intervalSeconds < 60 && <p className="form-warning">短间隔会受全局请求节流和失败退避保护，建议只用于少量用户的临时观察。</p>}
       <p className="form-note"><Activity size={14} />保存前会先请求 B站用户卡片接口，自动校验 UID，并写入第一条真实粉丝快照。默认每 1 小时采集一次。</p>
-      {(mutationError || submissionError) && <p className="form-error" role="alert">{mutationError || submissionError}</p>}
+      {(submissionError || mutationError) && <p className="form-error" role="alert">{submissionError || mutationError}</p>}
       <div className="form-actions">
         <button className="button button-secondary" type="button" onClick={onClose}>取消</button>
-        <button className="button button-primary" disabled={submitting} type="submit">{submitting ? "正在校验并添加…" : "添加监控"}</button>
+        <button className="button button-primary" disabled={submitting} type="submit">{submitting ? committed ? "正在同步列表…" : "正在校验并添加…" : "添加监控"}</button>
       </div>
     </form>
   )
@@ -154,6 +198,7 @@ function AddMonitorForm({
 function MonitorDetail({
   user,
   busy,
+  savingInterval,
   collecting,
   now,
   intervalDraft,
@@ -163,20 +208,22 @@ function MonitorDetail({
   onUpdateSettings,
   onDelete
 }: {
-  user: BilibiliFollowerMonitor
+  user: BilibiliFollowerMonitorV2
   busy: boolean
+  savingInterval: boolean
   collecting: boolean
   now: number
-  intervalDraft: number | undefined
+  intervalDraft: FollowerIntervalDraft | undefined
   onDraftChange: (value: number) => void
   onRefreshUser: BilibiliFollowerWorkspaceProps["onRefreshUser"]
   onUpdateStatus: BilibiliFollowerWorkspaceProps["onUpdateStatus"]
   onUpdateSettings: BilibiliFollowerWorkspaceProps["onUpdateSettings"]
   onDelete: BilibiliFollowerWorkspaceProps["onDelete"]
 }): JSX.Element {
-  const intervalSeconds = intervalDraft ?? user.intervalSeconds
-  const validInterval = Number.isInteger(intervalSeconds) && intervalSeconds >= 1 && intervalSeconds <= 2_592_000
+  const intervalSeconds = intervalDraft?.value ?? user.intervalSeconds
+  const intervalDirty = intervalDraft?.dirty && intervalSeconds !== user.intervalSeconds
   const active = user.monitorStatus === "ACTIVE"
+  const avatar = safeFollowerAvatar(user.avatarUrl)
   const deleteUser = (): void => {
     const message = `确定删除“${user.nickname}”吗？这会同时删除该用户的全部粉丝历史快照，且无法恢复。`
     if (typeof window === "undefined" || window.confirm(message)) void onDelete(user.id)
@@ -187,10 +234,10 @@ function MonitorDetail({
       <div className="follower-profile">
         <div className="follower-avatar">
           <div className="follower-avatar-fallback"><UsersRound size={19} /></div>
-          {user.avatarUrl && (
+          {avatar && (
             <img
               key={user.avatarUrl}
-              src={user.avatarUrl}
+              src={avatar}
               alt=""
               referrerPolicy="no-referrer"
               onError={hideBrokenAvatar}
@@ -206,7 +253,7 @@ function MonitorDetail({
 
       <div className="follower-counts">
         <div><span>粉丝</span><strong>{formatCount(user.currentFollowerCount)}</strong></div>
-        <div className={(user.deltaSincePrevious ?? 0) < 0 ? "is-negative" : (user.deltaSincePrevious ?? 0) > 0 ? "is-positive" : ""}><span>较上次</span><strong>{formatDelta(user.deltaSincePrevious)}</strong></div>
+        <div className={BigInt(user.deltaSincePrevious ?? "0") < 0n ? "is-negative" : BigInt(user.deltaSincePrevious ?? "0") > 0n ? "is-positive" : ""}><span>较上次</span><strong>{formatDelta(user.deltaSincePrevious)}</strong></div>
         <div><span>关注</span><strong>关注 {formatCount(user.followingCount)}</strong></div>
       </div>
 
@@ -222,16 +269,15 @@ function MonitorDetail({
       )}
 
       <div className="follower-actions">
-        <button className="button button-secondary" disabled={busy} type="button" onClick={() => void onRefreshUser(user.id)}><RefreshCcw size={14} />立即刷新</button>
+        <button className="button button-secondary" type="button" onClick={() => void onRefreshUser(user.id)}><RefreshCcw size={14} />立即刷新</button>
         <button className="button button-secondary" disabled={busy} type="button" onClick={() => void onUpdateStatus(user.id, !active)}>{active ? <Pause size={14} /> : <Play size={14} />}{active ? "暂停监控" : "恢复监控"}</button>
         <details className="follower-settings">
           <summary><Settings2 size={14} />采集设置</summary>
           <div>
-            <label><span>采集间隔（秒）</span><input required type="number" min={1} max={2_592_000} step={1} value={intervalSeconds} onChange={(event) => onDraftChange(Number(event.target.value))} /></label>
+            <label><span>采集间隔（秒）</span><FollowerIntervalInput value={intervalSeconds} onChange={onDraftChange} /></label>
             <small>当前：{formatInterval(user.intervalSeconds)}</small>
             {intervalSeconds < 60 && <small className="form-warning">短间隔会受全局请求节流和失败退避保护。</small>}
-            {!validInterval && <small className="form-warning">请输入 1 至 2592000 的整数秒数。</small>}
-            <button className="button button-secondary" disabled={busy || !validInterval || intervalSeconds === user.intervalSeconds} type="button" onClick={() => void onUpdateSettings({ userId: user.id, intervalSeconds })}>保存间隔</button>
+            <button className="button button-secondary" disabled={savingInterval || !intervalDirty} type="button" onClick={() => void onUpdateSettings({ userId: user.id, intervalSeconds })}>{savingInterval ? "正在保存…" : "保存间隔"}</button>
             <button className="follower-delete" disabled={busy} type="button" onClick={deleteUser}><Trash2 size={14} />删除监控与全部历史快照</button>
           </div>
         </details>
@@ -243,8 +289,10 @@ function MonitorDetail({
 
 export function BilibiliFollowerWorkspace(props: BilibiliFollowerWorkspaceProps): JSX.Element {
   const now = useFollowerClock()
+  // Like the original inline form, drafts survive closing the adapted drawer.
+  const [addMid, setAddMid] = useState("")
+  const [addInterval, setAddInterval] = useState(3_600)
   const [expandedId, setExpandedId] = useState<string>()
-  const [intervalDrafts, setIntervalDrafts] = useState<Record<string, number>>({})
   const trendAnchor = useRef<HTMLDivElement>(null)
   const monitorAnchor = useRef<HTMLDivElement>(null)
   const previousView = useRef(props.view)
@@ -260,35 +308,36 @@ export function BilibiliFollowerWorkspace(props: BilibiliFollowerWorkspaceProps)
     if (props.monitors.phase !== "success") return
     const current = props.monitors.data
     setExpandedId(id => current.some(user => user.id === id) ? id : undefined)
-    setIntervalDrafts(drafts => {
-      const entries = Object.entries(drafts).filter(([id, value]) => current.some(user => user.id === id && user.intervalSeconds !== value))
-      return entries.length === Object.keys(drafts).length ? drafts : Object.fromEntries(entries)
-    })
   }, [props.monitors])
   const activeCount = users.filter((user) => user.monitorStatus === "ACTIVE").length
   const failureCount = users.filter((user) => user.lastErrorType).length
   const selected = props.selectedUserIds
     ?? (props.trends.phase === "success" ? props.trends.data.map((trend) => trend.user.id) : [])
+  const visibleSelectedCount = selected.filter(id => users.some(user => user.id === id)).length
 
   return (
     <>
+      {props.addSuccess && <div className="follower-state" role="status"><UserRoundPlus size={20} /><span>已添加监控用户</span></div>}
+      {props.settingsSuccess && <div className="follower-state" role="status"><Settings2 size={20} /><span>{props.settingsSuccess}</span></div>}
+      {props.refreshSuccess && <div className="follower-state" role="status"><RefreshCcw size={20} /><span>已刷新</span></div>}
       {props.actionError && <div className="follower-state is-error" role="alert"><CircleAlert size={20} /><span>{props.actionError}</span></div>}
       {props.monitors.phase === "success" && props.monitors.staleMessage && <div className="follower-state is-error" role="alert"><CircleAlert size={20} /><span>更新失败，保留上次数据：{props.monitors.staleMessage}</span><button className="button button-secondary" onClick={props.onReload}>重新加载</button></div>}
       <div ref={monitorAnchor}><FollowerCollectionSummary users={users} available={props.monitors.phase === "success"} /></div>
-      {users.some(user => (intervalDrafts[user.id] ?? user.intervalSeconds) < 60) && <p className="follower-short-notice" role="note">已允许 1 秒采集间隔；短间隔会受全局请求节流和失败退避保护，建议只用于少量用户的临时观察。</p>}
+      {users.some(user => (props.intervalDrafts[user.id]?.value ?? user.intervalSeconds) < 60) && <p className="follower-short-notice" role="note">已允许 1 秒采集间隔；短间隔会受全局请求节流和失败退避保护，建议只用于少量用户的临时观察。</p>}
 
         <div>
           <MonitorState monitors={props.monitors} onReload={props.onReload} />
           {props.monitors.phase === "success" && (
             <section className="panel follower-directory">
-              <div className="panel-header compact"><div><p>BILIBILI USER MONITORS</p><h2>监控用户</h2></div><span className="follower-limit">已选趋势 {selected.length}/4</span><button className="button button-secondary" disabled={props.monitors.refreshing} onClick={props.onReload}><RefreshCcw size={14} />刷新列表</button></div>
+              <div className="panel-header compact"><div><p>BILIBILI USER MONITORS</p><h2>监控用户</h2></div><span className="follower-limit">已选趋势 {visibleSelectedCount}/4</span><button className="button button-secondary" disabled={props.monitors.refreshing} onClick={props.onReload}><RefreshCcw size={14} />刷新列表</button></div>
               <div className="follower-directory-meta" aria-label="粉丝监控统计"><span>{props.monitors.total ?? users.length} 个用户</span><span>{activeCount} 个启用</span><span>{users.length - activeCount} 个暂停</span><span>{failureCount} 个异常</span><span>点击用户展开详情</span></div>
               {users.length === 0
                 ? <div className="business-empty"><UserRoundPlus size={26} /><strong>还没有监控用户</strong><span>添加 B站 UID 后，会先校验用户并保存第一条粉丝快照。</span></div>
                 : <FollowerUserStrip users={users} selected={selected} expandedId={expandedId} collectingIds={props.collectingUserIds ?? []} now={now}
                   onExpand={id => setExpandedId(current => current === id ? undefined : id)} onToggleTrend={props.onToggleTrendUser} />}
               {expanded && <MonitorDetail key={expanded.id} user={expanded} now={now} busy={props.busyUserIds.includes(expanded.id)} collecting={props.collectingUserIds?.includes(expanded.id) ?? false}
-                intervalDraft={intervalDrafts[expanded.id]} onDraftChange={value => setIntervalDrafts(drafts => ({ ...drafts, [expanded.id]: value }))}
+                savingInterval={props.savingIntervalUserIds.includes(expanded.id)} intervalDraft={props.intervalDrafts[expanded.id]}
+                onDraftChange={value => props.onIntervalDraftChange(expanded, value)}
                 onRefreshUser={props.onRefreshUser} onUpdateStatus={props.onUpdateStatus} onUpdateSettings={props.onUpdateSettings} onDelete={props.onDelete} />}
             </section>
           )}
@@ -302,7 +351,8 @@ export function BilibiliFollowerWorkspace(props: BilibiliFollowerWorkspaceProps)
         <div className="creation-backdrop" role="presentation">
           <section className="creation-drawer" role="dialog" aria-modal="true" aria-label="添加 B站监控用户">
             <div className="creation-head"><div><p>BILIBILI FOLLOWER MONITOR</p><h2>添加 B站监控用户</h2></div><button className="icon-button" type="button" aria-label="关闭" onClick={props.onCloseCreation}><X size={17} /></button></div>
-            <AddMonitorForm mutationError={props.mutationError} onClose={props.onCloseCreation} onAdd={props.onAdd} />
+            <AddMonitorForm mutationError={props.mutationError} mid={addMid} intervalSeconds={addInterval}
+              onMidChange={setAddMid} onIntervalChange={setAddInterval} onClose={props.onCloseCreation} onAdd={props.onAdd} />
           </section>
         </div>
       )}
@@ -324,48 +374,103 @@ export function ConnectedBilibiliFollowerWorkspace({
   const queryClient = useQueryClient()
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([])
   const [busyUserIds, setBusyUserIds] = useState<string[]>([])
-  const [collectingUserIds, setCollectingUserIds] = useState<string[]>([])
   const [actionError, setActionError] = useState<string>()
+  const [refreshSuccess, setRefreshSuccess] = useState(false)
+  const [addSuccess, setAddSuccess] = useState(false)
+  const [intervalDrafts, setIntervalDrafts] = useState<FollowerIntervalDrafts>({})
+  const [savingIntervalUserIds, setSavingIntervalUserIds] = useState<string[]>([])
+  const [settingsSuccess, setSettingsSuccess] = useState<string>()
+  // Error visibility is UI state, not a second copy of the Query's data/error.
+  const [readErrorVisible, setReadErrorVisible] = useState(false)
   // Read local projections only; the Core owns platform requests and scheduling.
-  const monitorsQuery = useQuery({ queryKey: ["bilibili-followers"], queryFn: () => bridge.bilibiliFollowers.list({}), refetchInterval: 2_000 })
-  const effectiveUserIds = useMemo(() => {
-    return selectedUserIds.filter((id) => monitorsQuery.data?.items.some((user) => user.id === id))
-  }, [monitorsQuery.data, selectedUserIds])
-  useEffect(() => {
-    if (monitorsQuery.data) setSelectedUserIds((ids) => ids.filter((id) => monitorsQuery.data.items.some((user) => user.id === id)))
-  }, [monitorsQuery.data])
-  const trendsQuery = useFollowerTrends(bridge, effectiveUserIds, monitorsQuery.dataUpdatedAt)
+  const monitorsQuery = useQuery({
+    queryKey: ["bilibili-followers-v2"], retry: false, refetchInterval: 2_000,
+    queryFn: async () => {
+      // A new loadUsers clears the shared error; sharing a pending read does not.
+      setActionError(undefined)
+      setReadErrorVisible(false)
+      try {
+        const projection = await bridge.bilibiliFollowersV2.list({})
+        // Prune on a successful read before its waiters append a newly returned ID.
+        // An effect could run after add-success and remove that raw selection again.
+        setSelectedUserIds(ids => ids.filter(id => projection.items.some(user => user.id === id)))
+        // The original synchronizes drafts inside loadUsers, before save waiters.
+        setIntervalDrafts(drafts => syncFollowerIntervalDrafts(drafts, projection.items))
+        return projection
+      } catch (error) {
+        // Match the original single apiError: the last failure owns the notice.
+        setActionError(undefined)
+        setReadErrorVisible(true)
+        throw error
+      }
+    }
+  })
+  const trendsQuery = useFollowerTrends(bridge, selectedUserIds, monitorsQuery.dataUpdatedAt)
   const invalidate = async (): Promise<void> => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["bilibili-followers"] }),
-      queryClient.invalidateQueries({ queryKey: ["bilibili-follower-trends"] })
+      queryClient.invalidateQueries({ queryKey: ["bilibili-followers-v2"] }, { cancelRefetch: false }),
+      queryClient.invalidateQueries({ queryKey: ["bilibili-follower-trends-v2"] })
     ])
   }
   const addMutation = useMutation({
-    mutationFn: (input: AddBilibiliFollowerMonitorInput) => bridge.bilibiliFollowers.add(input),
-    onSuccess: async (user) => {
+    mutationFn: ({ input }: { input: AddBilibiliFollowerMonitorInputV2; onCommitted?: () => void }) => bridge.bilibiliFollowersV2.add(input),
+    retry: false,
+    onMutate: () => { setAddSuccess(false) },
+    onSuccess: async (user, request) => {
+      request.onCommitted?.()
+      // Match loadUsers: reuse an in-flight read, swallow read failure in Query,
+      // and confirm the committed add without waiting for queued history reads.
+      await monitorsQuery.refetch({ cancelRefetch: false })
       setSelectedUserIds((ids) => ids.includes(user.id) || ids.length >= 4 ? ids : [...ids, user.id])
-      onCloseCreation()
-      await invalidate()
+      setAddSuccess(true)
     }
   })
   const runUserAction = async (userId: string, action: () => Promise<unknown>): Promise<void> => {
     setBusyUserIds((ids) => [...new Set([...ids, userId])])
     setActionError(undefined)
-    try { await action() }
-    catch (error) { setActionError(errorMessage(error)) }
-    finally {
+    try {
+      await action()
       await invalidate()
-      setBusyUserIds((ids) => ids.filter((id) => id !== userId))
-    }
+    } catch (error) { setReadErrorVisible(false); setActionError(errorMessage(error)) }
+    finally { setBusyUserIds((ids) => ids.filter((id) => id !== userId)) }
   }
-  const monitors: FollowerResourceState<BilibiliFollowerMonitor[]> = monitorsQuery.data
+  const saveInterval = async (input: UpdateBilibiliFollowerMonitorSettingsInput): Promise<void> => {
+    const intervalSeconds = clampFollowerInterval(input.intervalSeconds)
+    const user = monitorsQuery.data?.items.find(item => item.id === input.userId)
+    if (!user || intervalSeconds === user.intervalSeconds) return
+    setSavingIntervalUserIds(ids => [...new Set([...ids, input.userId])])
+    setActionError(undefined)
+    setReadErrorVisible(false)
+    setSettingsSuccess(undefined)
+    try {
+      const updatedUser = await bridge.bilibiliFollowersV2.updateSettings({ ...input, intervalSeconds })
+      setIntervalDrafts(drafts => ({ ...drafts, [input.userId]: { value: updatedUser.intervalSeconds, dirty: false } }))
+      // Reuse an existing read, accept its old snapshot, and swallow read errors.
+      // A successful settings commit is not undone by a failed list or history.
+      await monitorsQuery.refetch({ cancelRefetch: false })
+      setSettingsSuccess(`已更新采集间隔为 ${formatFollowerInterval(intervalSeconds)}`)
+    } catch (error) { setReadErrorVisible(false); setActionError(errorMessage(error)) }
+    finally { setSavingIntervalUserIds(ids => ids.filter(id => id !== input.userId)) }
+  }
+  const refreshUser = async (userId: string): Promise<void> => {
+    setActionError(undefined)
+    setReadErrorVisible(false)
+    setRefreshSuccess(false)
+    try {
+      await bridge.bilibiliFollowersV2.refresh({ userId })
+      // Original manual refresh only awaits the shared list, not queued history.
+      // Query retains old data and swallows read errors, as loadUsers does.
+      await monitorsQuery.refetch({ cancelRefetch: false })
+      setRefreshSuccess(true)
+    } catch (error) { setReadErrorVisible(false); setActionError(errorMessage(error)) }
+  }
+  const monitors: FollowerResourceState<BilibiliFollowerMonitorV2[]> = monitorsQuery.data
     ? { phase: "success", data: monitorsQuery.data.items, total: monitorsQuery.data.total, refreshing: monitorsQuery.isFetching,
-        ...(monitorsQuery.isError ? { staleMessage: monitorsQuery.error.message } : {}) }
+        ...(monitorsQuery.isError && readErrorVisible ? { staleMessage: monitorsQuery.error.message } : {}) }
     : monitorsQuery.isError
       ? { phase: "error", message: monitorsQuery.error.message }
       : { phase: "loading" }
-  const trends: FollowerResourceState<BilibiliFollowerTrend[]> = effectiveUserIds.length === 0
+  const trends: FollowerResourceState<BilibiliFollowerTrendV2[]> = selectedUserIds.length === 0
     ? { phase: "success", data: [] }
     : trendsQuery.data
       ? { phase: "success", data: trendsQuery.data, refreshing: trendsQuery.isFetching,
@@ -383,28 +488,32 @@ export function ConnectedBilibiliFollowerWorkspace({
       monitors={monitors}
       trends={trends}
       creationOpen={creationOpen}
-      mutationError={addMutation.error?.message}
+      mutationError={undefined}
+      addSuccess={addSuccess}
+      settingsSuccess={settingsSuccess}
+      refreshSuccess={refreshSuccess}
       actionError={actionError}
       busyUserIds={busyUserIds}
-      collectingUserIds={collectingUserIds}
-      selectedUserIds={effectiveUserIds}
+      savingIntervalUserIds={savingIntervalUserIds}
+      intervalDrafts={intervalDrafts}
+      onIntervalDraftChange={(user, value) => {
+        const intervalSeconds = clampFollowerInterval(value)
+        setIntervalDrafts(drafts => ({ ...drafts, [user.id]: { value: intervalSeconds, dirty: intervalSeconds !== user.intervalSeconds } }))
+      }}
+      selectedUserIds={selectedUserIds}
       trendIndicator={trendsQuery.indicator}
       onSwapTrends={(source, target) => setSelectedUserIds(ids => swapFollowerTrends(ids, source, target))}
       onReloadTrends={trendsQuery.reload}
       onCloseCreation={onCloseCreation}
-      onAdd={async (input) => { await addMutation.mutateAsync(input) }}
-      onRefreshUser={userId => runUserAction(userId, async () => {
-        setCollectingUserIds(ids => [...new Set([...ids, userId])])
-        try { await bridge.bilibiliFollowers.refresh({ userId }) }
-        finally { setCollectingUserIds(ids => ids.filter(id => id !== userId)) }
-      })}
-      onUpdateStatus={async (userId, enabled) => { await runUserAction(userId, () => bridge.bilibiliFollowers.updateStatus({ userId, enabled })) }}
-      onUpdateSettings={async (input) => { await runUserAction(input.userId, () => bridge.bilibiliFollowers.updateSettings(input)) }}
+      onAdd={async (input, onCommitted) => { await addMutation.mutateAsync({ input, ...(onCommitted ? { onCommitted } : {}) }) }}
+      onRefreshUser={refreshUser}
+      onUpdateStatus={async (userId, enabled) => { await runUserAction(userId, () => bridge.bilibiliFollowersV2.updateStatus({ userId, enabled })) }}
+      onUpdateSettings={saveInterval}
       onDelete={async (userId) => { await runUserAction(userId, async () => {
-        await bridge.bilibiliFollowers.remove({ userId })
+        await bridge.bilibiliFollowersV2.remove({ userId })
         setSelectedUserIds((ids) => ids.filter((id) => id !== userId))
       }) }}
-      onReload={() => { void monitorsQuery.refetch() }}
+      onReload={() => { void monitorsQuery.refetch({ cancelRefetch: false }) }}
       onToggleTrendUser={toggleTrendUser}
     />
   )

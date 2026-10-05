@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { resolve } from "node:path"
-import { DatabaseSync } from "node:sqlite"
+import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite"
 import { compareLiveSnapshotTime, hasLiveSnapshotText } from "./bilibili-live-snapshot-values"
 import { migrateLiveSignedCounters } from "./bilibili-live-counter-migration"
+import { followerStoredNickname } from "./follower-profile-storage-text"
+import { migrateFollowerSignedCounters } from "./bilibili-follower-counter-migration"
 
 export interface ControlDatabaseStatus {
   databasePath: string
@@ -150,8 +152,8 @@ export interface StoredBilibiliFollowerMonitor {
   nickname: string
   avatarUrl: string | null
   profileUrl: string
-  currentFollowerCount: number | null
-  followingCount: number | null
+  currentFollowerCount: bigint | null
+  followingCount: bigint | null
   monitorStatus: string
   intervalSeconds: number
   nextCollectAt: string | null
@@ -171,8 +173,8 @@ export interface StoredBilibiliFollowerSnapshot {
   snapshotId: string
   monitorId: string
   mid: string
-  followerCount: number
-  followingCount: number | null
+  followerCount: bigint
+  followingCount: bigint | null
   capturedAt: string
   capturedBucket: string
   sourceEndpoint: string
@@ -550,8 +552,8 @@ export interface UpsertBilibiliFollowerMonitorSnapshotInput {
     nickname: string
     avatarUrl: string | null
     profileUrl: string
-    followerCount: number
-    followingCount: number | null
+    followerCount: number | bigint
+    followingCount: number | bigint | null
     intervalSeconds: number
     nextCollectAt: string
     capturedAt: string
@@ -1463,6 +1465,7 @@ export class ControlDatabase {
       `)
     }
     if (Number(version.user_version) < 13) migrateLiveSignedCounters(database)
+    if (Number(version.user_version) < 14) migrateFollowerSignedCounters(database)
   }
 
   status(): ControlDatabaseStatus {
@@ -1800,6 +1803,7 @@ export class ControlDatabase {
   }
 
   upsertBilibiliSubjectBinding(binding: StoredBilibiliSubjectBinding): void {
+    if (binding.mid !== null) validateFollowerMid(binding.mid, true)
     this.database.prepare(`
       INSERT INTO bilibili_subject_binding (
         binding_id, subject_id, bilibili_user_monitor_id, bilibili_live_room_monitor_id,
@@ -2116,8 +2120,13 @@ export class ControlDatabase {
 
   upsertBilibiliFollowerMonitorSnapshot(input: UpsertBilibiliFollowerMonitorSnapshotInput): void {
     this.transaction(() => {
+      validateFollowerMid(input.monitor.mid, input.mode !== "collect")
+      const followerCount = followerCounterInput(input.monitor.followerCount)
+      const followingCount = input.monitor.followingCount === null
+        ? null : followerCounterInput(input.monitor.followingCount)
       this.insertObjectArtifact(input.artifact)
-      const monitor = input.monitor
+      const monitor = { ...input.monitor, followerCount, followingCount,
+        nickname: followerStoredNickname(input.monitor.nickname) }
       if (input.mode === "collect") {
         // A collection updates measurements, never the user's monitoring settings.
         const result = this.database.prepare(`
@@ -2126,11 +2135,11 @@ export class ControlDatabase {
             following_count = ?, next_collect_at = ?, last_snapshot_at = ?, last_success_at = ?,
             last_error_at = NULL, last_error_type = NULL, last_error_message = NULL,
             source_endpoint = ?, current_evidence_object_id = ?, version = version + 1, updated_at = ?
-          WHERE monitor_id = ? AND mid = ?
+          WHERE monitor_id = ?
         `).run(
           monitor.nickname, monitor.avatarUrl, monitor.profileUrl, monitor.followerCount,
           monitor.followingCount, monitor.nextCollectAt, monitor.capturedAt, monitor.capturedAt,
-          monitor.sourceEndpoint, input.artifact.objectId, monitor.capturedAt, monitor.monitorId, monitor.mid
+          monitor.sourceEndpoint, input.artifact.objectId, monitor.capturedAt, monitor.monitorId
         )
         if (result.changes === 0) throw new Error("Cannot collect a deleted follower monitor")
       } else this.database.prepare(`
@@ -2203,7 +2212,7 @@ export class ControlDatabase {
   }
 
   listBilibiliFollowerMonitors(limit?: number): StoredBilibiliFollowerMonitor[] {
-    return this.database.prepare(`
+    return this.followerReadStatement(`
       SELECT monitor_id AS monitorId,
              mid,
              nickname,
@@ -2227,11 +2236,11 @@ export class ControlDatabase {
       FROM bilibili_follower_monitor
       ORDER BY monitor_status ASC, current_follower_count DESC, rowid ASC
       LIMIT ?
-    `).all(limit ?? -1) as unknown as StoredBilibiliFollowerMonitor[]
+    `).all(limit ?? -1).map(toStoredFollowerMonitor)
   }
 
   findBilibiliFollowerMonitorById(monitorId: string): StoredBilibiliFollowerMonitor | undefined {
-    return this.database.prepare(`
+    const row = this.followerReadStatement(`
       SELECT monitor_id AS monitorId,
              mid,
              nickname,
@@ -2254,11 +2263,12 @@ export class ControlDatabase {
              updated_at AS updatedAt
       FROM bilibili_follower_monitor
       WHERE monitor_id = ?
-    `).get(monitorId) as unknown as StoredBilibiliFollowerMonitor | undefined
+    `).get(monitorId)
+    return row ? toStoredFollowerMonitor(row) : undefined
   }
 
   findBilibiliFollowerMonitorByMid(mid: string): StoredBilibiliFollowerMonitor | undefined {
-    return this.database.prepare(`
+    const row = this.followerReadStatement(`
       SELECT monitor_id AS monitorId,
              mid,
              nickname,
@@ -2281,7 +2291,8 @@ export class ControlDatabase {
              updated_at AS updatedAt
       FROM bilibili_follower_monitor
       WHERE mid = ?
-    `).get(mid) as unknown as StoredBilibiliFollowerMonitor | undefined
+    `).get(mid)
+    return row ? toStoredFollowerMonitor(row) : undefined
   }
 
   findBilibiliFollowerSnapshots(
@@ -2311,7 +2322,7 @@ export class ControlDatabase {
       parameters.push(`${to.slice(0, 19)}Z`, to)
     }
     parameters.push(input.limit)
-    return this.database.prepare(`
+    return this.followerReadStatement(`
       SELECT snapshot_id AS snapshotId,
              monitor_id AS monitorId,
              mid,
@@ -2329,11 +2340,11 @@ export class ControlDatabase {
         LIMIT ?
       ) limited
       ORDER BY captured_at ASC
-    `).all(...parameters) as unknown as StoredBilibiliFollowerSnapshot[]
+    `).all(...parameters).map(toStoredFollowerSnapshot)
   }
 
   findDueBilibiliFollowerMonitors(now: string, limit: number): StoredBilibiliFollowerMonitor[] {
-    return this.database.prepare(`
+    return this.followerReadStatement(`
       SELECT monitor_id AS monitorId,
              mid,
              nickname,
@@ -2359,7 +2370,13 @@ export class ControlDatabase {
         AND (next_collect_at IS NULL OR next_collect_at <= ?)
       ORDER BY COALESCE(next_collect_at, created_at) ASC
       LIMIT ?
-    `).all(now, limit) as unknown as StoredBilibiliFollowerMonitor[]
+    `).all(now, limit).map(toStoredFollowerMonitor)
+  }
+
+  private followerReadStatement(sql: string): StatementSync {
+    const statement = this.database.prepare(sql)
+    statement.setReadBigInts(true)
+    return statement
   }
 
   insertBilibiliApiCall(call: StoredBilibiliApiCall, artifact?: StoredObjectArtifact): void {
@@ -3932,6 +3949,94 @@ export class ControlDatabase {
 
   close(): void {
     this.database.close()
+  }
+}
+
+const followerLongMinimum = -(1n << 63n)
+const followerLongMaximum = (1n << 63n) - 1n
+
+function followerCounterInput(value: number | bigint): bigint {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) throw new RangeError("Follower counter number must be a safe integer.")
+    value = BigInt(value)
+  }
+  if (typeof value !== "bigint" || value < followerLongMinimum || value > followerLongMaximum) {
+    throw new RangeError("Follower counter must be a signed 64-bit integer.")
+  }
+  return value
+}
+
+function validateFollowerMid(mid: string, positive: boolean): void {
+  const description = positive ? "positive signed 64-bit" : "signed 64-bit"
+  if (!/^(?:0|-?[1-9]\d*)$/u.test(mid)) throw new RangeError(`Follower MID must be a ${description} integer.`)
+  const value = BigInt(mid)
+  if (value < (positive ? 1n : followerLongMinimum) || value > followerLongMaximum) {
+    throw new RangeError(`Follower MID must be a ${description} integer.`)
+  }
+}
+
+function followerSqlText(value: SQLOutputValue | undefined): string {
+  if (typeof value !== "string") throw new TypeError("Expected follower SQLite text.")
+  return value
+}
+
+function followerSqlNullableText(value: SQLOutputValue | undefined): string | null {
+  return value === null ? null : followerSqlText(value)
+}
+
+function followerSqlCounter(value: SQLOutputValue | undefined): bigint {
+  if (typeof value !== "bigint") throw new TypeError("Expected follower SQLite INTEGER counter.")
+  return value
+}
+
+function followerSqlNullableCounter(value: SQLOutputValue | undefined): bigint | null {
+  return value === null ? null : followerSqlCounter(value)
+}
+
+function followerSqlSmallInteger(value: SQLOutputValue | undefined): number {
+  if (typeof value !== "bigint") throw new TypeError("Expected follower SQLite INTEGER setting.")
+  const number = Number(value)
+  if (!Number.isSafeInteger(number)) throw new RangeError("Follower SQLite setting must be a safe integer.")
+  return number
+}
+
+function toStoredFollowerMonitor(row: Record<string, SQLOutputValue>): StoredBilibiliFollowerMonitor {
+  return {
+    monitorId: followerSqlText(row.monitorId),
+    mid: followerSqlText(row.mid),
+    nickname: followerSqlText(row.nickname),
+    avatarUrl: followerSqlNullableText(row.avatarUrl),
+    profileUrl: followerSqlText(row.profileUrl),
+    currentFollowerCount: followerSqlNullableCounter(row.currentFollowerCount),
+    followingCount: followerSqlNullableCounter(row.followingCount),
+    monitorStatus: followerSqlText(row.monitorStatus),
+    intervalSeconds: followerSqlSmallInteger(row.intervalSeconds),
+    nextCollectAt: followerSqlNullableText(row.nextCollectAt),
+    lastSnapshotAt: followerSqlNullableText(row.lastSnapshotAt),
+    lastSuccessAt: followerSqlNullableText(row.lastSuccessAt),
+    lastErrorAt: followerSqlNullableText(row.lastErrorAt),
+    lastErrorType: followerSqlNullableText(row.lastErrorType),
+    lastErrorMessage: followerSqlNullableText(row.lastErrorMessage),
+    sourceEndpoint: followerSqlNullableText(row.sourceEndpoint),
+    currentEvidenceObjectId: followerSqlNullableText(row.currentEvidenceObjectId),
+    version: followerSqlSmallInteger(row.version),
+    createdAt: followerSqlText(row.createdAt),
+    updatedAt: followerSqlText(row.updatedAt)
+  }
+}
+
+function toStoredFollowerSnapshot(row: Record<string, SQLOutputValue>): StoredBilibiliFollowerSnapshot {
+  return {
+    snapshotId: followerSqlText(row.snapshotId),
+    monitorId: followerSqlText(row.monitorId),
+    mid: followerSqlText(row.mid),
+    followerCount: followerSqlCounter(row.followerCount),
+    followingCount: followerSqlNullableCounter(row.followingCount),
+    capturedAt: followerSqlText(row.capturedAt),
+    capturedBucket: followerSqlText(row.capturedBucket),
+    sourceEndpoint: followerSqlText(row.sourceEndpoint),
+    evidenceObjectId: followerSqlText(row.evidenceObjectId),
+    createdAt: followerSqlText(row.createdAt)
   }
 }
 

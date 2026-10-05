@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url"
 import react from "@vitejs/plugin-react"
-import { chromium, type Browser, type Page } from "playwright"
+import { chromium, type Browser, type Page, type Request } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
 
@@ -10,6 +10,8 @@ describe("original follower trend interactions", () => {
   let browser: Browser
   let page: Page
   let url: string
+  let volumePhases: { phase: string; ms: number }[] = []
+  let setupProbe: { startedAt: number; phases: { phase: string; ms: number }[]; pending: Map<Request, string>; pendingCount: number; failed: string[]; failureCount: number; finished: boolean }
   beforeAll(async () => {
     server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
       plugins: [react()], server: { host: "127.0.0.1", port: 0 }, logLevel: "error" })
@@ -21,12 +23,47 @@ describe("original follower trend interactions", () => {
   }, 30_000)
   afterAll(async () => { await browser?.close(); await server?.close() })
   beforeEach(async () => {
+    volumePhases = []
+    const probe = { startedAt: performance.now(), phases: [] as { phase: string; ms: number }[], pending: new Map<Request, string>(), pendingCount: 0, failed: [] as string[], failureCount: 0, finished: false }
+    setupProbe = probe
+    const phase = (name: string) => { if (probe.phases.length < 100) probe.phases.push({ phase: name, ms: Math.round(performance.now() - probe.startedAt) }) }
+    phase("page:create")
     page = await browser.newPage({ viewport: { width: 1440, height: 1200 } })
+    phase("page:created")
+    if (probe.finished) console.warn("Follower trend page created after teardown", { phases: probe.phases })
+    page.on("request", request => {
+      probe.pendingCount++
+      if (probe.pending.size < 100) probe.pending.set(request, new URL(request.url()).pathname.slice(0, 256))
+    })
+    page.on("requestfinished", request => { probe.pendingCount--; probe.pending.delete(request) })
+    page.on("requestfailed", request => {
+      const path = new URL(request.url()).pathname.slice(0, 256)
+      probe.pendingCount--
+      probe.pending.delete(request)
+      probe.failureCount++
+      if (probe.failed.length < 100) probe.failed.push(`failed:${path}`)
+    })
+    page.on("response", response => {
+      if (response.status() >= 400) {
+        probe.failureCount++
+        if (probe.failed.length < 100) probe.failed.push(`${response.status()}:${new URL(response.url()).pathname.slice(0, 256)}`)
+      }
+    })
     page.on("pageerror", error => { throw error })
+    phase("fixture:navigate")
     await page.goto(url)
+    phase("fixture:loaded")
     await page.getByRole("button", { name: "展开测试用户1的详情" }).waitFor()
+    phase("fixture:ready")
   })
-  afterEach(async () => { await page?.close() })
+  afterEach(async ({ task }) => {
+    setupProbe.finished = true
+    if (task.result?.state === "fail") console.warn("Follower trend setup phases", {
+      phases: setupProbe.phases, pendingCount: setupProbe.pendingCount, pending: [...setupProbe.pending.values()], failureCount: setupProbe.failureCount, failed: setupProbe.failed
+    })
+    if (task.result?.state === "fail" && volumePhases.length) console.warn("Follower volume fixture phases", volumePhases)
+    await page?.close()
+  })
   const choose = async (count: number) => {
     for (let i = 1; i <= count; i++) await page.getByRole("checkbox", { name: `测试用户${i}趋势对比` }).check()
   }
@@ -81,7 +118,7 @@ describe("original follower trend interactions", () => {
   })
 
   it("retains fetched history after errors and never displays an unselected user's late response", async () => {
-    await page.evaluate(() => { window.followerFixture.history["2"] = [{ capturedAt: "2026-09-05T02:00:00Z", followerCount: 87654, sourceEndpoint: "history" }] })
+    await page.evaluate(() => { window.followerFixture.history["2"] = [{ capturedAt: "2026-09-05T02:00:00Z", followerCount: "87654", sourceEndpoint: "history" }] })
     await choose(1)
     await page.locator('.follower-trend-card circle[aria-label*="87,654"]').waitFor()
     await page.evaluate(() => { window.followerFixture.trendError = "趋势读取失败" })
@@ -211,22 +248,35 @@ describe("original follower trend interactions", () => {
   })
 
   it("displays all 500 history points for each of four users without creating 2000 keyboard tab stops", async () => {
+    const started = performance.now()
+    const phase = (label: string) => volumePhases.push({ phase: label, ms: Math.round(performance.now() - started) })
+    phase("populate:start")
     await page.evaluate(() => {
       for (const mid of ["2", "3", "4", "5"]) window.followerFixture.history[mid] = Array.from({ length: 500 }, (_, index) => ({
-        capturedAt: new Date(Date.parse("2026-09-05T02:00:00Z") + index * 10_000).toISOString(), followerCount: 100_000 + index, sourceEndpoint: "history"
+        capturedAt: new Date(Date.parse("2026-09-05T02:00:00Z") + index * 10_000).toISOString(), followerCount: String(100_000 + index), sourceEndpoint: "history"
       }))
     })
-    await choose(4)
+    phase("populate:end")
+    for (let index = 1; index <= 4; index++) {
+      phase(`choose-${index}:start`)
+      await page.getByRole("checkbox", { name: `测试用户${index}趋势对比` }).check()
+      phase(`choose-${index}:end`)
+    }
     const points = page.locator(".follower-history-svg circle")
     await expect.poll(() => points.count()).toBe(2000)
+    phase("points:ready")
     expect(await page.locator('.follower-history-svg circle[tabindex="0"]').count()).toBe(4)
     const first = page.locator(".follower-history-svg").first()
     await first.locator("circle").first().focus()
+    phase("point:focused")
     await page.keyboard.press("End")
+    phase("key:end")
     expect(await page.getByRole("tooltip").textContent()).toContain("100,499")
     await page.keyboard.press("Home")
+    phase("key:home")
     expect(await page.getByRole("tooltip").textContent()).toContain("100,000")
     expect(await page.evaluate(() => window.followerFixture.trendRequests.every(input => input.limitPerUser === 500))).toBe(true)
+    phase("complete")
   })
 
   it("keeps the original 700ms refreshing and 900ms result hints, cancelling old timers on another refresh", async () => {
@@ -258,7 +308,7 @@ describe("original follower trend interactions", () => {
     await page.evaluate(() => {
       window.followerFixture.trendError = "首次历史读取失败"
       window.followerFixture.history = { "2": [], "3": [], "4": [] }
-      window.followerFixture.patchUser(1, { recentTrend: [], currentFollowerCount: 0, lastSnapshotAt: "2026-09-05T02:00:00Z" })
+      window.followerFixture.patchUser(1, { recentTrend: [], currentFollowerCount: "0", lastSnapshotAt: "2026-09-05T02:00:00Z" })
       window.followerFixture.patchUser(2, { recentTrend: [], currentFollowerCount: undefined })
     })
     await page.getByRole("button", { name: "刷新列表", exact: true }).click()

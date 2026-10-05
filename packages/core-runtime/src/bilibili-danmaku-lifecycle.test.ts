@@ -20,6 +20,62 @@ describe("local login upgrade transport lifecycle", () => {
   })
   afterEach(async () => { await service?.stopAll(); await h?.close() })
 
+  it("stops a CONNECTING room without waiting behind its pending start", async () => {
+    const gate = authGate()
+    source.startWait = gate.wait
+    const starting = service.start({ roomMonitorId: id }).catch(error => error)
+    await gate.started
+    let stopped = false
+    const stopping = service.stop(id).then(result => { stopped = !result.running })
+    await new Promise<void>(resolveTurn => setImmediate(resolveTurn))
+    try { expect(stopped).toBe(true) }
+    finally { gate.release(); await stopping; await starting }
+    expect(h.database.findLatestBilibiliLiveDanmakuSession(id)?.status).toBe("STOPPED")
+  })
+
+  it("stops a CONNECTED room while another room is waiting for HTTP", async () => {
+    const connected = await service.start({ roomMonitorId: id })
+    const other = seedLoginRoom(h.database, "502"), gate = authGate()
+    source.startWait = gate.wait
+    const starting = service.start({ roomMonitorId: other }).catch(error => error)
+    await gate.started
+    let stopped = false
+    const stopping = service.stop(id).then(result => { stopped = !result.running })
+    await new Promise<void>(resolveTurn => setImmediate(resolveTurn))
+    try {
+      expect(stopped).toBe(true)
+      expect(source.stops).toContain(connected.sessionId)
+    } finally { gate.release(); await starting; await stopping }
+  })
+
+  it("cancels a queued manual start before it registers a connection", async () => {
+    const gate = authGate(), other = seedLoginRoom(h.database, "502")
+    source.startWait = gate.wait
+    const first = service.start({ roomMonitorId: other }).catch(error => error)
+    await gate.started
+    let queuedResult: unknown
+    const queued = service.start({ roomMonitorId: id }).catch(error => { queuedResult = error; return error })
+    let stopped = false
+    const stopping = service.stop(id).then(result => { stopped = !result.running })
+    await new Promise<void>(resolveTurn => setImmediate(resolveTurn))
+    try {
+      expect(stopped).toBe(true)
+      expect(queuedResult).toMatchObject({ code: "BILIBILI_DANMAKU_CONNECTION_ENDED" })
+    }
+    finally { gate.release(); await first; await stopping }
+    expect(await queued).toMatchObject({ code: "BILIBILI_DANMAKU_CONNECTION_ENDED" })
+    expect(source.starts.map(input => input.roomId)).toEqual(["502"])
+  })
+
+  it("cancels same-turn start/stop without cancelling a subsequent new start", async () => {
+    const cancelled = service.start({ roomMonitorId: id }).catch(error => error)
+    await service.stop(id)
+    const replacement = await service.start({ roomMonitorId: id })
+    expect(await cancelled).toMatchObject({ code: "BILIBILI_DANMAKU_CONNECTION_ENDED" })
+    expect(replacement).toMatchObject({ running: true, status: "CONNECTED" })
+    expect(source.starts).toHaveLength(1)
+  })
+
   it.each(["credential", "start-success", "start-failure"])("ignores late %s completion after stop and database reopen", async stage => {
     const gate = authGate()
     if (stage === "credential") credentialWait = gate.wait

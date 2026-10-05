@@ -138,6 +138,7 @@ interface ConnectionHandle {
 }
 
 const ACTIVE_STATUSES = new Set(["CONNECTING", "AUTHENTICATING", "CONNECTED"])
+interface PendingStart { cancelled: boolean; cancel: () => void }
 
 export class BilibiliLiveDanmakuService {
   private readonly connections = new Map<string, ConnectionHandle>()
@@ -150,6 +151,7 @@ export class BilibiliLiveDanmakuService {
   private operationTail: Promise<void> = Promise.resolve()
   private pendingOperations = 0
   private autoSync: Promise<void> | undefined
+  private readonly pendingStarts = new Map<string, Set<PendingStart>>()
 
   constructor(private readonly options: BilibiliLiveDanmakuServiceOptions) {
     this.maxConnections = Math.max(1, options.maxConnections ?? 10)
@@ -160,11 +162,30 @@ export class BilibiliLiveDanmakuService {
 
   start(input: StartBilibiliLiveDanmakuInput): Promise<BilibiliLiveDanmakuStatus> {
     const parsed = StartBilibiliLiveDanmakuInputSchema.parse(input)
-    return this.enqueue(() => this.startInternal(parsed, false))
+    let rejectCancellation: (reason: Error) => void = () => {}
+    const cancellation = new Promise<never>((_resolve, reject) => { rejectCancellation = reject })
+    const token: PendingStart = { cancelled: false, cancel: () => {
+      token.cancelled = true
+      rejectCancellation(new CoreApplicationError("BILIBILI_DANMAKU_CONNECTION_ENDED", "弹幕连接已取消。", false))
+    } }
+    const requests = this.pendingStarts.get(parsed.roomMonitorId) ?? new Set<PendingStart>()
+    requests.add(token)
+    this.pendingStarts.set(parsed.roomMonitorId, requests)
+    const operation = this.enqueue(() => {
+      if (token.cancelled) throw new CoreApplicationError("BILIBILI_DANMAKU_CONNECTION_ENDED", "弹幕连接已取消。", false)
+      return this.startInternal(parsed, false)
+    })
+    return Promise.race([operation, cancellation]).finally(() => {
+      requests.delete(token)
+      if (requests.size === 0) this.pendingStarts.delete(parsed.roomMonitorId)
+    })
   }
 
   stop(roomMonitorId: string): Promise<BilibiliLiveDanmakuStatus> {
-    return this.enqueue(() => this.stopInternal(roomMonitorId))
+    if (this.stopped) return Promise.reject(new CoreApplicationError("CORE_STOPPED", "本地弹幕服务已停止。", false))
+    // Stop must not wait behind this room's or another room's unlimited HTTP request.
+    for (const token of this.pendingStarts.get(roomMonitorId) ?? []) token.cancel()
+    return this.stopInternal(roomMonitorId)
   }
 
   private async stopInternal(roomMonitorId: string): Promise<BilibiliLiveDanmakuStatus> {

@@ -51,13 +51,13 @@ describe("persisted live collection configuration in real local Core", () => {
 
   it("disables only automatic REST collection, preserves manual work and rereads configuration on restart", async () => {
     const f = await prepare({ enabled: false }, 1)
-    const followerScan = vi.spyOn(BilibiliFollowerMonitorService.prototype, "collectDueUsers")
+    const followerScan = vi.spyOn(BilibiliFollowerMonitorService.prototype, "collectDueUsersV2")
     const danmakuScan = vi.spyOn(BilibiliLiveDanmakuService.prototype, "syncAutoConnections")
     let core = await f.start()
     const room = core.listBilibiliLiveRooms().items[0]!
     await vi.advanceTimersByTimeAsync(5000)
     expect(f.calls).toEqual([])
-    expect(followerScan).toHaveBeenCalledTimes(5)
+    expect(followerScan).toHaveBeenCalledTimes(6) // Startup scan plus five completed fixed-delay periods.
     expect(danmakuScan).toHaveBeenCalledTimes(1)
     expect(await core.refreshBilibiliLiveRoom(room.id)).toMatchObject({ success: true })
     core.updateBilibiliLiveRoomSettings(room.id, 120)

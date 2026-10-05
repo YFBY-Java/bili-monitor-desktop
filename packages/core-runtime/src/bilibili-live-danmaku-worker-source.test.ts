@@ -3,6 +3,17 @@ import { describe, expect, it, vi } from "vitest"
 import { BilibiliLiveDanmakuWorkerSource } from "./bilibili-live-danmaku-worker-source"
 
 describe("BilibiliLiveDanmakuWorkerSource", () => {
+  it("passes configured live HTTP settings unchanged to the isolated realtime process", async () => {
+    const configuration = { connectTimeoutMs: 1250, readTimeoutMs: 0,
+      userAgent: "Fixture danmaku/2", referer: "https://live.bilibili.com/configured" }
+    const transport = { subscribe: () => () => {}, stop: async () => {},
+      request: vi.fn(async () => ({ connectHost: "wss://example.test/sub", protocolVersion: 3, authMode: "ANONYMOUS" })) }
+    const source = new BilibiliLiveDanmakuWorkerSource(transport, configuration)
+    await source.start({ connectionId: "configured-start", roomId: "33" }, () => {})
+    expect(transport.request).toHaveBeenCalledWith("start", expect.objectContaining({ httpConfiguration: configuration }))
+    await source.stopAll()
+  })
+
   it("routes independent-process start results and live events by connection id", async () => {
     let eventListener: ((event: unknown) => void) | undefined
     const transport = {

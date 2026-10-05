@@ -1,11 +1,12 @@
 import type {
-  BilibiliFollowerMonitor,
+  BilibiliFollowerMonitorV2,
   BilibiliLiveRoom,
   BilibiliSubject,
-  BilibiliSubjectTrend,
-  BilibiliSubjectWorkbench,
+  BilibiliSubjectTrendV2,
+  BilibiliSubjectWorkbenchV2,
   DesktopBridge
 } from "@bmd/contracts"
+import { PositiveJavaLongStringSchema } from "@bmd/contracts"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Activity,
@@ -30,6 +31,8 @@ import {
 import { useMemo, useState, type FormEvent, type JSX, type ReactNode } from "react"
 import { BilibiliLiveDataWidget } from "./BilibiliLiveDataWidget"
 import { ConnectedBilibiliLiveDataWidget } from "./ConnectedBilibiliLiveDataWidget"
+import { formatFollowerCount, safeFollowerAvatar } from "./follower-monitor-presentation"
+import { followerValueRatio } from "./follower-trend-presentation"
 
 export interface BilibiliSubjectListViewProps {
   subjects: BilibiliSubject[]
@@ -41,8 +44,8 @@ export interface BilibiliSubjectListViewProps {
 }
 
 export interface BilibiliSubjectWorkbenchViewProps {
-  workbench?: BilibiliSubjectWorkbench
-  trend?: BilibiliSubjectTrend
+  workbench?: BilibiliSubjectWorkbenchV2
+  trend?: BilibiliSubjectTrendV2
   liveDataWidget?: ReactNode
   loading: boolean
   error: string | null
@@ -57,9 +60,9 @@ function formatCount(value: number | undefined): string {
   return value === undefined ? "—" : new Intl.NumberFormat("zh-CN").format(value)
 }
 
-function formatDelta(value: number | undefined): string {
+function formatDelta(value: string | undefined): string {
   if (value === undefined) return "暂无对比"
-  return `${value >= 0 ? "+" : ""}${new Intl.NumberFormat("zh-CN").format(value)}`
+  return `${BigInt(value) >= 0n ? "+" : ""}${formatFollowerCount(value)}`
 }
 
 function formatTime(value: string | undefined): string {
@@ -83,10 +86,12 @@ function danmuText(status: string): string {
 }
 
 function SubjectAvatar({ subject }: { subject: BilibiliSubject }): JSX.Element {
+  const avatar = safeFollowerAvatar(subject.avatarUrl)
+  const [broken, setBroken] = useState<string>()
   return (
     <div className="subject-avatar">
-      {subject.avatarUrl
-        ? <img src={subject.avatarUrl} alt="" referrerPolicy="no-referrer" />
+      {avatar && avatar !== broken
+        ? <img src={avatar} alt="" referrerPolicy="no-referrer" onError={() => setBroken(avatar)} />
         : <span>{subject.displayName.slice(0, 1).toUpperCase()}</span>}
     </div>
   )
@@ -175,33 +180,44 @@ export function BilibiliSubjectListView({
   )
 }
 
-function SubjectTrendChart({ trend }: { trend?: BilibiliSubjectTrend }): JSX.Element {
+function SubjectTrendChart({ trend }: { trend?: BilibiliSubjectTrendV2 }): JSX.Element {
   const points = trend?.points ?? []
   const width = 720
   const height = 220
-  const line = (key: "followerCount" | "liveOnlineCount") => {
-    const values = points.map((point) => point[key]).filter((value): value is number => value !== undefined)
+  const liveLine = () => {
+    const values = points.map((point) => point.liveOnlineCount).filter((value): value is number => value !== undefined)
     if (values.length === 0) return ""
     const minimum = Math.min(...values)
     const maximum = Math.max(...values)
     const span = Math.max(1, maximum - minimum)
     return points.map((point, index) => {
-      const value = point[key]
+      const value = point.liveOnlineCount
       if (value === undefined) return null
       const x = points.length === 1 ? width / 2 : 18 + (index / (points.length - 1)) * (width - 36)
       const y = height - 18 - ((value - minimum) / span) * (height - 36)
       return `${x},${y}`
     }).filter(Boolean).join(" ")
   }
-  const followerLine = line("followerCount")
-  const liveLine = line("liveOnlineCount")
+  const followerValues = points.flatMap(point => point.followerCount === undefined ? [] : [BigInt(point.followerCount)])
+  const followerLine = followerValues.length ? (() => {
+    const minimum = followerValues.reduce((low, value) => value < low ? value : low)
+    const maximum = followerValues.reduce((high, value) => value > high ? value : high)
+    const bounds = { min: minimum, max: maximum > minimum ? maximum : minimum + 1n, span: maximum - minimum }
+    return points.flatMap((point, index) => {
+      if (point.followerCount === undefined) return []
+      const x = points.length === 1 ? width / 2 : 18 + index / (points.length - 1) * (width - 36)
+      const y = height - 18 - followerValueRatio(BigInt(point.followerCount), bounds) * (height - 36)
+      return [`${x},${y}`]
+    }).join(" ")
+  })() : ""
+  const livePoints = liveLine()
   return (
     <div className="subject-trend-chart">
       {points.length === 0 ? <span>暂无趋势点，等待粉丝或直播采集快照</span> : (
         <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="粉丝与直播热度趋势">
           <path d={`M 0 ${height - 18} H ${width}`} className="chart-axis" />
           {followerLine && <polyline points={followerLine} className="subject-line follower" />}
-          {liveLine && <polyline points={liveLine} className="subject-line live" />}
+          {livePoints && <polyline points={livePoints} className="subject-line live" />}
         </svg>
       )}
       <div className="subject-chart-legend"><span className="follower">粉丝数</span><span className="live">直播间热度</span></div>
@@ -267,7 +283,7 @@ export function BilibiliSubjectWorkbenchView({
       </section>
 
       <section className="subject-kpis">
-        <div><span>总粉丝数</span><strong>{formatCount(workbench.summary.followerCount)}</strong><small>24h {formatDelta(workbench.summary.followerDelta24h)}</small></div>
+        <div><span>总粉丝数</span><strong>{formatFollowerCount(workbench.summary.followerCount)}</strong><small>24h {formatDelta(workbench.summary.followerDelta24h)}</small></div>
         <div><span>直播间热度</span><strong>{formatCount(workbench.summary.onlineCount)}</strong><small>峰值 {formatCount(workbench.summary.onlinePeak24h)}</small></div>
         <div><span>弹幕速率</span><strong>{workbench.summary.danmuPerMinute === undefined ? "—" : `${workbench.summary.danmuPerMinute} /min`}</strong><small>近 5 分钟 {workbench.summary.danmuLast5Minutes ?? "—"} 条</small></div>
         <div><span>最近成功采集</span><strong>{formatTime(workbench.summary.lastSuccessAt)}</strong><small>下一轮 {formatTime(workbench.summary.nextCollectAt)}</small></div>
@@ -278,7 +294,7 @@ export function BilibiliSubjectWorkbenchView({
           <div className="panel-header compact"><div><p>FOLLOWER / LIVE HEAT</p><h2>粉丝数与直播热度监控</h2></div><span className="business-safety"><TrendingUp size={14} />24 小时</span></div>
           <SubjectTrendChart trend={trend} />
           <div className="subject-widget-stats">
-            <div><span>当前粉丝</span><strong>{formatCount(workbench.summary.followerCount)}</strong></div>
+            <div><span>当前粉丝</span><strong>{formatFollowerCount(workbench.summary.followerCount)}</strong></div>
             <div><span>24h 净增</span><strong>{formatDelta(workbench.summary.followerDelta24h)}</strong></div>
             <div><span>当前热度</span><strong>{formatCount(workbench.summary.onlineCount)}</strong></div>
             <div><span>热度峰值</span><strong>{formatCount(workbench.summary.onlinePeak24h)}</strong></div>
@@ -328,15 +344,23 @@ function CreateSubjectDrawer({
   const [displayName, setDisplayName] = useState("")
   const [danmuEnabled, setDanmuEnabled] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [submissionError, setSubmissionError] = useState<string>()
   if (!open) return null
   const submit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault()
+    setSubmissionError(undefined)
+    const parsed = PositiveJavaLongStringSchema.safeParse(mid)
+    if (!parsed.success) {
+      setSubmissionError(parsed.error.issues[0]?.message ?? "请输入有效的正 Long64 UID。")
+      return
+    }
     setSubmitting(true)
     void onCreate({
-      mid,
+      mid: parsed.data,
       ...(displayName.trim() ? { displayName: displayName.trim() } : {}),
       danmuEnabled
-    }).finally(() => setSubmitting(false))
+    }).catch((failure: unknown) => setSubmissionError(failure instanceof Error ? failure.message : String(failure)))
+      .finally(() => setSubmitting(false))
   }
   return (
     <div className="creation-backdrop" role="presentation">
@@ -347,7 +371,7 @@ function CreateSubjectDrawer({
           <label><span>工作台名称</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="可留空，默认使用 B站昵称" /></label>
           <label className="subject-check"><input type="checkbox" checked={danmuEnabled} onChange={(event) => setDanmuEnabled(event.target.checked)} /><span>启用弹幕模块</span></label>
           <p className="form-note"><Activity size={14} />提交后会先创建或复用该 UID 的粉丝监控，再尝试创建或复用同 UID 的直播间监控；没有公开直播间时，仍会保留粉丝监控并创建工作台。</p>
-          {error && <p className="form-error" role="alert">{error}</p>}
+          {(error || submissionError) && <p className="form-error" role="alert">{error || submissionError}</p>}
           <div className="form-actions"><button className="button button-secondary" type="button" onClick={onClose}>取消</button><button className="button button-primary" disabled={submitting} type="submit">{submitting ? "正在创建…" : "创建工作台"}</button></div>
         </form>
       </section>
@@ -364,8 +388,8 @@ function BindingDrawer({
   onClose,
   onSave
 }: {
-  workbench?: BilibiliSubjectWorkbench
-  users: BilibiliFollowerMonitor[]
+  workbench?: BilibiliSubjectWorkbenchV2
+  users: BilibiliFollowerMonitorV2[]
   rooms: BilibiliLiveRoom[]
   open: boolean
   error?: string
@@ -427,21 +451,21 @@ export function ConnectedBilibiliSubjectWorkspace({
   })
   const effectiveSubjectId = selectedSubjectId ?? subjectsQuery.data?.[0]?.id
   const workbenchQuery = useQuery({
-    queryKey: ["bilibili-subject-workbench", effectiveSubjectId],
-    queryFn: () => bridge.bilibiliSubjects.workbench({ subjectId: effectiveSubjectId! }),
+    queryKey: ["bilibili-subject-workbench-v2", effectiveSubjectId],
+    queryFn: () => bridge.bilibiliSubjects.workbenchV2({ subjectId: effectiveSubjectId! }),
     enabled: view === "用户工作台" && Boolean(effectiveSubjectId),
     refetchInterval: 15_000
   })
   const trendQuery = useQuery({
-    queryKey: ["bilibili-subject-trends", effectiveSubjectId],
-    queryFn: () => bridge.bilibiliSubjects.trends({ subjectId: effectiveSubjectId! }),
+    queryKey: ["bilibili-subject-trends-v2", effectiveSubjectId],
+    queryFn: () => bridge.bilibiliSubjects.trendsV2({ subjectId: effectiveSubjectId! }),
     enabled: view === "用户工作台" && Boolean(effectiveSubjectId),
     refetchInterval: 30_000
   })
   const roomMonitorId = workbenchQuery.data?.bilibiliLiveRoom?.monitorId
   const usersQuery = useQuery({
-    queryKey: ["bilibili-followers"],
-    queryFn: () => bridge.bilibiliFollowers.list({}),
+    queryKey: ["bilibili-followers-v2"],
+    queryFn: () => bridge.bilibiliFollowersV2.list({}),
     enabled: bindingOpen
   })
   const roomsQuery = useQuery({
@@ -452,10 +476,10 @@ export function ConnectedBilibiliSubjectWorkspace({
   const invalidate = async (): Promise<void> => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["bilibili-subjects"] }),
-      queryClient.invalidateQueries({ queryKey: ["bilibili-subject-workbench"] }),
-      queryClient.invalidateQueries({ queryKey: ["bilibili-subject-trends"] }),
+      queryClient.invalidateQueries({ queryKey: ["bilibili-subject-workbench-v2"] }),
+      queryClient.invalidateQueries({ queryKey: ["bilibili-subject-trends-v2"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live-widget"] }),
-      queryClient.invalidateQueries({ queryKey: ["bilibili-followers"] }),
+      queryClient.invalidateQueries({ queryKey: ["bilibili-followers-v2"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live-rooms"] })
     ])
   }

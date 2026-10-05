@@ -5,7 +5,7 @@ import type { BilibiliLiveSnapshotData } from "@bmd/contracts"
 import { ControlDatabase } from "@bmd/storage"
 import { BilibiliLiveMonitorService } from "../bilibili-live-service"
 
-// External platform responses only: writes, projections and queries use the actual service/SQLite.
+// Platform responses are synthetic; collection, repository writes and queries are real.
 export async function liveQueryFixture() {
   const directory = await mkdtemp(resolve(tmpdir(), "bmd-live-query-"))
   let database = await ControlDatabase.open(directory)
@@ -28,13 +28,37 @@ export async function liveQueryFixture() {
     fetchRoomInfo: async ({ roomId }: { roomId: string }) => ({ ...snapshot(String(Number(roomId) - 1000)),
       ...metadata(), sourceEndpoint: "room/v1/Room/get_info" as const })
   }
+  const nextId = () => `018f0f39-7b5e-4cc1-862d-${String(sequence--).padStart(12, "0")}`
   const openService = () => new BilibiliLiveMonitorService({ database, source, now: () => new Date(state.now),
-    idFactory: () => `018f0f39-7b5e-4cc1-862d-${String(sequence--).padStart(12, "0")}`,
+    idFactory: nextId,
     requestMinIntervalMs: 0, maxAttempts: 1 })
   let service = openService()
+  function seedHistory(monitorId: string, points: ReadonlyArray<{ capturedAt: string; onlineCount: number }>) {
+    const room = database.findBilibiliLiveRoomById(monitorId)
+    if (!room) throw new Error(`Missing query fixture room: ${monitorId}`)
+    // Query-limit stress data does not need thousands of synthetic HTTP/API logs.
+    // This synchronous batch uses the actual repository transaction; do not put
+    // async service calls in runInTransaction, which commits when its callback returns.
+    database.runInTransaction(() => {
+      for (const point of points) {
+        const bucket = new Date(point.capturedAt)
+        bucket.setUTCMilliseconds(0)
+        database.applyBilibiliLiveRoomSnapshot({
+          appliedAt: state.now,
+          monitor: { ...room, onlineCount: point.onlineCount, capturedAt: point.capturedAt,
+            nextCollectAt: new Date(Date.parse(point.capturedAt) + room.intervalSeconds * 1000).toISOString(),
+            sourceEndpoint: "room/v1/Room/get_status_info_by_uids" },
+          snapshot: { snapshotId: nextId(), capturedBucket: bucket.toISOString() },
+          artifact: { ...metadata().evidenceObject, createdAt: point.capturedAt },
+          outbox: { messageId: nextId(), topic: "fixture.query-history", envelopeJson: "{}", createdAt: point.capturedAt }
+        })
+      }
+    })
+  }
   return { state, directory,
     get database() { return database },
     get service() { return service },
+    seedHistory,
     reopen: async () => { await service.stop(); database.close(); database = await ControlDatabase.open(directory); service = openService() },
     close: async () => { await service.stop(); database.close(); await rm(directory, { recursive: true, force: true }) }
   }

@@ -1,23 +1,23 @@
-import type { BilibiliFollowerMonitor } from "@bmd/contracts"
+import type { BilibiliFollowerMonitorV2 } from "@bmd/contracts"
 import { describe, expect, it } from "vitest"
 import { followerSchedule, followerSummary, formatFollowerInterval } from "./follower-monitor-presentation"
 
 const start = Date.parse("2026-09-13T04:00:00Z")
-const user: BilibiliFollowerMonitor = {
+const user: BilibiliFollowerMonitorV2 = {
   id: "018f0f39-7b5e-4cc1-862d-000000000001", mid: "2", nickname: "合成用户",
   profileUrl: "https://space.bilibili.com/2", monitorStatus: "ACTIVE", intervalSeconds: 60,
   lastSnapshotAt: "2026-09-13T04:00:00Z", nextCollectAt: "2026-09-13T04:01:00Z",
-  currentFollowerCount: 100, deltaSincePrevious: -2, recentTrend: [], version: 1
+  currentFollowerCount: "100", deltaSincePrevious: "-2", recentTrend: [], version: 1
 }
 
 describe("original follower monitor presentation", () => {
   it("sums all users and includes paused schedules and interval range like the original page", () => {
     expect(followerSummary([user, { ...user, monitorStatus: "PAUSED", intervalSeconds: 3600,
-      currentFollowerCount: 200, deltaSincePrevious: 10, nextCollectAt: "2026-09-13T04:00:30Z" }]))
-      .toEqual({ totalFollowers: 300, totalDelta: 8, nextCollectAt: "2026-09-13T04:00:30Z", intervalText: "1 分 - 1 小时" })
-    expect(followerSummary([])).toEqual({ totalFollowers: 0, totalDelta: 0, nextCollectAt: undefined, intervalText: "默认" })
+      currentFollowerCount: "200", deltaSincePrevious: "10", nextCollectAt: "2026-09-13T04:00:30Z" }]))
+      .toEqual({ totalFollowers: 300n, totalDelta: 8n, nextCollectAt: "2026-09-13T04:00:30Z", intervalText: "1 分 - 1 小时" })
+    expect(followerSummary([])).toEqual({ totalFollowers: 0n, totalDelta: 0n, nextCollectAt: undefined, intervalText: "默认" })
     const { currentFollowerCount: _count, deltaSincePrevious: _delta, ...unknown } = user
-    expect(followerSummary([unknown]).totalFollowers).toBe(0)
+    expect(followerSummary([unknown]).totalFollowers).toBe(0n)
   })
 
   it("uses elapsed time with a four percent minimum and a hundred percent ceiling", () => {

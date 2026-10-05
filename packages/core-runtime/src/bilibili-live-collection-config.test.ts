@@ -14,7 +14,7 @@ describe("read-only live collection configuration loader", () => {
   it("defaults without creating a configuration directory", async () => {
     await setup()
     expect(await loadLiveCollectionConfiguration(directory, {})).toEqual({
-      enabled: true, schedulerDelayMs: 1000, dueBatchSize: 20, statusBatchSize: 30,
+      enabled: true, storageEnabled: true, schedulerDelayMs: 1000, dueBatchSize: 20, statusBatchSize: 30,
       defaultIntervalSeconds: 300, minIntervalSeconds: 1, maxIntervalSeconds: 2592000,
       shortIntervalWarningSeconds: 120, failureBackoffSeconds: 900, requestMinIntervalMs: 1500,
       maxAttempts: 3, retryBackoffMs: 1500,
@@ -34,6 +34,19 @@ describe("read-only live collection configuration loader", () => {
       SOCIAL_MONITOR_BILIBILI_LIVE_STATUS_BATCH_SIZE: " +64 "
     })).toMatchObject({ enabled: false, schedulerDelayMs: 250, dueBatchSize: 99, statusBatchSize: 64 })
     expect(await readFile(path, "utf8")).toBe(contents)
+  })
+  it("reads the original storage switch alias independently of automatic collection", async () => {
+    const path = await setup()
+    await mkdir(resolve(directory, "config"))
+    const contents = '{"enabled":false,"storageEnabled":true}'
+    await writeFile(path, contents, "utf8")
+    expect(await loadLiveCollectionConfiguration(directory, {
+      SOCIAL_MONITOR_BILIBILI_LIVE_STORAGE_ENABLED: " FALSE "
+    })).toMatchObject({ enabled: false, storageEnabled: false })
+    expect(await readFile(path, "utf8")).toBe(contents)
+    await expect(loadLiveCollectionConfiguration(directory, {
+      SOCIAL_MONITOR_BILIBILI_LIVE_STORAGE_ENABLED: "0"
+    })).rejects.toMatchObject({ code: "BILIBILI_LIVE_CONFIG_INVALID" })
   })
   it.each(["", "12.5", "1e3", "NaN", "Infinity", "2147483648"])("rejects invalid integer environment value %j", async value => {
     await setup()

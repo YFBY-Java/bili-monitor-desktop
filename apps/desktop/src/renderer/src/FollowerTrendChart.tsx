@@ -1,14 +1,14 @@
-import type { BilibiliFollowerPoint } from "@bmd/contracts"
+import type { BilibiliFollowerPointV2 } from "@bmd/contracts"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { formatFollowerCount } from "./follower-monitor-presentation"
-import { followerTimeBounds, followerValueBounds, formatFollowerAxisNumber } from "./follower-trend-presentation"
+import { followerTimeBounds, followerValueBounds, followerValueRatio, followerValueTicks, formatFollowerAxisNumber } from "./follower-trend-presentation"
 
 const formatTime = (time: number, span?: number) => new Intl.DateTimeFormat("zh-CN", {
   ...(span === undefined || span > 86_400_000 ? { month: "2-digit", day: "2-digit" } : {}),
   hour: "2-digit", minute: "2-digit", ...(span === undefined || span < 120_000 ? { second: "2-digit" } : {}), hour12: false
 }).format(new Date(time))
 
-export function FollowerTrendChart({ nickname, points, height }: { nickname: string; points: readonly BilibiliFollowerPoint[]; height: number }) {
+export function FollowerTrendChart({ nickname, points, height }: { nickname: string; points: readonly BilibiliFollowerPointV2[]; height: number }) {
   const frame = useRef<HTMLDivElement>(null)
   const svg = useRef<SVGSVGElement>(null)
   const [width, setWidth] = useState(720)
@@ -24,19 +24,19 @@ export function FollowerTrendChart({ nickname, points, height }: { nickname: str
     return () => resize.disconnect()
   }, [])
   const geometry = useMemo(() => {
-    const values = points.map(point => point.followerCount), timestamps = points.map(point => Date.parse(point.capturedAt))
+    const values = points.map(point => BigInt(point.followerCount)), timestamps = points.map(point => Date.parse(point.capturedAt))
     const y = followerValueBounds(values), x = followerTimeBounds(timestamps)
     const left = Math.min(86, width / 3), right = Math.max(left + 1, width - 24), top = 18, bottom = height - 40
     const mapX = (value: number) => left + (value - x.min) / (x.max - x.min) * (right - left)
-    const mapY = (value: number) => bottom - (value - y.min) / (y.max - y.min) * (bottom - top)
-    const coordinates = points.map((point, index) => ({ x: mapX(timestamps[index]!), y: mapY(point.followerCount) }))
+    const mapY = (value: bigint) => bottom - followerValueRatio(value, y) * (bottom - top)
+    const coordinates = points.map((_point, index) => ({ x: mapX(timestamps[index]!), y: mapY(values[index]!) }))
     const path = coordinates.map((point, index) => {
       const previous = coordinates[index - 1]
       if (!previous) return `M${point.x} ${point.y}`
       const middle = (previous.x + point.x) / 2
       return `C${middle} ${previous.y},${middle} ${point.y},${point.x} ${point.y}`
     }).join(" ")
-    const yTicks = [...new Set(Array.from({ length: 5 }, (_, i) => Math.round(y.min + (y.max - y.min) * i / 4)))]
+    const yTicks = followerValueTicks(y)
     const tickCount = Math.max(2, Math.min(5, Math.floor((right - left) / (x.span > 86_400_000 ? 140 : 100))))
     const xTicks = Array.from({ length: tickCount }, (_, i) => x.min + (x.max - x.min) * i / (tickCount - 1))
     return { values, timestamps, x, y, left, right, bottom, coordinates, path, xTicks, yTicks, mapX, mapY }
@@ -45,7 +45,8 @@ export function FollowerTrendChart({ nickname, points, height }: { nickname: str
   const point = active === undefined ? undefined : points[active]
   const coordinate = active === undefined ? undefined : geometry.coordinates[active]
   const first = points[0], last = points.at(-1)
-  const delta = first && last ? last.followerCount - first.followerCount : undefined
+  // This is UI interval arithmetic, not Core's signed64-wrapped stored delta.
+  const delta = first && last ? BigInt(last.followerCount) - BigInt(first.followerCount) : undefined
   return <>
     <div ref={frame} className="follower-trend-chart" style={{ height }}>
       {!points.length ? <p className="trend-empty">暂无历史快照</p> : <svg ref={svg} className="follower-history-svg" viewBox={`0 0 ${width} ${height}`}
@@ -61,7 +62,7 @@ export function FollowerTrendChart({ nickname, points, height }: { nickname: str
           })
           setActive(nearest)
         }}>
-        <g className="trend-y-axis">{geometry.yTicks.map(value => <g key={value}>
+        <g className="trend-y-axis">{geometry.yTicks.map(value => <g key={value.toString()}>
           <path className="trend-grid-line" d={`M${geometry.left} ${geometry.mapY(value)} H${geometry.right}`} />
           <text x={geometry.left - 12} y={geometry.mapY(value)} textAnchor="end" dominantBaseline="middle">{formatFollowerAxisNumber(value, geometry.y.span)}</text>
         </g>)}</g>
@@ -90,9 +91,9 @@ export function FollowerTrendChart({ nickname, points, height }: { nickname: str
     </div>
     {first && last && <div className="follower-chart-footer">
       <div className="trend-time-range"><time dateTime={first.capturedAt}>{formatTime(Date.parse(first.capturedAt))}</time><time dateTime={last.capturedAt}>{formatTime(Date.parse(last.capturedAt))}</time></div>
-      <div className="trend-range"><span>最低 {formatFollowerCount(Math.min(...geometry.values))}</span>
-        <strong className={delta! < 0 ? "is-negative" : delta! > 0 ? "is-positive" : ""}>区间净变化 {delta! > 0 ? "+" : ""}{formatFollowerCount(delta)}</strong>
-        <span>最高 {formatFollowerCount(Math.max(...geometry.values))}</span></div>
+      <div className="trend-range"><span>最低 {formatFollowerCount(geometry.values.reduce((low, value) => value < low ? value : low))}</span>
+        <strong className={delta! < 0n ? "is-negative" : delta! > 0n ? "is-positive" : ""}>区间净变化 {delta! > 0n ? "+" : ""}{formatFollowerCount(delta)}</strong>
+        <span>最高 {formatFollowerCount(geometry.values.reduce((high, value) => value > high ? value : high))}</span></div>
     </div>}
   </>
 }

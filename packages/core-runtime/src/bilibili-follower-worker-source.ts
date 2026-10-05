@@ -1,8 +1,11 @@
 import {
-  BilibiliFollowerFetchRequestSchema,
-  BilibiliFollowerFetchedSnapshotSchema,
+  BilibiliFollowerFetchRequestV2Schema,
+  BilibiliFollowerFetchedSnapshotV2Schema,
+  BilibiliFollowerProfileV2Schema,
+  type BilibiliFollowerProfileV2,
   type BilibiliFollowerFetchRequest,
-  type BilibiliFollowerFetchedSnapshot
+  type BilibiliFollowerFetchedSnapshotV2,
+  type BilibiliFollowerHttpConfiguration
 } from "@bmd/contracts"
 
 import type { BilibiliFollowerSource } from "./bilibili-follower-service"
@@ -13,14 +16,25 @@ export interface WorkerRequestTransport {
 }
 
 export class BilibiliFollowerWorkerSource implements BilibiliFollowerSource {
-  constructor(private readonly transport: WorkerRequestTransport) {}
+  constructor(
+    private readonly transport: WorkerRequestTransport,
+    private readonly httpConfiguration?: BilibiliFollowerHttpConfiguration
+  ) {}
 
-  fetchCard(request: BilibiliFollowerFetchRequest): Promise<BilibiliFollowerFetchedSnapshot> {
-    return this.fetch("bilibili.follower.fetch-card", request)
+  fetchCard(request: BilibiliFollowerFetchRequest): Promise<BilibiliFollowerFetchedSnapshotV2> {
+    return this.fetch("bilibili.follower.fetch-card.v2", request)
   }
 
-  fetchRelationStat(request: BilibiliFollowerFetchRequest): Promise<BilibiliFollowerFetchedSnapshot> {
-    return this.fetch("bilibili.follower.fetch-relation-stat", request)
+  fetchRelationStat(request: BilibiliFollowerFetchRequest): Promise<BilibiliFollowerFetchedSnapshotV2> {
+    return this.fetch("bilibili.follower.fetch-relation-stat.v2", request)
+  }
+
+  async fetchProfile(request: BilibiliFollowerFetchRequest): Promise<BilibiliFollowerProfileV2> {
+    const payload = BilibiliFollowerFetchRequestV2Schema.parse({ ...request,
+      ...(this.httpConfiguration ? { httpConfiguration: this.httpConfiguration } : {}) })
+    return BilibiliFollowerProfileV2Schema.parse(
+      await this.transport.request("bilibili.follower.fetch-profile.v2", payload)
+    )
   }
 
   async stop(): Promise<void> {
@@ -30,9 +44,10 @@ export class BilibiliFollowerWorkerSource implements BilibiliFollowerSource {
   private async fetch(
     type: string,
     request: BilibiliFollowerFetchRequest
-  ): Promise<BilibiliFollowerFetchedSnapshot> {
-    const payload = BilibiliFollowerFetchRequestSchema.parse(request)
-    return BilibiliFollowerFetchedSnapshotSchema.parse(
+  ): Promise<BilibiliFollowerFetchedSnapshotV2> {
+    const payload = BilibiliFollowerFetchRequestV2Schema.parse({ ...request,
+      ...(this.httpConfiguration ? { httpConfiguration: this.httpConfiguration } : {}) })
+    return BilibiliFollowerFetchedSnapshotV2Schema.parse(
       await this.transport.request(type, payload)
     )
   }

@@ -75,7 +75,8 @@ describe("original follower collection semantics", () => {
     const fixture = await setup()
     const user = await fixture.service.addUser({ mid: "2" })
     fixture.beforeResponse(async () => { fixture.service.deleteUser(user.id) })
-    await expect(fixture.service.refreshNow(user.id)).rejects.toMatchObject({ code: "NOT_FOUND" })
+    // Deleted during collection is an internal persistence failure, not missing-at-start.
+    await expect(fixture.service.refreshNow(user.id)).rejects.toThrow("Cannot collect a deleted follower monitor")
     expect(fixture.service.listUsers().items).toEqual([])
     expect(fixture.database.findBilibiliFollowerSnapshots(user.id, { limit: 500 })).toEqual([])
   })

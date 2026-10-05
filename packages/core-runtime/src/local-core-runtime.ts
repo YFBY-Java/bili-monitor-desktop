@@ -4,6 +4,7 @@ import { resolve } from "node:path"
 import type {
   BindSubjectAccountInput,
   AddBilibiliFollowerMonitorInput,
+  AddBilibiliFollowerMonitorInputV2,
   BootstrapResponse,
   CreatePlatformAccountInput,
   CreateSubjectInput,
@@ -12,9 +13,14 @@ import type {
   PlatformAccount,
   PlatformAccountList,
   BilibiliFollowerCollectResult,
+  BilibiliFollowerCollectResultV2,
+  BilibiliFollowerHttpConfiguration,
   BilibiliFollowerMonitor,
+  BilibiliFollowerMonitorV2,
   BilibiliFollowerMonitorList,
+  BilibiliFollowerMonitorListV2,
   BilibiliFollowerTrend,
+  BilibiliFollowerTrendV2,
   BilibiliAuthRefreshResult,
   BilibiliAuthStatus,
   BilibiliCredential,
@@ -52,8 +58,10 @@ import type {
   BilibiliSubject,
   BilibiliSubjectBinding,
   BilibiliSubjectTrend,
+  BilibiliSubjectTrendV2,
   BilibiliSubjectWidgetLayout,
   BilibiliSubjectWorkbench,
+  BilibiliSubjectWorkbenchV2,
   CreateBilibiliSubjectInput,
   QueryBilibiliSubjectTrendsInput,
   UpdateBilibiliSubjectBindingInput,
@@ -83,6 +91,7 @@ import {
   BilibiliLiveRankService,
   type BilibiliLiveRankSource
 } from "./bilibili-live-rank-service"
+import { LocalRequestRateLimiter } from "./local-request-rate-limiter"
 import { BilibiliLiveRankWorkerSource } from "./bilibili-live-rank-worker-source"
 import {
   BilibiliLiveDanmakuService,
@@ -92,6 +101,11 @@ import { BilibiliLiveDanmakuWorkerSource } from "./bilibili-live-danmaku-worker-
 import { BilibiliLiveSessionService } from "./bilibili-live-session-service"
 import { BilibiliLiveSessionExportService } from "./bilibili-live-session-export-service"
 import { BilibiliSubjectService } from "./bilibili-subject-service"
+import { legacyFollowerResponse } from "./legacy-follower-response"
+import { BILIBILI_LIVE_STORAGE_DEPENDENCY_ERROR_MESSAGE, BILIBILI_FOLLOWER_STORAGE_DEPENDENCY_ERROR_MESSAGE } from "@bmd/contracts"
+import { CoreApplicationError } from "./account-subject-service"
+import { loadSubjectMonitorConfiguration } from "./subject-monitor-config"
+import { loadFollowerCollectionConfiguration } from "./bilibili-follower-collection-config"
 import { CredentialCipher } from "./credential-cipher"
 import { DouyinAuthService, type DouyinOAuthSource } from "./douyin-auth-service"
 import { DouyinBrowserWorkerSource } from "./douyin-browser-worker-source"
@@ -131,14 +145,15 @@ export class LocalCoreRuntime {
     private readonly options: ResolvedLocalCoreRuntimeOptions,
     private readonly database: ControlDatabase,
     private readonly accountSubjects: AccountSubjectService,
-    private readonly followers: BilibiliFollowerMonitorService,
+    private readonly followersInstance: BilibiliFollowerMonitorService | undefined,
+    private readonly independentProfileSource: BilibiliFollowerSource | undefined,
     private readonly auth: BilibiliAuthService,
-    private readonly liveSessions: BilibiliLiveSessionService,
-    private readonly liveSessionExports: BilibiliLiveSessionExportService,
-    private readonly live: BilibiliLiveMonitorService,
-    private readonly liveRanks: BilibiliLiveRankService,
-    private readonly liveDanmaku: BilibiliLiveDanmakuService,
-    private readonly bilibiliSubjects: BilibiliSubjectService,
+    private readonly liveSessionsInstance: BilibiliLiveSessionService | undefined,
+    private readonly liveSessionExportsInstance: BilibiliLiveSessionExportService | undefined,
+    private readonly liveInstance: BilibiliLiveMonitorService | undefined,
+    private readonly liveRanksInstance: BilibiliLiveRankService | undefined,
+    private readonly liveDanmakuInstance: BilibiliLiveDanmakuService | undefined,
+    private readonly bilibiliSubjectsInstance: BilibiliSubjectService | undefined,
     private readonly douyinAuth: DouyinAuthService,
     private readonly startedAt: string
   ) {}
@@ -146,13 +161,22 @@ export class LocalCoreRuntime {
   private followerScheduler: NodeJS.Timeout | undefined
   private liveScheduler: NodeJS.Timeout | undefined
   private liveDanmakuScheduler: NodeJS.Timeout | undefined
-  private followerCollectionRunning = false
   private schedulerEnabled = true
   private liveSchedulerDelayMs = 1_000
   private followerSchedulerDelayMs = 1_000
 
   static async start(options: LocalCoreRuntimeOptions): Promise<LocalCoreRuntime> {
     const liveConfiguration = await loadLiveCollectionConfiguration(options.dataDirectory, process.env)
+    const followerConfiguration = await loadFollowerCollectionConfiguration(options.dataDirectory, process.env)
+    const subjectConfiguration = await loadSubjectMonitorConfiguration(options.dataDirectory, process.env)
+    // The original workbench has mandatory live repository/service dependencies.
+    // Reject that invalid combination before any database or Worker is opened.
+    if (subjectConfiguration.enabled && !liveConfiguration.storageEnabled) {
+      throw new CoreApplicationError("BILIBILI_LIVE_STORAGE_DEPENDENCY_INVALID", BILIBILI_LIVE_STORAGE_DEPENDENCY_ERROR_MESSAGE)
+    }
+    if (subjectConfiguration.enabled && !followerConfiguration.storageEnabled) {
+      throw new CoreApplicationError("BILIBILI_FOLLOWER_STORAGE_DEPENDENCY_INVALID", BILIBILI_FOLLOWER_STORAGE_DEPENDENCY_ERROR_MESSAGE)
+    }
     const normalized: ResolvedLocalCoreRuntimeOptions = {
       dataDirectory: options.dataDirectory,
       version: options.version,
@@ -160,19 +184,37 @@ export class LocalCoreRuntime {
       idFactory: options.idFactory ?? randomUUID
     }
     const database = await ControlDatabase.open(normalized.dataDirectory)
+    const rateLimiter = new LocalRequestRateLimiter(normalized.now)
     const credentialKey = options.credentialKey ?? credentialKeyFromEnvironment()
     const accountSubjects = new AccountSubjectService({
       database,
       now: normalized.now,
       idFactory: normalized.idFactory
     })
-    const followerSource = options.followerSource ?? LocalCoreRuntime.defaultFollowerSource(normalized)
-    const followers = new BilibiliFollowerMonitorService({
+    // The original public card client also serves live masked-name lookup independently of storage.
+    const followerHttpConfiguration = {
+      connectTimeoutMs: followerConfiguration.connectTimeoutMs, readTimeoutMs: followerConfiguration.readTimeoutMs,
+      userAgent: followerConfiguration.userAgent, referer: followerConfiguration.referer
+    }
+    const followerSource = followerConfiguration.storageEnabled || liveConfiguration.storageEnabled
+      ? options.followerSource ?? LocalCoreRuntime.defaultFollowerSource(normalized, followerHttpConfiguration) : undefined
+    const followers = followerConfiguration.storageEnabled && followerSource ? new BilibiliFollowerMonitorService({
       database,
+      rateLimiter,
       source: followerSource,
+      enabled: followerConfiguration.enabled,
+      defaultIntervalSeconds: followerConfiguration.defaultIntervalSeconds,
+      minIntervalSeconds: followerConfiguration.minIntervalSeconds,
+      maxIntervalSeconds: followerConfiguration.maxIntervalSeconds,
+      shortIntervalWarningSeconds: followerConfiguration.shortIntervalWarningSeconds,
+      failureBackoffSeconds: followerConfiguration.failureBackoffSeconds,
+      dueBatchSize: followerConfiguration.dueBatchSize,
+      maxAttempts: followerConfiguration.maxAttempts,
+      retryBackoffMs: followerConfiguration.retryBackoffMs,
+      requestMinIntervalMs: followerConfiguration.requestMinIntervalMs,
       now: normalized.now,
       idFactory: normalized.idFactory
-    })
+    }) : undefined
     const authSource = options.authSource ?? LocalCoreRuntime.defaultAuthSource(normalized)
     const auth = new BilibiliAuthService({
       database,
@@ -180,27 +222,30 @@ export class LocalCoreRuntime {
       cipher: new CredentialCipher(credentialKey),
       now: normalized.now,
       idFactory: normalized.idFactory,
-      onCredentialActivated: () => liveDanmaku.reconnectAnonymousConnectionsAsync()
+      ...(liveConfiguration.storageEnabled
+        ? { onCredentialActivated: () => liveDanmaku?.reconnectAnonymousConnectionsAsync() }
+        : {})
     })
-    const liveSessions = new BilibiliLiveSessionService({
+    const liveSessions = liveConfiguration.storageEnabled ? new BilibiliLiveSessionService({
       database,
       idFactory: normalized.idFactory,
       now: normalized.now
-    })
-    const liveSessionExports = new BilibiliLiveSessionExportService({
+    }) : undefined
+    const liveSessionExports = liveSessions ? new BilibiliLiveSessionExportService({
       database,
       sessions: liveSessions,
       exportDirectory: resolve(normalized.dataDirectory, "exports", "temp"),
       now: normalized.now,
       idFactory: normalized.idFactory
-    })
-    const liveSource = options.liveSource ?? LocalCoreRuntime.defaultLiveSource(normalized, {
+    }) : undefined
+    const liveHttpConfiguration = {
       connectTimeoutMs: liveConfiguration.connectTimeoutMs, readTimeoutMs: liveConfiguration.readTimeoutMs,
       userAgent: liveConfiguration.userAgent, referer: liveConfiguration.referer
-    })
-    const live = new BilibiliLiveMonitorService({
+    }
+    const live = liveSessions ? new BilibiliLiveMonitorService({
       database,
-      source: liveSource,
+      rateLimiter,
+      source: options.liveSource ?? LocalCoreRuntime.defaultLiveSource(normalized, liveHttpConfiguration),
       enabled: liveConfiguration.enabled,
       dueBatchSize: liveConfiguration.dueBatchSize,
       statusBatchSize: liveConfiguration.statusBatchSize,
@@ -215,23 +260,26 @@ export class LocalCoreRuntime {
       now: normalized.now,
       idFactory: normalized.idFactory,
       sessionObserver: liveSessions
-    })
-    const liveRankSource = options.liveRankSource ?? LocalCoreRuntime.defaultLiveRankSource(normalized)
-    const liveRanks = new BilibiliLiveRankService({
+    }) : undefined
+    const liveRanks = liveConfiguration.storageEnabled ? new BilibiliLiveRankService({
       database,
-      source: liveRankSource,
+      rateLimiter,
+      source: options.liveRankSource ?? LocalCoreRuntime.defaultLiveRankSource(normalized, liveHttpConfiguration),
       now: normalized.now,
       idFactory: normalized.idFactory
-    })
-    const liveDanmakuSource = options.liveDanmakuSource
-      ?? LocalCoreRuntime.defaultLiveDanmakuSource(normalized)
-    const liveDanmaku = new BilibiliLiveDanmakuService({
+    }) : undefined
+    const liveDanmaku = liveSessions ? new BilibiliLiveDanmakuService({
       database,
-      source: liveDanmakuSource,
+      source: options.liveDanmakuSource ?? LocalCoreRuntime.defaultLiveDanmakuSource(normalized, liveHttpConfiguration),
       now: normalized.now,
       idFactory: normalized.idFactory,
       sessionSink: liveSessions,
-      resolveDisplayName: (uid) => followers.resolveDisplayName(uid),
+      resolveDisplayName: async uid => {
+        if (!followerSource || !/^[1-9]\d*$/u.test(uid)) return undefined
+        const profile = await followerSource.fetchProfile?.({ mid: uid, taskId: normalized.idFactory(),
+          leaseId: normalized.idFactory(), attempt: 1 })
+        return profile?.nickname.trim() || undefined
+      },
       credentialProvider: async () => {
         try {
           return auth.connectionCredential()
@@ -239,15 +287,15 @@ export class LocalCoreRuntime {
           return undefined
         }
       }
-    })
-    const bilibiliSubjects = new BilibiliSubjectService({
+    }) : undefined
+    const bilibiliSubjects = subjectConfiguration.enabled && followers && live && liveDanmaku ? new BilibiliSubjectService({
       database,
       followers,
       live,
       liveDanmaku,
       now: normalized.now,
       idFactory: normalized.idFactory
-    })
+    }) : undefined
     const douyinBrowser = options.douyinBrowserSource
       ?? LocalCoreRuntime.defaultDouyinBrowserSource(normalized)
     const douyinOAuthSource = options.douyinOAuthSource
@@ -272,6 +320,7 @@ export class LocalCoreRuntime {
       database,
       accountSubjects,
       followers,
+      followers ? undefined : followerSource,
       auth,
       liveSessions,
       liveSessionExports,
@@ -285,12 +334,12 @@ export class LocalCoreRuntime {
     runtime.schedulerEnabled = options.schedulerEnabled ?? true
     runtime.liveSchedulerDelayMs = options.schedulerDelayMs === undefined
       ? liveConfiguration.schedulerDelayMs : Math.max(1_000, options.schedulerDelayMs)
-    // The original follower page checked due users every second. Core owns that timer locally.
-    runtime.followerSchedulerDelayMs = Math.max(1_000, options.schedulerDelayMs ?? 1_000)
+    runtime.followerSchedulerDelayMs = options.schedulerDelayMs === undefined
+      ? followerConfiguration.schedulerDelayMs : Math.max(1_000, options.schedulerDelayMs)
     if (runtime.schedulerEnabled) {
-      runtime.startFollowerScheduler()
-      if (liveConfiguration.enabled) runtime.startLiveScheduler(0)
-      runtime.startLiveDanmakuScheduler()
+      if (followers && followerConfiguration.enabled) runtime.startFollowerScheduler(0)
+      if (live && liveConfiguration.enabled) runtime.startLiveScheduler(0)
+      if (liveDanmaku) runtime.startLiveDanmakuScheduler()
     }
     return runtime
   }
@@ -345,17 +394,17 @@ export class LocalCoreRuntime {
 
   addBilibiliFollowerMonitor(input: AddBilibiliFollowerMonitorInput): Promise<BilibiliFollowerMonitor> {
     this.ensureRunning()
-    return this.followers.addUser(input)
+    return legacyFollowerResponse(() => this.followers.addUser(input))
   }
 
   listBilibiliFollowerMonitors(input?: { limit?: number }): BilibiliFollowerMonitorList {
     this.ensureRunning()
-    return this.followers.listUsers(input)
+    return legacyFollowerResponse(() => this.followers.listUsers(input))
   }
 
   updateBilibiliFollowerMonitorStatus(userId: string, enabled: boolean): BilibiliFollowerMonitor {
     this.ensureRunning()
-    return this.followers.updateStatus(userId, enabled)
+    return legacyFollowerResponse(() => this.followers.updateStatus(userId, enabled))
   }
 
   updateBilibiliFollowerMonitorSettings(
@@ -363,12 +412,12 @@ export class LocalCoreRuntime {
     intervalSeconds: number
   ): BilibiliFollowerMonitor {
     this.ensureRunning()
-    return this.followers.updateInterval(userId, intervalSeconds)
+    return legacyFollowerResponse(() => this.followers.updateInterval(userId, intervalSeconds))
   }
 
   refreshBilibiliFollowerMonitor(userId: string): Promise<BilibiliFollowerCollectResult> {
     this.ensureRunning()
-    return this.followers.refreshNow(userId)
+    return legacyFollowerResponse(() => this.followers.refreshNow(userId))
   }
 
   deleteBilibiliFollowerMonitor(userId: string): void {
@@ -381,7 +430,7 @@ export class LocalCoreRuntime {
     input?: { from?: string; to?: string; limit?: number }
   ): BilibiliFollowerTrend {
     this.ensureRunning()
-    return this.followers.trend(userId, input)
+    return legacyFollowerResponse(() => this.followers.trend(userId, input))
   }
 
   queryBilibiliFollowerTrends(input?: {
@@ -391,7 +440,42 @@ export class LocalCoreRuntime {
     limitPerUser?: number
   }): BilibiliFollowerTrend[] {
     this.ensureRunning()
-    return this.followers.trends(input)
+    return legacyFollowerResponse(() => this.followers.trends(input))
+  }
+
+  addBilibiliFollowerMonitorV2(input: AddBilibiliFollowerMonitorInputV2): Promise<BilibiliFollowerMonitorV2> {
+    this.ensureRunning()
+    return this.followers.addUserV2(input)
+  }
+
+  listBilibiliFollowerMonitorsV2(input?: { limit?: number }): BilibiliFollowerMonitorListV2 {
+    this.ensureRunning()
+    return this.followers.listUsersV2(input)
+  }
+
+  updateBilibiliFollowerMonitorStatusV2(userId: string, enabled: boolean): BilibiliFollowerMonitorV2 {
+    this.ensureRunning()
+    return this.followers.updateStatusV2(userId, enabled)
+  }
+
+  updateBilibiliFollowerMonitorSettingsV2(userId: string, intervalSeconds: number): BilibiliFollowerMonitorV2 {
+    this.ensureRunning()
+    return this.followers.updateIntervalV2(userId, intervalSeconds)
+  }
+
+  refreshBilibiliFollowerMonitorV2(userId: string): Promise<BilibiliFollowerCollectResultV2> {
+    this.ensureRunning()
+    return this.followers.refreshNowV2(userId)
+  }
+
+  queryBilibiliFollowerTrendV2(userId: string, input?: { from?: string; to?: string; limit?: number }): BilibiliFollowerTrendV2 {
+    this.ensureRunning()
+    return this.followers.trendV2(userId, input)
+  }
+
+  queryBilibiliFollowerTrendsV2(input?: { userIds?: string[]; from?: string; to?: string; limitPerUser?: number }): BilibiliFollowerTrendV2[] {
+    this.ensureRunning()
+    return this.followers.trendsV2(input)
   }
 
   startBilibiliQrLogin(): Promise<BilibiliQrLoginStart> {
@@ -606,14 +690,24 @@ export class LocalCoreRuntime {
 
   getBilibiliSubjectWorkbench(subjectId: string): BilibiliSubjectWorkbench {
     this.ensureRunning()
-    return this.bilibiliSubjects.workbench(subjectId)
+    return legacyFollowerResponse(() => this.bilibiliSubjects.workbench(subjectId))
   }
 
   queryBilibiliSubjectTrends(
     input: QueryBilibiliSubjectTrendsInput
   ): BilibiliSubjectTrend {
     this.ensureRunning()
-    return this.bilibiliSubjects.trends(input)
+    return legacyFollowerResponse(() => this.bilibiliSubjects.trends(input))
+  }
+
+  getBilibiliSubjectWorkbenchV2(subjectId: string): BilibiliSubjectWorkbenchV2 {
+    this.ensureRunning()
+    return this.bilibiliSubjects.workbenchV2(subjectId)
+  }
+
+  queryBilibiliSubjectTrendsV2(input: QueryBilibiliSubjectTrendsInput): BilibiliSubjectTrendV2 {
+    this.ensureRunning()
+    return this.bilibiliSubjects.trendsV2(input)
   }
 
   updateBilibiliSubjectLayout(
@@ -676,15 +770,15 @@ export class LocalCoreRuntime {
   async stop(): Promise<void> {
     if (this.stopped) return
     this.stopped = true
-    if (this.followerScheduler) clearInterval(this.followerScheduler)
+    if (this.followerScheduler) clearTimeout(this.followerScheduler)
     if (this.liveScheduler) clearTimeout(this.liveScheduler)
     if (this.liveDanmakuScheduler) clearInterval(this.liveDanmakuScheduler)
     this.followerScheduler = undefined
     this.liveScheduler = undefined
     this.liveDanmakuScheduler = undefined
     // Disable writes/queued upgrades before waiting for any worker's shutdown.
-    await Promise.all([this.followers.stop?.(), this.auth.stop(), this.liveDanmaku.stopAll(), this.live.stop()])
-    await this.liveRanks.stop()
+    await Promise.all([this.followersInstance?.stop(), this.independentProfileSource?.stop?.(), this.auth.stop(), this.liveDanmakuInstance?.stopAll(),
+      this.liveInstance?.stop(), this.liveRanksInstance?.stop()])
     await this.douyinAuth.stop()
     this.database.close()
   }
@@ -693,14 +787,36 @@ export class LocalCoreRuntime {
     if (this.stopped) throw new Error("Local Core has already stopped.")
   }
 
-  private startFollowerScheduler(): void {
-    this.followerScheduler = setInterval(() => {
-      if (this.followerCollectionRunning || this.stopped) return
-      this.followerCollectionRunning = true
-      void this.followers.collectDueUsers().finally(() => {
-        this.followerCollectionRunning = false
+  private get followers(): BilibiliFollowerMonitorService {
+    if (!this.followersInstance) {
+      throw new CoreApplicationError("BILIBILI_FOLLOWER_STORAGE_DISABLED", "粉丝存储业务已由启动配置关闭。启用 storageEnabled 后重启客户端可恢复，已有数据不会删除。")
+    }
+    return this.followersInstance
+  }
+  private get live() { return requireLiveStorageService(this.liveInstance) }
+  private get liveRanks() { return requireLiveStorageService(this.liveRanksInstance) }
+  private get liveDanmaku() { return requireLiveStorageService(this.liveDanmakuInstance) }
+  private get liveSessions() { return requireLiveStorageService(this.liveSessionsInstance) }
+  private get liveSessionExports() { return requireLiveStorageService(this.liveSessionExportsInstance) }
+  private get bilibiliSubjects(): BilibiliSubjectService {
+    if (!this.bilibiliSubjectsInstance) {
+      throw new CoreApplicationError("SUBJECT_MONITOR_DISABLED", "用户工作台已由启动配置关闭。启用后重启客户端可恢复，已有数据不会删除。")
+    }
+    return this.bilibiliSubjectsInstance
+  }
+
+  private startFollowerScheduler(delayMs = this.followerSchedulerDelayMs): void {
+    this.followerScheduler = setTimeout(() => {
+      this.followerScheduler = undefined
+      if (this.stopped) return
+      void this.followers.collectDueUsersV2().catch(() => {
+        if (!this.stopped) console.warn(JSON.stringify({
+          event: "bilibili.follower.scheduler-failed", code: "BILIBILI_FOLLOWER_SCHEDULER_FAILED"
+        }))
+      }).finally(() => {
+        if (!this.stopped) this.startFollowerScheduler()
       })
-    }, this.followerSchedulerDelayMs)
+    }, delayMs)
     this.followerScheduler.unref()
   }
 
@@ -729,7 +845,8 @@ export class LocalCoreRuntime {
   }
 
   private static defaultFollowerSource(
-    options: ResolvedLocalCoreRuntimeOptions
+    options: ResolvedLocalCoreRuntimeOptions,
+    httpConfiguration: BilibiliFollowerHttpConfiguration
   ): BilibiliFollowerSource {
     const repositoryRoot = process.env.BMD_REPOSITORY_ROOT
     const pythonExecutable = process.env.BMD_PYTHON_EXE
@@ -744,7 +861,7 @@ export class LocalCoreRuntime {
       dataDirectory: options.dataDirectory,
       role: "crawler",
       standaloneExecutable: process.env.BMD_PYTHON_STANDALONE === "1"
-    }))
+    }), httpConfiguration)
   }
 
   private static defaultAuthSource(
@@ -787,7 +904,8 @@ export class LocalCoreRuntime {
   }
 
   private static defaultLiveRankSource(
-    options: ResolvedLocalCoreRuntimeOptions
+    options: ResolvedLocalCoreRuntimeOptions,
+    httpConfiguration: BilibiliLiveHttpConfiguration
   ): BilibiliLiveRankSource {
     const repositoryRoot = process.env.BMD_REPOSITORY_ROOT
     const pythonExecutable = process.env.BMD_PYTHON_EXE
@@ -802,11 +920,12 @@ export class LocalCoreRuntime {
       dataDirectory: options.dataDirectory,
       role: "crawler",
       standaloneExecutable: process.env.BMD_PYTHON_STANDALONE === "1"
-    }))
+    }), httpConfiguration)
   }
 
   private static defaultLiveDanmakuSource(
-    options: ResolvedLocalCoreRuntimeOptions
+    options: ResolvedLocalCoreRuntimeOptions,
+    httpConfiguration: BilibiliLiveHttpConfiguration
   ): BilibiliLiveDanmakuSource {
     const nodeExecutable = process.env.BMD_NODE_EXE?.trim()
     const workerEntry = process.env.BMD_REALTIME_WORKER_ENTRY?.trim()
@@ -816,7 +935,7 @@ export class LocalCoreRuntime {
       workerEntry,
       dataDirectory: options.dataDirectory,
       requestTimeoutMs: 30_000
-    }))
+    }), httpConfiguration)
   }
 
   private static defaultDouyinBrowserSource(
@@ -853,6 +972,13 @@ export class LocalCoreRuntime {
   }
 }
 
+function requireLiveStorageService<T>(service: T | undefined): T {
+  if (service === undefined) {
+    throw new CoreApplicationError("BILIBILI_LIVE_STORAGE_DISABLED", "直播存储业务已由启动配置关闭。启用 storageEnabled 后重启客户端可恢复，已有数据不会删除。")
+  }
+  return service
+}
+
 function unavailableFollowerSource(): BilibiliFollowerSource {
   const unavailable = async (): Promise<never> => {
     throw Object.assign(new Error("项目 Python Crawler Worker 不可用，请通过 dev.cmd 启动。"), {
@@ -861,6 +987,7 @@ function unavailableFollowerSource(): BilibiliFollowerSource {
     })
   }
   return {
+    fetchProfile: unavailable,
     fetchCard: unavailable,
     fetchRelationStat: unavailable
   }

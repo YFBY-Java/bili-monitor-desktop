@@ -1,22 +1,38 @@
 import {
   AddBilibiliFollowerMonitorInputSchema,
-  BilibiliFollowerCollectResultSchema,
-  BilibiliFollowerFetchedSnapshotSchema,
-  BilibiliFollowerMonitorListSchema,
-  BilibiliFollowerMonitorSchema,
+  AddBilibiliFollowerMonitorInputV2Schema,
+  BilibiliFollowerCollectResultV2Schema,
+  BilibiliFollowerFetchedSnapshotV2Schema,
+  BilibiliFollowerMonitorListV2Schema,
+  BilibiliFollowerMonitorV2Schema,
+  BilibiliFollowerTrendV2Schema,
+  PositiveJavaLongStringSchema,
   ListBilibiliFollowerMonitorsInputSchema,
   QueryBilibiliFollowerTrendInputSchema,
   QueryBilibiliFollowerTrendsInputSchema,
   UpdateBilibiliFollowerMonitorSettingsInputSchema,
   UpdateBilibiliFollowerMonitorStatusInputSchema,
   createRuntimeEnvelope,
+  followerCollectResultToV1,
+  followerMonitorListToV1,
+  followerMonitorToV1,
+  followerTrendToV1,
+  javaLongDelta,
+  javaLongToBigInt,
   type AddBilibiliFollowerMonitorInput,
+  type AddBilibiliFollowerMonitorInputV2,
   type BilibiliFollowerFetchRequest,
   type BilibiliFollowerFetchedSnapshot,
+  type BilibiliFollowerFetchedSnapshotV2,
   type BilibiliFollowerCollectResult,
+  type BilibiliFollowerCollectResultV2,
   type BilibiliFollowerMonitor,
+  type BilibiliFollowerMonitorV2,
   type BilibiliFollowerMonitorList,
-  type BilibiliFollowerTrend
+  type BilibiliFollowerMonitorListV2,
+  type BilibiliFollowerProfile,
+  type BilibiliFollowerTrend,
+  type BilibiliFollowerTrendV2
 } from "@bmd/contracts"
 import {
   ControlDatabase,
@@ -26,10 +42,13 @@ import {
 } from "@bmd/storage"
 
 import { CoreApplicationError } from "./account-subject-service"
+import { LocalRequestRateLimiter } from "./local-request-rate-limiter"
 
 export interface BilibiliFollowerSource {
-  fetchCard: (request: BilibiliFollowerFetchRequest) => Promise<BilibiliFollowerFetchedSnapshot>
-  fetchRelationStat: (request: BilibiliFollowerFetchRequest) => Promise<BilibiliFollowerFetchedSnapshot>
+  /** Optional read-only profile capability; must not persist evidence or monitoring state. */
+  fetchProfile?: (request: BilibiliFollowerFetchRequest) => Promise<BilibiliFollowerProfile>
+  fetchCard: (request: BilibiliFollowerFetchRequest) => Promise<BilibiliFollowerFetchedSnapshot | BilibiliFollowerFetchedSnapshotV2>
+  fetchRelationStat: (request: BilibiliFollowerFetchRequest) => Promise<BilibiliFollowerFetchedSnapshot | BilibiliFollowerFetchedSnapshotV2>
   stop?: () => Promise<void>
 }
 
@@ -39,24 +58,73 @@ export interface BilibiliFollowerMonitorServiceOptions {
   now: () => Date
   idFactory: () => string
   sleep?: (milliseconds: number) => Promise<void>
+  rateLimiter?: LocalRequestRateLimiter
   requestMinIntervalMs?: number
   maxAttempts?: number
   retryBackoffMs?: number
   jitter?: () => number
   dueBatchSize?: number
+  enabled?: boolean
+  defaultIntervalSeconds?: number
+  minIntervalSeconds?: number
+  maxIntervalSeconds?: number
+  shortIntervalWarningSeconds?: number
+  failureBackoffSeconds?: number
+}
+
+// Only errors crossing the Source boundary are platform collection failures.
+class FollowerFetchFailure extends Error {
+  constructor(readonly code: string, message: string, readonly retryable: boolean,
+    readonly endpoint: string) { super(message) }
 }
 
 export class BilibiliFollowerMonitorService {
-  private readonly nextRequestAt = new Map<string, number>()
+  private readonly rateLimiter: LocalRequestRateLimiter
   private readonly lifetime = new AbortController()
   private stopPromise: Promise<void> | undefined
 
-  constructor(private readonly options: BilibiliFollowerMonitorServiceOptions) {}
+  constructor(private readonly options: BilibiliFollowerMonitorServiceOptions) {
+    this.rateLimiter = options.rateLimiter ?? new LocalRequestRateLimiter(options.now)
+  }
+
+  // Legacy numeric projections happen after exact business operations finish.
+  // Projection errors must never become platform collection failures.
+  async addUser(input: AddBilibiliFollowerMonitorInput): Promise<BilibiliFollowerMonitor> {
+    return followerMonitorToV1(await this.addUserV2(AddBilibiliFollowerMonitorInputSchema.parse(input)))
+  }
+
+  listUsers(input?: { limit?: number }): BilibiliFollowerMonitorList {
+    return followerMonitorListToV1(this.listUsersV2(input))
+  }
+
+  updateStatus(userId: string, enabled: boolean): BilibiliFollowerMonitor {
+    return followerMonitorToV1(this.updateStatusV2(userId, enabled))
+  }
+
+  updateInterval(userId: string, intervalSeconds: number): BilibiliFollowerMonitor {
+    return followerMonitorToV1(this.updateIntervalV2(userId, intervalSeconds))
+  }
+
+  async refreshNow(userId: string): Promise<BilibiliFollowerCollectResult> {
+    return followerCollectResultToV1(await this.refreshNowV2(userId))
+  }
+
+  async collectDueUsers(): Promise<BilibiliFollowerCollectResult[]> {
+    return (await this.collectDueUsersV2()).map(followerCollectResultToV1)
+  }
+
+  trend(userId: string, input: { from?: string; to?: string; limit?: number } = {}): BilibiliFollowerTrend {
+    return followerTrendToV1(this.trendV2(userId, input))
+  }
+
+  trends(input: { userIds?: string[]; from?: string; to?: string; limitPerUser?: number } = {}): BilibiliFollowerTrend[] {
+    return this.trendsV2(input).map(followerTrendToV1)
+  }
 
   async resolveDisplayName(mid: string): Promise<string | undefined> {
     this.ensureRunning()
-    if (!/^[1-9]\d*$/.test(mid)) return undefined
-    let snapshot: BilibiliFollowerFetchedSnapshot
+    if (!PositiveJavaLongStringSchema.safeParse(mid).success) return undefined
+    let snapshot: BilibiliFollowerFetchedSnapshotV2
     try {
       snapshot = await this.fetchCardWithRetry(mid, this.options.idFactory())
     } catch (error) {
@@ -64,26 +132,26 @@ export class BilibiliFollowerMonitorService {
       throw error
     }
     this.ensureRunning()
-    const nickname = snapshot.nickname?.trim()
-    return nickname || undefined
+    return snapshot.nickname
   }
 
-  async addUser(input: AddBilibiliFollowerMonitorInput): Promise<BilibiliFollowerMonitor> {
+  async addUserV2(input: AddBilibiliFollowerMonitorInputV2): Promise<BilibiliFollowerMonitorV2> {
     this.ensureRunning()
-    const parsed = AddBilibiliFollowerMonitorInputSchema.parse(input)
-    const intervalSeconds = parsed.intervalSeconds ?? 3600
+    const parsed = AddBilibiliFollowerMonitorInputV2Schema.parse(input)
+    const intervalSeconds = this.resolveInterval(parsed.intervalSeconds)
     const proposedMonitorId = this.options.idFactory()
     const taskId = this.options.idFactory()
-    let snapshot: BilibiliFollowerFetchedSnapshot
+    let snapshot: BilibiliFollowerFetchedSnapshotV2
     try {
       snapshot = await this.fetchCardWithRetry(parsed.mid, taskId)
     } catch (error) {
       this.ensureRunning()
+      if (!(error instanceof FollowerFetchFailure)) throw error
       throw this.applicationError(error)
     }
     this.ensureRunning()
     // Another add may have completed while the remote card was being fetched.
-    const existing = this.options.database.findBilibiliFollowerMonitorByMid(parsed.mid)
+    const existing = this.options.database.findBilibiliFollowerMonitorByMid(snapshot.mid)
     const monitorId = existing?.monitorId ?? proposedMonitorId
     const snapshotId = this.options.idFactory()
     const eventId = this.options.idFactory()
@@ -98,8 +166,8 @@ export class BilibiliFollowerMonitorService {
         nickname: snapshot.nickname ?? existing?.nickname ?? `Bilibili UID ${snapshot.mid}`,
         avatarUrl: snapshot.avatarUrl ?? null,
         profileUrl: snapshot.profileUrl,
-        followerCount: snapshot.followerCount,
-        followingCount: snapshot.followingCount ?? null,
+        followerCount: javaLongToBigInt(snapshot.followerCount),
+        followingCount: snapshot.followingCount === undefined ? null : javaLongToBigInt(snapshot.followingCount),
         intervalSeconds,
         nextCollectAt,
         capturedAt: snapshot.fetchedAt,
@@ -113,32 +181,33 @@ export class BilibiliFollowerMonitorService {
         ...snapshot.evidenceObject,
         createdAt: snapshot.fetchedAt
       },
-      outbox: this.outbox(eventId, "bilibili.follower.snapshot-collected", snapshot.fetchedAt, {
+      outbox: this.outbox(eventId, "bilibili.follower.snapshot-collected.v2", snapshot.fetchedAt, {
         monitorId,
         mid: snapshot.mid,
         followerCount: snapshot.followerCount,
+        ...(snapshot.followingCount !== undefined ? { followingCount: snapshot.followingCount } : {}),
         sourceEndpoint: snapshot.sourceEndpoint
       })
     })
-    return this.requireUser(monitorId)
+    return this.requireUserV2(monitorId)
   }
 
-  listUsers(input?: { limit?: number }): BilibiliFollowerMonitorList {
+  listUsersV2(input?: { limit?: number }): BilibiliFollowerMonitorListV2 {
     const query = ListBilibiliFollowerMonitorsInputSchema.parse(input ?? {})
     const items = this.options.database
       .listBilibiliFollowerMonitors(query.limit)
-      .map((monitor) => this.toUserView(
+      .map((monitor) => this.toUserViewV2(
         monitor,
         this.options.database.findBilibiliFollowerSnapshots(monitor.monitorId, { limit: 30 })
       ))
-    return BilibiliFollowerMonitorListSchema.parse({
+    return BilibiliFollowerMonitorListV2Schema.parse({
       items,
       total: items.length,
       snapshotAt: this.options.now().toISOString()
     })
   }
 
-  updateStatus(userId: string, enabled: boolean): BilibiliFollowerMonitor {
+  updateStatusV2(userId: string, enabled: boolean): BilibiliFollowerMonitorV2 {
     const parsed = UpdateBilibiliFollowerMonitorStatusInputSchema.parse({ userId, enabled })
     this.requireStoredUser(parsed.userId)
     const timestamp = this.options.now().toISOString()
@@ -152,45 +221,47 @@ export class BilibiliFollowerMonitorService {
         enabled: parsed.enabled
       })
     )
-    return this.requireUser(parsed.userId)
+    return this.requireUserV2(parsed.userId)
   }
 
-  updateInterval(userId: string, intervalSeconds: number): BilibiliFollowerMonitor {
+  updateIntervalV2(userId: string, intervalSeconds: number): BilibiliFollowerMonitorV2 {
     const parsed = UpdateBilibiliFollowerMonitorSettingsInputSchema.parse({ userId, intervalSeconds })
     this.requireStoredUser(parsed.userId)
+    const resolvedInterval = this.resolveInterval(parsed.intervalSeconds)
     const timestamp = this.options.now().toISOString()
     const nextCollectAt = new Date(
-      this.options.now().getTime() + parsed.intervalSeconds * 1_000
+      this.options.now().getTime() + resolvedInterval * 1_000
     ).toISOString()
     const eventId = this.options.idFactory()
     this.options.database.updateBilibiliFollowerMonitorInterval(
       parsed.userId,
-      parsed.intervalSeconds,
+      resolvedInterval,
       nextCollectAt,
       timestamp,
       this.outbox(eventId, "bilibili.follower.monitor-settings-updated", timestamp, {
         userId: parsed.userId,
-        intervalSeconds: parsed.intervalSeconds
+        intervalSeconds: resolvedInterval
       })
     )
-    return this.requireUser(parsed.userId)
+    return this.requireUserV2(parsed.userId)
   }
 
-  async refreshNow(userId: string): Promise<BilibiliFollowerCollectResult> {
+  async refreshNowV2(userId: string): Promise<BilibiliFollowerCollectResultV2> {
     this.ensureRunning()
     const user = this.requireStoredUser(userId)
     const taskId = this.options.idFactory()
-    let snapshot: BilibiliFollowerFetchedSnapshot
+    let snapshot: BilibiliFollowerFetchedSnapshotV2
     try {
       snapshot = await this.fetchForExistingUser(user, taskId)
     } catch (error) {
       this.ensureRunning()
+      if (!(error instanceof FollowerFetchFailure)) throw error
       this.markFailure(user, error)
       throw this.applicationError(error)
     }
     this.ensureRunning()
     this.persistSnapshot(user, snapshot, taskId)
-    return BilibiliFollowerCollectResultSchema.parse({
+    return BilibiliFollowerCollectResultV2Schema.parse({
       userId: user.monitorId,
       mid: user.mid,
       success: true,
@@ -201,13 +272,13 @@ export class BilibiliFollowerMonitorService {
     })
   }
 
-  async collectDueUsers(): Promise<BilibiliFollowerCollectResult[]> {
-    if (this.lifetime.signal.aborted) return []
+  async collectDueUsersV2(): Promise<BilibiliFollowerCollectResultV2[]> {
+    if (this.lifetime.signal.aborted || this.options.enabled === false) return []
     const users = this.options.database.findDueBilibiliFollowerMonitors(
       this.options.now().toISOString(),
       Math.max(1, this.options.dueBatchSize ?? 10)
     )
-    const results: BilibiliFollowerCollectResult[] = []
+    const results: BilibiliFollowerCollectResultV2[] = []
     for (const user of users) {
       if (this.lifetime.signal.aborted) break
       const taskId = this.options.idFactory()
@@ -215,7 +286,7 @@ export class BilibiliFollowerMonitorService {
         const snapshot = await this.fetchForExistingUser(user, taskId)
         this.ensureRunning()
         this.persistSnapshot(user, snapshot, taskId)
-        results.push(BilibiliFollowerCollectResultSchema.parse({
+        results.push(BilibiliFollowerCollectResultV2Schema.parse({
           userId: user.monitorId,
           mid: user.mid,
           success: true,
@@ -227,13 +298,14 @@ export class BilibiliFollowerMonitorService {
       } catch (error) {
         // Local shutdown is not a platform failure and must not alter the next due time.
         if (this.lifetime.signal.aborted) break
+        if (!(error instanceof FollowerFetchFailure)) throw error
         this.markFailure(user, error)
         const details = this.sourceError(error)
-        results.push(BilibiliFollowerCollectResultSchema.parse({
+        results.push(BilibiliFollowerCollectResultV2Schema.parse({
           userId: user.monitorId,
           mid: user.mid,
           success: false,
-          ...(user.currentFollowerCount !== null ? { followerCount: user.currentFollowerCount } : {}),
+          ...(user.currentFollowerCount !== null ? { followerCount: user.currentFollowerCount.toString() } : {}),
           capturedAt: this.options.now().toISOString(),
           ...(typeof error === "object" && error !== null && "endpoint" in error && typeof error.endpoint === "string"
             ? { sourceEndpoint: error.endpoint } : {}),
@@ -266,10 +338,10 @@ export class BilibiliFollowerMonitorService {
     )
   }
 
-  trend(
+  trendV2(
     userId: string,
     input: { from?: string; to?: string; limit?: number } = {}
-  ): BilibiliFollowerTrend {
+  ): BilibiliFollowerTrendV2 {
     const query = QueryBilibiliFollowerTrendInputSchema.parse({ userId, ...input })
     const user = this.requireStoredUser(query.userId)
     const snapshots = this.options.database.findBilibiliFollowerSnapshots(user.monitorId, {
@@ -277,37 +349,37 @@ export class BilibiliFollowerMonitorService {
       ...(query.to ? { to: query.to } : {}),
       limit: query.limit
     })
-    return {
-      user: this.toUserView(user, snapshots),
+    return BilibiliFollowerTrendV2Schema.parse({
+      user: this.toUserViewV2(user, snapshots),
       points: snapshots.map((snapshot) => ({
         capturedAt: snapshot.capturedAt,
-        followerCount: snapshot.followerCount,
-        ...(snapshot.followingCount !== null ? { followingCount: snapshot.followingCount } : {}),
+        followerCount: snapshot.followerCount.toString(),
+        ...(snapshot.followingCount !== null ? { followingCount: snapshot.followingCount.toString() } : {}),
         sourceEndpoint: snapshot.sourceEndpoint
       }))
-    }
+    })
   }
 
-  trends(input: {
+  trendsV2(input: {
     userIds?: string[]
     from?: string
     to?: string
     limitPerUser?: number
-  } = {}): BilibiliFollowerTrend[] {
+  } = {}): BilibiliFollowerTrendV2[] {
     const query = QueryBilibiliFollowerTrendsInputSchema.parse(input)
     const users = query.userIds.length === 0
       ? this.options.database.listBilibiliFollowerMonitors()
       : query.userIds.map((userId) => this.requireStoredUser(userId))
-    return users.map((user) => this.trend(user.monitorId, {
+    return users.map((user) => this.trendV2(user.monitorId, {
       ...(query.from ? { from: query.from } : {}),
       ...(query.to ? { to: query.to } : {}),
       limit: query.limitPerUser
     }))
   }
 
-  private requireUser(monitorId: string): BilibiliFollowerMonitor {
+  private requireUserV2(monitorId: string): BilibiliFollowerMonitorV2 {
     const monitor = this.requireStoredUser(monitorId)
-    return this.toUserView(
+    return this.toUserViewV2(
       monitor,
       this.options.database.findBilibiliFollowerSnapshots(monitor.monitorId, { limit: 30 })
     )
@@ -321,27 +393,27 @@ export class BilibiliFollowerMonitorService {
 
   private persistSnapshot(
     user: StoredBilibiliFollowerMonitor,
-    snapshot: BilibiliFollowerFetchedSnapshot,
+    snapshot: BilibiliFollowerFetchedSnapshotV2,
     taskId: string
   ): void {
-    // Honor pause/interval/delete operations that occurred during the network request.
-    const current = this.requireStoredUser(user.monitorId)
+    // Original collectUser uses its request-start user for timing and fallback profile.
+    // The collect-only SQL keeps later settings/status and rejects a deleted row.
     const snapshotId = this.options.idFactory()
     const eventId = this.options.idFactory()
     const nextCollectAt = new Date(
-      new Date(snapshot.fetchedAt).getTime() + current.intervalSeconds * 1_000
+      new Date(snapshot.fetchedAt).getTime() + user.intervalSeconds * 1_000
     ).toISOString()
     this.options.database.upsertBilibiliFollowerMonitorSnapshot({
       mode: "collect",
       monitor: {
         monitorId: user.monitorId,
         mid: snapshot.mid,
-        nickname: snapshot.nickname ?? current.nickname,
-        avatarUrl: snapshot.sourceEndpoint === "x/relation/stat" ? current.avatarUrl : snapshot.avatarUrl ?? null,
-        profileUrl: snapshot.sourceEndpoint === "x/relation/stat" ? current.profileUrl : snapshot.profileUrl,
-        followerCount: snapshot.followerCount,
-        followingCount: snapshot.followingCount ?? null,
-        intervalSeconds: current.intervalSeconds,
+        nickname: snapshot.sourceEndpoint === "x/relation/stat" ? user.nickname : snapshot.nickname ?? user.nickname,
+        avatarUrl: snapshot.sourceEndpoint === "x/relation/stat" ? user.avatarUrl : snapshot.avatarUrl ?? null,
+        profileUrl: snapshot.sourceEndpoint === "x/relation/stat" ? user.profileUrl : snapshot.profileUrl,
+        followerCount: javaLongToBigInt(snapshot.followerCount),
+        followingCount: snapshot.followingCount === undefined ? null : javaLongToBigInt(snapshot.followingCount),
+        intervalSeconds: user.intervalSeconds,
         nextCollectAt,
         capturedAt: snapshot.fetchedAt,
         sourceEndpoint: snapshot.sourceEndpoint
@@ -354,11 +426,12 @@ export class BilibiliFollowerMonitorService {
         ...snapshot.evidenceObject,
         createdAt: snapshot.fetchedAt
       },
-      outbox: this.outbox(eventId, "bilibili.follower.snapshot-collected", snapshot.fetchedAt, {
+      outbox: this.outbox(eventId, "bilibili.follower.snapshot-collected.v2", snapshot.fetchedAt, {
         monitorId: user.monitorId,
         taskId,
         mid: snapshot.mid,
         followerCount: snapshot.followerCount,
+        ...(snapshot.followingCount !== undefined ? { followingCount: snapshot.followingCount } : {}),
         sourceEndpoint: snapshot.sourceEndpoint
       })
     })
@@ -367,11 +440,12 @@ export class BilibiliFollowerMonitorService {
   private async fetchForExistingUser(
     user: StoredBilibiliFollowerMonitor,
     taskId: string
-  ): Promise<BilibiliFollowerFetchedSnapshot> {
+  ): Promise<BilibiliFollowerFetchedSnapshotV2> {
     try {
       return await this.fetchCardWithRetry(user.mid, taskId)
     } catch (error) {
       this.ensureRunning()
+      if (!(error instanceof FollowerFetchFailure)) throw error
       const details = this.sourceError(error)
       if (!["BILIBILI_PARSE_ERROR", "BILIBILI_NETWORK_ERROR", "BILIBILI_SERVER_ERROR"].includes(details.code)) {
         throw error
@@ -385,7 +459,7 @@ export class BilibiliFollowerMonitorService {
     }
   }
 
-  private fetchCardWithRetry(mid: string, taskId: string): Promise<BilibiliFollowerFetchedSnapshot> {
+  private fetchCardWithRetry(mid: string, taskId: string): Promise<BilibiliFollowerFetchedSnapshotV2> {
     return this.fetchWithRetry(
       "x/web-interface/card",
       mid,
@@ -398,15 +472,16 @@ export class BilibiliFollowerMonitorService {
     endpoint: string,
     mid: string,
     taskId: string,
-    operation: (request: BilibiliFollowerFetchRequest) => Promise<BilibiliFollowerFetchedSnapshot>
-  ): Promise<BilibiliFollowerFetchedSnapshot> {
+    operation: (request: BilibiliFollowerFetchRequest) => Promise<BilibiliFollowerFetchedSnapshot | BilibiliFollowerFetchedSnapshotV2>
+  ): Promise<BilibiliFollowerFetchedSnapshotV2> {
     const maxAttempts = Math.max(1, this.options.maxAttempts ?? 3)
-    let lastError: unknown
+    let lastError: FollowerFetchFailure | undefined
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       this.ensureRunning()
+      const startedAt = performance.now()
       await this.acquireRateLimit(endpoint)
       this.ensureRunning()
-      const startedAt = performance.now()
+      let parsed: BilibiliFollowerFetchedSnapshotV2
       try {
         const snapshot = await operation({
           taskId,
@@ -415,28 +490,18 @@ export class BilibiliFollowerMonitorService {
           mid
         })
         this.ensureRunning()
-        const parsed = BilibiliFollowerFetchedSnapshotSchema.parse(snapshot)
-        this.options.database.insertBilibiliApiCall({
-          callId: this.options.idFactory(),
-          taskId,
-          attempt,
-          endpointKey: endpoint,
-          mid,
-          statusCode: parsed.statusCode,
-          durationMs: parsed.durationMs,
-          errorType: null,
-          retryable: false,
-          evidenceObjectId: parsed.evidenceObject.objectId,
-          createdAt: parsed.fetchedAt
-        }, {
-          ...parsed.evidenceObject,
-          createdAt: parsed.fetchedAt
+        parsed = BilibiliFollowerFetchedSnapshotV2Schema.parse({
+          ...snapshot,
+          mid: javaLongToBigInt(snapshot.mid).toString(),
+          followerCount: javaLongToBigInt(snapshot.followerCount).toString(),
+          ...(snapshot.followingCount !== undefined ? { followingCount: javaLongToBigInt(snapshot.followingCount).toString() } : {})
         })
-        return parsed
       } catch (error) {
         this.ensureRunning()
-        lastError = error
         const details = this.sourceError(error)
+        lastError = new FollowerFetchFailure(details.code, details.message, details.retryable,
+          typeof error === "object" && error !== null && "endpoint" in error && typeof error.endpoint === "string"
+            ? error.endpoint : endpoint)
         this.options.database.insertBilibiliApiCall({
           callId: this.options.idFactory(),
           taskId,
@@ -444,7 +509,7 @@ export class BilibiliFollowerMonitorService {
           endpointKey: endpoint,
           mid,
           statusCode: this.errorNumber(error, "statusCode"),
-          durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+          durationMs: Math.max(0, Math.floor(performance.now() - startedAt)),
           errorType: details.code,
           retryable: details.retryable,
           evidenceObjectId: null,
@@ -457,20 +522,23 @@ export class BilibiliFollowerMonitorService {
           * (2 ** Math.min(attempt - 1, 4))
         const jitter = Math.floor((this.options.jitter?.() ?? Math.random()) * 300)
         await this.wait(backoff + jitter)
+        continue
       }
+      this.options.database.insertBilibiliApiCall({
+        callId: this.options.idFactory(), taskId, attempt, endpointKey: endpoint, mid,
+        statusCode: parsed.statusCode, durationMs: Math.max(0, Math.floor(performance.now() - startedAt)),
+        errorType: null, retryable: false, evidenceObjectId: parsed.evidenceObject.objectId,
+        createdAt: parsed.fetchedAt
+      }, { ...parsed.evidenceObject, createdAt: parsed.fetchedAt })
+      return parsed
     }
-    throw lastError instanceof Error ? lastError : new Error(String(lastError))
+    throw lastError ?? new FollowerFetchFailure("BILIBILI_UNKNOWN_ERROR", "Unknown Bilibili fetch failure.", false, endpoint)
   }
 
   private async acquireRateLimit(endpoint: string): Promise<void> {
-    const minimum = Math.max(0, this.options.requestMinIntervalMs ?? 1_500)
-    const now = this.options.now().getTime()
-    const allowedAt = Math.max(now, this.nextRequestAt.get(endpoint) ?? now)
-    // Reserve before awaiting, so simultaneous callers cannot share the same slot.
-    this.nextRequestAt.set(endpoint, allowedAt + minimum)
-    if (allowedAt > now) {
-      await this.wait(allowedAt - now)
-    }
+    await this.rateLimiter.acquire({ platformCode: "bilibili", policyKey: endpoint,
+      minIntervalMs: Math.max(0, this.options.requestMinIntervalMs ?? 1_500), signal: this.lifetime.signal,
+      ...(this.options.sleep ? { sleep: this.options.sleep } : {}) })
   }
 
   private ensureRunning(): void {
@@ -484,16 +552,22 @@ export class BilibiliFollowerMonitorService {
     if (this.options.sleep) {
       await this.options.sleep(milliseconds)
     } else {
-      // Cancel our own timers immediately; stop() also closes the source's in-flight I/O.
-      await new Promise<void>(resolveWait => {
-        const finish = () => {
-          clearTimeout(timer)
-          this.lifetime.signal.removeEventListener("abort", finish)
-          resolveWait()
-        }
-        const timer = setTimeout(finish, milliseconds)
-        this.lifetime.signal.addEventListener("abort", finish, { once: true })
-      })
+      // Exponential backoff can exceed Node's timer range, which would otherwise become 1ms.
+      let remaining = milliseconds
+      while (remaining > 0) {
+        const delay = Math.min(remaining, 2_147_483_647)
+        await new Promise<void>(resolveWait => {
+          const finish = () => {
+            clearTimeout(timer)
+            this.lifetime.signal.removeEventListener("abort", finish)
+            resolveWait()
+          }
+          const timer = setTimeout(finish, delay)
+          this.lifetime.signal.addEventListener("abort", finish, { once: true })
+        })
+        this.ensureRunning()
+        remaining -= delay
+      }
     }
     this.ensureRunning()
   }
@@ -501,7 +575,7 @@ export class BilibiliFollowerMonitorService {
   private markFailure(user: StoredBilibiliFollowerMonitor, error: unknown): void {
     const details = this.sourceError(error)
     const errorAt = this.options.now().toISOString()
-    const backoffSeconds = Math.max(300, Math.min(user.intervalSeconds, 900))
+    const backoffSeconds = Math.max(300, Math.min(user.intervalSeconds, this.options.failureBackoffSeconds ?? 900))
     const nextCollectAt = new Date(
       this.options.now().getTime() + backoffSeconds * 1_000
     ).toISOString()
@@ -520,6 +594,21 @@ export class BilibiliFollowerMonitorService {
         nextCollectAt
       })
     })
+  }
+
+  private resolveInterval(requested?: number): number {
+    const interval = requested ?? this.options.defaultIntervalSeconds ?? 3600
+    const minimum = Math.max(1, this.options.minIntervalSeconds ?? 1)
+    const maximum = Math.max(minimum, this.options.maxIntervalSeconds ?? 2_592_000)
+    if (interval < minimum) throw new CoreApplicationError("BILIBILI_FOLLOWER_INTERVAL_INVALID",
+      `采集间隔不能低于 ${minimum} 秒，避免过于频繁请求 B站接口。`)
+    if (interval > maximum) throw new CoreApplicationError("BILIBILI_FOLLOWER_INTERVAL_INVALID",
+      `采集间隔不能超过 ${maximum} 秒。`)
+    if (interval < Math.max(1, this.options.shortIntervalWarningSeconds ?? 60)) {
+      console.warn(JSON.stringify({ event: "bilibili.follower.short-interval", intervalSeconds: interval,
+        requestMinIntervalMs: this.options.requestMinIntervalMs ?? 1500 }))
+    }
+    return interval
   }
 
   private applicationError(error: unknown): CoreApplicationError {
@@ -547,25 +636,25 @@ export class BilibiliFollowerMonitorService {
     return typeof value === "number" && Number.isFinite(value) ? value : null
   }
 
-  private toUserView(
+  private toUserViewV2(
     monitor: StoredBilibiliFollowerMonitor,
     snapshots: StoredBilibiliFollowerSnapshot[]
-  ): BilibiliFollowerMonitor {
+  ): BilibiliFollowerMonitorV2 {
     const previous = snapshots.length < 2 ? undefined : snapshots.at(-2)?.followerCount
     const current = monitor.currentFollowerCount ?? undefined
-    const delta = previous === undefined || current === undefined ? undefined : current - previous
-    const growthRate = previous === undefined || previous === 0 || delta === undefined
+    const delta = previous === undefined || current === undefined ? undefined : javaLongDelta(current, previous)
+    const growthRate = previous === undefined || previous === 0n || delta === undefined
       ? undefined
-      : delta / previous
-    return BilibiliFollowerMonitorSchema.parse({
+      : Number(delta) / Number(previous)
+    return BilibiliFollowerMonitorV2Schema.parse({
       id: monitor.monitorId,
       mid: monitor.mid,
       nickname: monitor.nickname,
       ...(monitor.avatarUrl ? { avatarUrl: monitor.avatarUrl } : {}),
       profileUrl: monitor.profileUrl,
-      ...(current !== undefined ? { currentFollowerCount: current } : {}),
-      ...(monitor.followingCount !== null ? { followingCount: monitor.followingCount } : {}),
-      ...(delta !== undefined ? { deltaSincePrevious: delta } : {}),
+      ...(current !== undefined ? { currentFollowerCount: current.toString() } : {}),
+      ...(monitor.followingCount !== null ? { followingCount: monitor.followingCount.toString() } : {}),
+      ...(delta !== undefined ? { deltaSincePrevious: delta.toString() } : {}),
       ...(growthRate !== undefined ? { growthRateSincePrevious: growthRate } : {}),
       ...(monitor.lastSnapshotAt ? { lastSnapshotAt: monitor.lastSnapshotAt } : {}),
       ...(monitor.lastSuccessAt ? { lastSuccessAt: monitor.lastSuccessAt } : {}),
@@ -578,8 +667,8 @@ export class BilibiliFollowerMonitorService {
       ...(monitor.sourceEndpoint ? { sourceEndpoint: monitor.sourceEndpoint } : {}),
       recentTrend: snapshots.map((snapshot) => ({
         capturedAt: snapshot.capturedAt,
-        followerCount: snapshot.followerCount,
-        ...(snapshot.followingCount !== null ? { followingCount: snapshot.followingCount } : {}),
+        followerCount: snapshot.followerCount.toString(),
+        ...(snapshot.followingCount !== null ? { followingCount: snapshot.followingCount.toString() } : {}),
         sourceEndpoint: snapshot.sourceEndpoint
       })),
       version: monitor.version

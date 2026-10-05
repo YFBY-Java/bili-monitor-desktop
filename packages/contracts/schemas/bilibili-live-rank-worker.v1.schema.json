@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bmd:bilibili-live-rank-worker:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["taskId", "attempt", "leaseId", "roomId", "ruid", "family", "type", "page", "pageSize"],
+  "properties": {
+    "taskId": {"type": "string", "minLength": 1},
+    "attempt": {"type": "integer", "minimum": 1},
+    "leaseId": {"type": "string", "minLength": 1},
+    "roomId": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+    "ruid": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+    "family": {"enum": ["AUDIENCE", "GUARD"]},
+    "type": {"type": "string", "minLength": 1, "maxLength": 64},
+    "rankSwitch": {"type": "string", "minLength": 1, "maxLength": 64},
+    "periodScope": {"type": "string", "minLength": 1, "maxLength": 32},
+    "guardTyp": {"type": "integer", "minimum": 1, "maximum": 4},
+    "page": {"type": "integer", "minimum": 1, "maximum": 5},
+    "pageSize": {"type": "integer", "minimum": 1, "maximum": 100},
+    "endpoint": {"enum": ["xlive/general-interface/v1/rank/queryContributionRank", "xlive/general-interface/v1/rank/getOnlineGoldRank", "xlive/app-room/v2/guardTab/topListNew"]},
+    "forceRefreshWbi": {"type": "boolean", "default": false},
+    "httpConfiguration": {"$ref": "#/$defs/HttpConfiguration"}
+  },
+  "$defs": {
+    "HttpConfiguration": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "connectTimeoutMs": {"type":"integer","minimum":0,"maximum":2147483647,"default":5000},
+        "readTimeoutMs": {"type":"integer","minimum":0,"maximum":2147483647,"default":10000},
+        "userAgent": {"type":"string","not":{"pattern":"[^\\t\\x20-\\x7e]"},"default":"SocialDataMonitor/0.1 (+low-frequency public Bilibili live monitor)"},
+        "referer": {"type":"string","not":{"pattern":"[^\\t\\x20-\\x7e]"},"default":"https://live.bilibili.com/"}
+      }
+    }
+  }
+}
