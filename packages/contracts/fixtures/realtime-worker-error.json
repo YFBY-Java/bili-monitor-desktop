@@ -1,0 +1,8 @@
+{
+  "code": "BILIBILI_UNKNOWN_ERROR",
+  "message": "Bilibili nav API returned code -352",
+  "retryable": true,
+  "statusCode": 200,
+  "biliCode": -352,
+  "endpoint": "x/web-interface/nav"
+}

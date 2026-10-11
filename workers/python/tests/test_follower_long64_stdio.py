@@ -47,7 +47,11 @@ def replay_http(monkeypatch, bodies):
         await asyncio.sleep(0)
         seen.append(message)
         body = bodies[len(seen) - 1]
-        return httpx.Response(200, content=body, headers={"Content-Type": "application/json"})
+        return (
+            body
+            if isinstance(body, httpx.Response)
+            else httpx.Response(200, content=body, headers={"Content-Type": "application/json"})
+        )
 
     monkeypatch.setattr(
         httpx,
@@ -70,6 +74,111 @@ def success_body(mid, count, *, nickname="\ud800", following=MIN_LONG):
         },
         ensure_ascii=True,
     ).encode("ascii")
+
+
+def test_raw_jsonb_status_crosses_worker_with_unchanged_evidence(monkeypatch, tmp_path):
+    fixtures = json.loads(
+        (CONTRACTS / "fixtures/follower-raw-payload-storage.json").read_text("utf-8")
+    )
+    bodies = [
+        (
+            '{"code":0,"data":{"card":{"mid":"2","name":"raw-json"},"follower":20},"extra":'
+            + item["extra"]
+            + "}"
+            + item["trailing"]
+        ).encode("ascii")
+        for item in fixtures
+    ]
+    auth_body = b'{"code":-101,"message":"fixture auth"}'
+    html_body = b"<h1>fixture unavailable</h1>"
+    bodies.extend(
+        [
+            auth_body,
+            httpx.Response(
+                503, content=html_body, headers={"Content-Type": "text/html;charset=utf-8"}
+            ),
+            b'{"code":-101,"message":"opted out"}',
+        ]
+    )
+    seen = replay_http(monkeypatch, bodies)
+    runtime = WorkerRuntime(role="crawler", data_directory=tmp_path)
+    validator = Draft202012Validator(
+        {**V2_SCHEMA, "$ref": "#/$defs/BilibiliFollowerFetchedSnapshotV2"}
+    )
+    for index, item in enumerate(fixtures):
+        result = asyncio.run(runtime.handle(request("fetch-card.v2", message_id=f"raw-{index}")))
+        assert result.type == "bilibili.follower.fetch-card.v2.result", item["name"]
+        assert result.payload.get("rawPayloadStorageStatus") == item["status"], item["name"]
+        validator.validate(result.payload)
+        evidence = result.payload["evidenceObject"]
+        assert (tmp_path / evidence["relativePath"]).read_bytes() == bodies[index]
+        assert "rawPayload" not in result.payload
+    assert len(seen) == len(fixtures)
+    import hashlib
+
+    from bmd_workers.bilibili_follower_v2 import (
+        BilibiliFollowerFetchFailureV2,
+        BilibiliFollowerFetchRequestV2,
+    )
+    from bmd_workers.bilibili_platform_account import BilibiliPlatformAccountFetchRequestV1
+
+    golden = json.loads((CONTRACTS / "fixtures/follower-failure-evidence.json").read_text("utf-8"))
+    BilibiliFollowerFetchRequestV2.model_validate(golden["request"])
+    BilibiliFollowerFetchFailureV2.model_validate(golden["error"])
+    request_validator = Draft202012Validator(
+        {**V2_SCHEMA, "$ref": "#/$defs/BilibiliFollowerFetchRequestV2"}
+    )
+    error_validator = Draft202012Validator(
+        {**V2_SCHEMA, "$ref": "#/$defs/BilibiliFollowerFetchFailureV2"}
+    )
+    request_validator.validate(golden["request"])
+    error_validator.validate(golden["error"])
+    platform_validator = Draft202012Validator(
+        {**V2_SCHEMA, "$ref": "#/$defs/BilibiliPlatformAccountFetchRequestV1"}
+    )
+    platform_cases = json.loads(
+        (CONTRACTS / "fixtures/platform-account-inputs.json").read_text("utf-8")
+    )
+    for item in platform_cases["workerRequests"]:
+        payload = {**golden["request"], "mid": item["mid"]}
+        assert platform_validator.is_valid(payload) == item["valid"]
+        if item["valid"]:
+            BilibiliPlatformAccountFetchRequestV1.model_validate(payload)
+        else:
+            with pytest.raises(ValidationError):
+                BilibiliPlatformAccountFetchRequestV1.model_validate(payload)
+    with pytest.raises(ValidationError):
+        BilibiliFollowerFetchRequestV2.model_validate({**golden["request"], "mid": "0"})
+    for index, (body, media_type) in enumerate(
+        [(auth_body, "application/json"), (html_body, "text/html;charset=utf-8")]
+    ):
+        captured = request("fetch-card.v2", message_id=f"failed-evidence-{index}").model_copy(
+            update={
+                "type": (
+                    "bilibili.platform.fetch-account.v1"
+                    if index == 0
+                    else "bilibili.follower.fetch-card.v2"
+                ),
+                "payload": {**golden["request"], "mid": "0"} if index == 0 else golden["request"],
+            }
+        )
+        result = asyncio.run(runtime.handle(captured))
+        assert result.type == "worker.error"
+        error_validator.validate(result.payload)
+        evidence = result.payload["evidenceObject"]
+        assert (tmp_path / evidence["relativePath"]).read_bytes() == body
+        assert evidence["sha256"] == hashlib.sha256(body).hexdigest()
+        assert evidence["sizeBytes"] == len(body)
+        assert evidence["mediaType"] == media_type
+        assert "rawPayload" not in result.payload
+    before_opted_out = set(tmp_path.rglob("*.json"))
+    opted_out = asyncio.run(
+        runtime.handle(request("fetch-card.v2", message_id="no-failure-evidence"))
+    )
+    assert opted_out.type == "worker.error"
+    assert "evidenceObject" not in opted_out.payload
+    assert set(tmp_path.rglob("*.json")) == before_opted_out
+    assert len(seen) == len(fixtures) + 3
 
 
 @pytest.mark.parametrize("operation", V2_OPERATIONS)
@@ -244,11 +353,17 @@ def test_v2_methods_are_advertised_with_legacy_methods():
         "bilibili.follower.fetch-card.v2",
         "bilibili.follower.fetch-relation-stat.v2",
         "bilibili.follower.fetch-profile.v2",
+        "bilibili.platform.fetch-account.v1",
         "bilibili.live.fetch-room-init",
         "bilibili.live.fetch-room-info",
         "bilibili.live.fetch-room-info-old",
         "bilibili.live.fetch-status-by-uids",
+        "bilibili.live.fetch-room-init.v2",
+        "bilibili.live.fetch-room-info.v2",
+        "bilibili.live.fetch-room-info-old.v2",
+        "bilibili.live.fetch-status-by-uids.v2",
         "bilibili.live.rank.fetch",
+        "bilibili.live.rank.fetch.v2",
     ]
 
 

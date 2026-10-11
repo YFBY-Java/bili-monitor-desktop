@@ -40,7 +40,7 @@ describe("original 441d423 session boundary parity", () => {
       }
       service.reconcileRest(room, { liveStatus: 0, liveTime: null, title: room.title, fetchedAt: "2026-09-13T04:21:00.000Z" })
       expect(database.findActiveBilibiliLiveSession(room.monitorId)).toBeUndefined()
-      expect(service.get(session.sessionId)).toMatchObject({ state: "CLOSED", endedAt: "2026-09-13T04:10:00.000Z" })
+      expect(service.get(session.sessionId)).toMatchObject({ state: "CLOSED", endedAt: "2026-09-13T04:10:00.000000000Z" })
     } finally { await fixture.close() }
   })
 

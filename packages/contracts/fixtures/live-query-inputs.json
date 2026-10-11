@@ -25,5 +25,6 @@
   { "name": "ISO minute timestamp without seconds", "schema": "QueryBilibiliLiveTrendsInput", "input": { "from": "2026-09-13T12:00Z" }, "valid": true, "output": { "roomMonitorIds": [], "from": "2026-09-13T12:00Z", "limitPerRoom": 500 } },
   { "name": "ISO year zero accepted without Python datetime dependence", "schema": "QueryBilibiliLiveTrendsInput", "input": { "from": "0000-01-01T00:00:00Z" }, "valid": true, "output": { "roomMonitorIds": [], "from": "0000-01-01T00:00:00Z", "limitPerRoom": 500 } },
   { "name": "reject timezone outside hours", "schema": "QueryBilibiliLiveTrendsInput", "input": { "from": "2026-09-13T12:00:00+24:00" }, "valid": false },
-  { "name": "reject non-ASCII date digits", "schema": "QueryBilibiliLiveTrendsInput", "input": { "from": "٢٠٢٦-09-13T12:00:00Z" }, "valid": false }
+  { "name": "reject non-ASCII date digits", "schema": "QueryBilibiliLiveTrendsInput", "input": { "from": "٢٠٢٦-09-13T12:00:00Z" }, "valid": false },
+  { "name": "danmaku raw range reaches original parser", "schema": "QueryBilibiliLiveDanmakuMetricsInput", "input": { "roomMonitorId": "018f0f39-7b5e-4cc1-862d-000000000001", "range": " +２H " }, "valid": true, "output": { "roomMonitorId": "018f0f39-7b5e-4cc1-862d-000000000001", "range": " +２H " } }
 ]

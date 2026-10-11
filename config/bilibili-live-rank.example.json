@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "pageSize": 50,
+  "guardPageSize": 30,
+  "maxPages": 1,
+  "requestMinIntervalMs": 1500,
+  "webLocation": "444.8"
+}

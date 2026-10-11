@@ -1,4 +1,5 @@
 import { decodeBilibiliGiftV2 } from "./bilibili-gift-v2"
+import { parseDanmakuMessageJson } from "./bilibili-danmaku-message-text"
 
 export type BilibiliDanmakuEventKind =
   | "DANMAKU"
@@ -84,14 +85,14 @@ function parseSingleBilibiliDanmakuEvent(
 ): ParsedBilibiliDanmakuEvent | undefined {
   if (!rawJson.trim().startsWith("{")) return undefined
   try {
-    const root = JSON.parse(rawJson) as unknown
+    const { root, messageText } = parseDanmakuMessageJson(rawJson)
     if (!isRecord(root)) return undefined
     const command = text(root.cmd)
     if (!command) return undefined
     const normalized = command.split(":", 1)[0] ?? command
     const safeReceivedAt = validIso(receivedAt) ?? new Date().toISOString()
     const occurredAt = eventTime(root, safeReceivedAt)
-    if (normalized === "DANMU_MSG") return danmaku(root, command, rawJson, safeReceivedAt, occurredAt)
+    if (normalized === "DANMU_MSG") return danmaku(root, command, rawJson, safeReceivedAt, occurredAt, messageText())
     if (normalized === "WATCHED_CHANGE") {
       return metrics(root, command, rawJson, safeReceivedAt, occurredAt, {
         watchedCount: firstNumber(record(root.data), "num", "text_large", "text_small", "count", "watched_count")
@@ -149,7 +150,8 @@ function danmaku(
   command: string,
   rawJson: string,
   receivedAt: string,
-  occurredAt: string
+  occurredAt: string,
+  messageText: string
 ): ParsedBilibiliDanmakuEvent {
   const info = array(root.info)
   const ext = array(info[0])
@@ -170,7 +172,7 @@ function danmaku(
   return {
     ...base(command, "DANMAKU", sourceEventId, rawJson, receivedAt, epochIso(fromInfo) ?? occurredAt),
     actor: actor(positiveId(user[0]), displayName, medalName),
-    messageText: text(info[1]) ?? ""
+    messageText
   }
 }
 

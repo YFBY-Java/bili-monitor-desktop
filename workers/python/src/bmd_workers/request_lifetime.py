@@ -7,10 +7,15 @@ KEEP_ALIVE_INTERVAL_SECONDS = 5
 LIVE_HTTP_REQUESTS = frozenset(
     {
         "bilibili.live.fetch-room-init",
+        "bilibili.live.fetch-room-init.v2",
+        "bilibili.live.fetch-room-info.v2",
+        "bilibili.live.fetch-room-info-old.v2",
+        "bilibili.live.fetch-status-by-uids.v2",
         "bilibili.live.fetch-room-info",
         "bilibili.live.fetch-room-info-old",
         "bilibili.live.fetch-status-by-uids",
         "bilibili.live.rank.fetch",
+        "bilibili.live.rank.fetch.v2",
     }
 )
 HTTP_REQUESTS = LIVE_HTTP_REQUESTS | {
@@ -20,6 +25,7 @@ HTTP_REQUESTS = LIVE_HTTP_REQUESTS | {
     "bilibili.follower.fetch-card.v2",
     "bilibili.follower.fetch-relation-stat.v2",
     "bilibili.follower.fetch-profile.v2",
+    "bilibili.platform.fetch-account.v1",
 }
 
 

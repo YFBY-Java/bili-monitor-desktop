@@ -10,7 +10,7 @@
     "package:win": "electron-builder --win nsis",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
-    "test": "vitest run"
+    "test": "node scripts/prepare-browser-fixtures.ts && vitest run"
   },
   "dependencies": {
     "@bmd/contracts": "workspace:*",
@@ -22,7 +22,8 @@
     "qrcode": "1.5.4",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "ws": "8.21.3"
+    "ws": "8.21.3",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "26.2.0",

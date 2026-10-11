@@ -25,7 +25,7 @@ import type {
   StoredBilibiliLiveSession,
   StoredBilibiliLiveSessionEvent
 } from "@bmd/storage"
-import { compareLiveSnapshotTime } from "@bmd/storage"
+import { compareLiveSnapshotTime, liveSnapshotInstantText } from "@bmd/storage"
 
 import { CoreApplicationError } from "./account-subject-service"
 import type { NormalizedBilibiliDanmakuEvent } from "./bilibili-live-danmaku-service"
@@ -118,7 +118,8 @@ export class BilibiliLiveSessionService {
     transportSessionId: string,
     receiptOrdinal: number,
     protocolVersion: number | undefined,
-    event: NormalizedBilibiliDanmakuEvent
+    event: NormalizedBilibiliDanmakuEvent,
+    writtenAt?: string
   ): boolean {
     if (event.kind === "UNKNOWN") return false
     if (
@@ -130,7 +131,7 @@ export class BilibiliLiveSessionService {
         event.sourceEventId
       )
     ) return false
-    const session = this.routeSession(room, event)
+    const session = this.routeSession(room, event, writtenAt)
     if (!session || !belongsToSession(session, event.occurredAt)) return false
     const quantity = event.kind === "GIFT"
       ? event.gift?.quantity ?? event.quantity ?? null
@@ -179,7 +180,7 @@ export class BilibiliLiveSessionService {
       occurredAt: event.occurredAt,
       receivedAt: event.receivedAt,
       rawPayloadJson: event.rawJson || "{}",
-      createdAt: event.receivedAt
+      createdAt: writtenAt ?? (this.options.now ?? (() => new Date()))().toISOString()
     })
   }
 
@@ -205,7 +206,7 @@ export class BilibiliLiveSessionService {
 
   users(input: ListBilibiliLiveSessionUsersInput): BilibiliLiveSessionUser[] {
     const parsed = ListBilibiliLiveSessionUsersInputSchema.parse(input)
-    this.get(parsed.sessionId)
+    this.requireSession(parsed.sessionId)
     return BilibiliLiveSessionUserListSchema.parse(
       aggregateSessionUsers(this.factEvents(parsed.sessionId)).slice(0, parsed.limit)
     )
@@ -213,24 +214,15 @@ export class BilibiliLiveSessionService {
 
   events(input: QueryBilibiliLiveSessionEventsInput): BilibiliLiveSessionEventPage {
     const parsed = QueryBilibiliLiveSessionEventsInputSchema.parse(input)
-    this.get(parsed.sessionId)
-    const keyword = parsed.keyword?.trim().toLocaleLowerCase()
-    const filtered = this.factEvents(parsed.sessionId).filter((event) => {
-      if (parsed.kind && event.eventKind !== parsed.kind) return false
-      if (parsed.userUid && event.senderUid !== parsed.userUid) return false
-      if (parsed.paid !== undefined && event.paid !== parsed.paid) return false
-      if (keyword && ![
-        event.messageText,
-        event.senderName,
-        event.medalName,
-        event.giftName
-      ].some((value) => value?.toLocaleLowerCase().includes(keyword))) return false
-      return true
+    this.requireSession(parsed.sessionId)
+    const result = this.options.database.queryBilibiliLiveSessionEvents({
+      ...parsed,
+      offset: (parsed.page - 1) * parsed.size,
+      limit: parsed.size
     })
-    const offset = (parsed.page - 1) * parsed.size
     return BilibiliLiveSessionEventPageSchema.parse({
-      items: filtered.slice(offset, offset + parsed.size).map(toEventView),
-      total: filtered.length,
+      items: result.items.map(toEventView),
+      total: result.total,
       page: parsed.page,
       size: parsed.size
     })
@@ -238,12 +230,12 @@ export class BilibiliLiveSessionService {
 
   insight(input: QueryBilibiliLiveSessionInsightInput): BilibiliLiveSessionInsight {
     const parsed = QueryBilibiliLiveSessionInsightInputSchema.parse(input)
-    const summary = this.get(parsed.sessionId)
     const session = this.requireSession(parsed.sessionId)
     const events = this.factEvents(parsed.sessionId)
+    const summary = this.summary(session, events)
     const users = aggregateSessionUsers(events)
     const verified = users.filter((user) => user.identityQuality === "VERIFIED_UID")
-    const payers = verified.filter((user) => user.paidAmountMilliYuan > 0)
+    const payers = verified.filter((user) => user.paidEventCount > 0)
     const coveredSeconds = mergeCoverageIntervals(coverageIntervals(
       session,
       this.options.database.listBilibiliLiveDanmakuSessionsForMonitor(session.monitorId),
@@ -340,7 +332,7 @@ export class BilibiliLiveSessionService {
               : round([...danmakuByUser.values()].filter((count) => count >= 3).length / danmakuByUser.size),
             sustainedParticipationRate: danmakuByUser.size === 0
               ? 0
-              : round(sustainedUsers(identifiedDanmaku) / danmakuByUser.size),
+              : round(sustainedUsers(danmakuEvents) / danmakuByUser.size),
             duplicateMessageRate: nonblankMessages.length === 0
               ? 0
               : round(1 - normalizedMessages.size / nonblankMessages.length),
@@ -379,7 +371,7 @@ export class BilibiliLiveSessionService {
         coveredSeconds: Math.floor(coveredSeconds),
         identityResolvedEventShare: events.length === 0
           ? null
-          : round(events.filter((event) => event.senderUid).length / events.length),
+          : round(events.filter((event) => event.senderUid).length / events.length, 5),
         supportedEventCount: events.length,
         unresolvedInteractionEventCount: summary.unresolvedInteractingEventCount ?? 0,
         eventLatencyP95Millis: percentile95(latencies),
@@ -397,14 +389,15 @@ export class BilibiliLiveSessionService {
 
   private routeSession(
     room: StoredBilibiliLiveRoomMonitor,
-    event: NormalizedBilibiliDanmakuEvent
+    event: NormalizedBilibiliDanmakuEvent,
+    writtenAt?: string
   ): StoredBilibiliLiveSession | undefined {
     if (event.kind === "LIVE") return this.observeLive(room, event)
-    if (event.kind === "PREPARING") return this.observePreparing(room, event)
+    if (event.kind === "PREPARING") return this.observePreparing(room, event, writtenAt)
     const active = this.options.database.findActiveBilibiliLiveSession(room.monitorId)
     if (FACT_KINDS.has(event.kind)) {
       // Offline chat/gifts are not proof of a broadcast, even if a connection retained liveStatus=1.
-      if (!active || event.occurredAt < active.startedAt) {
+      if (!active || compareLiveSnapshotTime(event.occurredAt, active.startedAt) < 0) {
         return this.options.database.findBilibiliLiveSessionByEventTime(
           room.monitorId,
           event.occurredAt
@@ -445,17 +438,22 @@ export class BilibiliLiveSessionService {
     }
     if (
       changedIdentity(active, event.liveStartedAt ?? null, resolvedKey)
-      && (event.liveStartedAt ?? signalTime) < active.startedAt
+      && compareLiveSnapshotTime(event.liveStartedAt ?? signalTime, active.startedAt) < 0
     ) return this.findByIdentity(room.monitorId, event.liveStartedAt ?? null, resolvedKey) ?? active
-    if (active.state === "END_PENDING" && active.endSignalAt && signalTime <= active.endSignalAt) {
+    if (active.state === "END_PENDING" && active.endSignalAt && compareLiveSnapshotTime(signalTime, active.endSignalAt) <= 0) {
       return active
     }
     if (changedIdentity(active, event.liveStartedAt ?? null, resolvedKey)) {
       this.options.database.updateBilibiliLiveSession(
         this.close(active, observationTime, "RESTART_DETECTED", room.title)
       )
-      return this.findByIdentity(room.monitorId, event.liveStartedAt ?? null, resolvedKey)
-        ?? this.open(
+      const existing = this.findByIdentity(room.monitorId, event.liveStartedAt ?? null, resolvedKey)
+      if (existing) {
+        const resumed = this.resume(existing, observationTime, event.liveStartedAt ?? null, resolvedKey, true)
+        this.options.database.updateBilibiliLiveSession(resumed)
+        return resumed
+      }
+      return this.open(
           room,
           observationTime,
           signalTime,
@@ -472,9 +470,14 @@ export class BilibiliLiveSessionService {
 
   private observePreparing(
     room: StoredBilibiliLiveRoomMonitor,
-    event: NormalizedBilibiliDanmakuEvent
+    event: NormalizedBilibiliDanmakuEvent,
+    writtenAt?: string
   ): StoredBilibiliLiveSession | undefined {
     const active = this.options.database.findActiveBilibiliLiveSession(room.monitorId)
+    // Original PREPARING always makes REST confirmation due, even without an active session.
+    this.options.database.scheduleImmediateBilibiliLiveRoomCollection(
+      room.monitorId, writtenAt ?? (this.options.now ?? (() => new Date()))().toISOString()
+    )
     if (!active) {
       return event.liveKey && isRealLiveKey(event.liveKey)
         ? this.options.database.findBilibiliLiveSessionByLiveKey(room.monitorId, event.liveKey)
@@ -482,7 +485,7 @@ export class BilibiliLiveSessionService {
     }
     if (
       (event.liveKey && changedRealLiveKey(active.liveKey, event.liveKey))
-      || event.occurredAt < active.startedAt
+      || compareLiveSnapshotTime(event.occurredAt, active.startedAt) < 0
     ) {
       return (event.liveKey
         ? this.options.database.findBilibiliLiveSessionByLiveKey(room.monitorId, event.liveKey)
@@ -576,7 +579,7 @@ export class BilibiliLiveSessionService {
     return {
       ...session,
       state: "CLOSED",
-      endedAt: signal < session.startedAt ? session.startedAt : signal,
+      endedAt: compareLiveSnapshotTime(signal, session.startedAt) < 0 ? session.startedAt : signal,
       endDetectedAt: detectedAt,
       endSource: source,
       lastObservedAt: latest(session.lastObservedAt, detectedAt),
@@ -609,21 +612,23 @@ export class BilibiliLiveSessionService {
   }
 
   private factEvents(sessionId: string): StoredBilibiliLiveSessionEvent[] {
-    return this.options.database.findBilibiliLiveSessionEvents(sessionId, 100_000)
+    return this.options.database.findAllBilibiliLiveSessionEvents(sessionId)
       .filter((event) => FACT_KINDS.has(event.eventKind))
   }
 
-  private summary(session: StoredBilibiliLiveSession): BilibiliLiveSessionSummary {
-    const events = this.factEvents(session.sessionId)
+  private summary(
+    session: StoredBilibiliLiveSession,
+    events?: StoredBilibiliLiveSessionEvent[]
+  ): BilibiliLiveSessionSummary {
     const transport = coverageIntervals(
       session,
       this.options.database.listBilibiliLiveDanmakuSessionsForMonitor(session.monitorId)
     )
     const boundaryOnly = session.startSource.startsWith("STATUS_EVENT_BACKFILL")
-    const unknown = boundaryOnly && events.length === 0
-    const gifts = events.filter((event) => event.eventKind === "GIFT")
-    const paidEvents = events.filter(isPaidEvent)
-    const identified = events.filter((event) => event.senderUid)
+    const facts = events === undefined
+      ? this.options.database.getBilibiliLiveSessionFactStatistics(session.sessionId)
+      : sessionFactStatistics(events)
+    const unknown = boundaryOnly && facts.eventCount === 0
     const values = {
       id: session.sessionId,
       monitorId: session.monitorId,
@@ -646,25 +651,44 @@ export class BilibiliLiveSessionService {
       captureEndedAt: transport.length === 0 || transport.some((item) => item.open)
         ? null
         : transport.map((item) => item.end).sort().at(-1) ?? null,
-      danmakuCount: nullableMetric(unknown, events.filter((event) => event.eventKind === "DANMAKU").length),
-      giftEventCount: nullableMetric(unknown, gifts.length),
-      giftCount: nullableMetric(unknown, sum(gifts, giftQuantity)),
-      freeGiftCount: nullableMetric(unknown, sum(gifts.filter((event) => !event.paid), giftQuantity)),
-      giftSenderCount: nullableMetric(unknown, uniquePositive(gifts.map((event) => event.senderUid))),
-      paidUserCount: nullableMetric(unknown, uniquePositive(paidEvents.map((event) => event.senderUid))),
-      interactingUserCount: nullableMetric(unknown, uniquePositive(identified.map((event) => event.senderUid))),
-      unresolvedInteractingEventCount: nullableMetric(unknown, events.filter((event) => !event.senderUid).length),
-      unresolvedGiftEventCount: nullableMetric(unknown, gifts.filter((event) => !event.senderUid).length),
-      unresolvedPaidEventCount: nullableMetric(unknown, paidEvents.filter((event) => !event.senderUid).length),
-      paidEventCount: nullableMetric(unknown, paidEvents.length),
-      paidAmountMilliYuan: nullableMetric(
-        unknown,
-        sum(paidEvents, (event) => event.paidAmountMilliYuan ?? 0)
-      ),
-      firstEventAt: events[0]?.occurredAt ?? null,
-      lastEventAt: events.at(-1)?.occurredAt ?? null
+      danmakuCount: nullableMetric(unknown, facts.danmakuCount),
+      giftEventCount: nullableMetric(unknown, facts.giftEventCount),
+      giftCount: nullableMetric(unknown, facts.giftCount),
+      freeGiftCount: nullableMetric(unknown, facts.freeGiftCount),
+      giftSenderCount: nullableMetric(unknown, facts.giftSenderCount),
+      paidUserCount: nullableMetric(unknown, facts.paidUserCount),
+      interactingUserCount: nullableMetric(unknown, facts.interactingUserCount),
+      unresolvedInteractingEventCount: nullableMetric(unknown, facts.unresolvedInteractingEventCount),
+      unresolvedGiftEventCount: nullableMetric(unknown, facts.unresolvedGiftEventCount),
+      unresolvedPaidEventCount: nullableMetric(unknown, facts.unresolvedPaidEventCount),
+      paidEventCount: nullableMetric(unknown, facts.paidEventCount),
+      paidAmountMilliYuan: nullableMetric(unknown, facts.paidAmountMilliYuan),
+      firstEventAt: facts.firstEventAt,
+      lastEventAt: facts.lastEventAt
     }
     return BilibiliLiveSessionSummarySchema.parse(values)
+  }
+}
+
+function sessionFactStatistics(events: StoredBilibiliLiveSessionEvent[]) {
+  const gifts = events.filter((event) => event.eventKind === "GIFT")
+  const paidEvents = events.filter(isPaidEvent)
+  return {
+    eventCount: events.length,
+    danmakuCount: events.filter((event) => event.eventKind === "DANMAKU").length,
+    giftEventCount: gifts.length,
+    giftCount: sum(gifts, giftQuantity),
+    freeGiftCount: sum(gifts.filter((event) => !event.paid), giftQuantity),
+    giftSenderCount: uniquePositive(gifts.map((event) => event.senderUid)),
+    paidUserCount: uniquePositive(paidEvents.map((event) => event.senderUid)),
+    interactingUserCount: uniquePositive(events.map((event) => event.senderUid)),
+    unresolvedInteractingEventCount: events.filter((event) => !event.senderUid).length,
+    unresolvedGiftEventCount: gifts.filter((event) => !event.senderUid).length,
+    unresolvedPaidEventCount: paidEvents.filter((event) => !event.senderUid).length,
+    paidEventCount: paidEvents.length,
+    paidAmountMilliYuan: sum(paidEvents, (event) => event.paidAmountMilliYuan ?? 0),
+    firstEventAt: events[0]?.occurredAt ?? null,
+    lastEventAt: events.at(-1)?.occurredAt ?? null
   }
 }
 
@@ -698,25 +722,25 @@ function coverageIntervals(
   const sessionEnd = session.endedAt
   return transports.flatMap((transport) => {
     if (!transport.connectedAt) return []
-    if (sessionEnd && transport.connectedAt >= sessionEnd) return []
-    if (transport.endedAt && transport.endedAt <= session.startedAt) return []
-    const start = transport.connectedAt > session.startedAt ? transport.connectedAt : session.startedAt
-    const endCandidate = transport.endedAt ?? sessionEnd
-    const end = endCandidate ?? now
-    if (end <= start) return []
+    const start = compareLiveSnapshotTime(transport.connectedAt, session.startedAt) > 0
+      ? transport.connectedAt : session.startedAt
+    const transportEnd = transport.endedAt ?? now
+    const liveEnd = sessionEnd ?? now
+    const end = compareLiveSnapshotTime(transportEnd, liveEnd) < 0 ? transportEnd : liveEnd
+    if (compareLiveSnapshotTime(end, start) <= 0) return []
     return [{ start, end, open: !transport.endedAt && !sessionEnd }]
   })
 }
 
 function mergeCoverageIntervals(intervals: Array<{ start: string; end: string }>): number {
   const ordered = intervals
-    .filter((interval) => interval.start < interval.end)
-    .sort((left, right) => left.start.localeCompare(right.start))
+    .filter((interval) => compareLiveSnapshotTime(interval.start, interval.end) < 0)
+    .sort((left, right) => compareLiveSnapshotTime(left.start, right.start))
   const first = ordered[0]
   if (!first) return 0
   let currentStart = new Date(first.start).getTime()
   let currentEnd = new Date(first.end).getTime()
-  let totalMillis = 0
+  let totalSeconds = 0
   for (const interval of ordered.slice(1)) {
     const start = new Date(interval.start).getTime()
     const end = new Date(interval.end).getTime()
@@ -724,11 +748,11 @@ function mergeCoverageIntervals(intervals: Array<{ start: string; end: string }>
       currentEnd = Math.max(currentEnd, end)
       continue
     }
-    totalMillis += currentEnd - currentStart
+    totalSeconds += Math.floor((currentEnd - currentStart) / 1_000)
     currentStart = start
     currentEnd = end
   }
-  return Math.floor((totalMillis + currentEnd - currentStart) / 1_000)
+  return totalSeconds + Math.floor((currentEnd - currentStart) / 1_000)
 }
 
 function changedIdentity(
@@ -737,7 +761,7 @@ function changedIdentity(
   liveKey: string
 ): boolean {
   return Boolean(
-    session.platformLiveTime && platformLiveTime && session.platformLiveTime !== platformLiveTime
+    session.platformLiveTime && platformLiveTime && compareLiveSnapshotTime(session.platformLiveTime, platformLiveTime) !== 0
   ) || changedRealLiveKey(session.liveKey, liveKey)
 }
 
@@ -753,16 +777,16 @@ function isRealLiveKey(value: string | null | undefined): boolean {
 }
 
 function platformKey(platformLiveTime: string | null, observedAt: string): string {
-  return platformLiveTime ? `platform:${platformLiveTime}` : `rest-observed:${observedAt}`
+  return platformLiveTime ? `platform:${liveSnapshotInstantText(platformLiveTime)}` : `rest-observed:${liveSnapshotInstantText(observedAt)}`
 }
 
 function belongsToSession(session: StoredBilibiliLiveSession, eventTime: string): boolean {
-  if (eventTime < session.startedAt) return false
-  return session.endedAt === null || eventTime <= session.endedAt
+  if (compareLiveSnapshotTime(eventTime, session.startedAt) < 0) return false
+  return session.endedAt === null || compareLiveSnapshotTime(eventTime, session.endedAt) <= 0
 }
 
 function latest(left: string | null, right: string): string {
-  return left && left > right ? left : right
+  return left && compareLiveSnapshotTime(left, right) > 0 ? left : right
 }
 
 function positiveId(value: string | undefined): string | null {
@@ -922,7 +946,7 @@ function giftMixRows(
       eventKind,
       giftCount: sum(values, giftQuantity),
       paidAmountMilliYuan,
-      revenueShare: !totalPaid ? 0 : round(paidAmountMilliYuan / totalPaid)
+      revenueShare: !totalPaid ? 0 : round(paidAmountMilliYuan / totalPaid, 5)
     }
   }).sort((a, b) =>
     b.paidAmountMilliYuan - a.paidAmountMilliYuan
@@ -934,8 +958,7 @@ function giftMixRows(
 function sessionStages(
   events: StoredBilibiliLiveSessionEvent[]
 ): BilibiliLiveSessionInsight["danmakuDepth"]["stages"] {
-  const start = events.length === 0 ? 0 : Math.min(...events.map((event) => new Date(event.occurredAt).getTime()))
-  const end = events.length === 0 ? start : Math.max(...events.map((event) => new Date(event.occurredAt).getTime()))
+  const { start, end } = eventTimeBounds(events)
   const duration = Math.max(1, end - start)
   const definitions = [["OPENING", "开场"], ["MIDDLE", "中段"], ["ENDING", "收尾"]] as const
   return definitions.map(([code, label], stage) => {
@@ -956,8 +979,7 @@ function sustainedUsers(
   events: StoredBilibiliLiveSessionEvent[]
 ): number {
   const byUid = new Map<string, Set<number>>()
-  const start = events.length === 0 ? 0 : Math.min(...events.map((event) => new Date(event.occurredAt).getTime()))
-  const end = events.length === 0 ? start : Math.max(...events.map((event) => new Date(event.occurredAt).getTime()))
+  const { start, end } = eventTimeBounds(events)
   const duration = Math.max(1, end - start)
   for (const event of events) {
     if (!event.senderUid) continue
@@ -969,6 +991,18 @@ function sustainedUsers(
     byUid.set(event.senderUid, stages)
   }
   return [...byUid.values()].filter((stages) => stages.size >= 2).length
+}
+
+function eventTimeBounds(events: StoredBilibiliLiveSessionEvent[]): { start: number; end: number } {
+  if (events.length === 0) return { start: 0, end: 0 }
+  let start = Infinity
+  let end = -Infinity
+  for (const event of events) {
+    const time = new Date(event.occurredAt).getTime()
+    start = Math.min(start, time)
+    end = Math.max(end, time)
+  }
+  return { start, end }
 }
 
 function spendTierRows(
@@ -1072,9 +1106,10 @@ function medianConversionLag(events: StoredBilibiliLiveSessionEvent[]): number |
     const interactedAt = firstDanmaku.get(uid)
     return interactedAt === undefined || interactedAt > paidAt
       ? []
-      : [Math.floor((paidAt - interactedAt) / 1_000)]
+      : [(paidAt - interactedAt) / 1_000]
   })
-  return median(lags)
+  const value = median(lags)
+  return value === null ? null : Math.round(value)
 }
 
 function identifiedMessageUsers(events: StoredBilibiliLiveSessionEvent[], key: string): number {
@@ -1085,7 +1120,10 @@ function identifiedMessageUsers(events: StoredBilibiliLiveSessionEvent[], key: s
 
 function percentile95(values: number[]): number | null {
   if (values.length === 0) return null
-  return Math.round(values[Math.min(values.length - 1, Math.ceil(values.length * 0.95) - 1)] ?? 0)
+  const position = (values.length - 1) * 0.95
+  const lower = values[Math.floor(position)] ?? 0
+  const upper = values[Math.ceil(position)] ?? lower
+  return Math.round(lower + (upper - lower) * (position - Math.floor(position)))
 }
 
 function caveat(coverage: BilibiliLiveSessionSummary["coverageStatus"]): string {
@@ -1098,6 +1136,7 @@ function caveat(coverage: BilibiliLiveSessionSummary["coverageStatus"]): string 
   return "没有可验证的在线采集区间，当前指标不具备完整覆盖保证。"
 }
 
-function round(value: number): number {
-  return Math.round(value * 1_000) / 1_000
+function round(value: number, digits = 3): number {
+  const scale = 10 ** digits
+  return Math.round(value * scale) / scale
 }

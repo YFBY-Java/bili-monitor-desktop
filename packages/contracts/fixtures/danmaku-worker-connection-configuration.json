@@ -1,0 +1,5 @@
+[
+  { "name": "connection raw signed bounds and strings", "input": { "connectionConfiguration": { "heartbeatSeconds": 2147483647, "connectTimeoutMs": -2147483648, "useLoginCredential": false, "webLocation": "", "clientVersion": " version " }, "cacheConfiguration": { "wbiCacheSeconds": 2147483647, "buvidCacheSeconds": -2147483648 } }, "valid": true },
+  { "name": "connection heartbeat overflow", "input": { "connectionConfiguration": { "heartbeatSeconds": 2147483648 }, "cacheConfiguration": { "wbiCacheSeconds": 2147483648 } }, "valid": false },
+  { "name": "connection null string", "input": { "connectionConfiguration": { "clientVersion": null }, "cacheConfiguration": null }, "valid": false }
+]

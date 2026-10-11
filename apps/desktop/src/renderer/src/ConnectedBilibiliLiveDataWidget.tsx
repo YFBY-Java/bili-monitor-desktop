@@ -13,7 +13,7 @@ export function ConnectedBilibiliLiveDataWidget({ bridge, room, initialDanmu = i
   const [ranksVisible, setRanksVisible] = useState(false)
   const roomId = room?.monitorId
   const danmuKey = ["bilibili-live-widget", roomId, "danmu"]
-  const rankKey = ["bilibili-live-widget", roomId, "ranks"]
+  const rankKey = ["bilibili-live-widget", roomId, "ranks.v2"]
   const danmuQuery = useQuery({
     queryKey: danmuKey,
     queryFn: async ({ signal }) => {
@@ -31,7 +31,7 @@ export function ConnectedBilibiliLiveDataWidget({ bridge, room, initialDanmu = i
     queryKey: rankKey,
     queryFn: async ({ signal }) => {
       if (!roomId) throw new Error("未绑定直播间")
-      const result = await bridge.bilibiliLive.rankSummary({ roomMonitorId: roomId })
+      const result = await bridge.bilibiliLiveRankV2.summary({ roomMonitorId: roomId })
       signal.throwIfAborted()
       return result
     }, enabled: Boolean(roomId) && ranksVisible, staleTime: 0, retry: false
@@ -69,7 +69,7 @@ export function ConnectedBilibiliLiveDataWidget({ bridge, room, initialDanmu = i
     }}
     onRankRefresh={async input => {
       await queryClient.cancelQueries({ queryKey: rankKey })
-      const result = await bridge.bilibiliLive.rankRefresh(input)
+      const result = await bridge.bilibiliLiveRankV2.refresh(input)
       await queryClient.cancelQueries({ queryKey: rankKey })
       queryClient.setQueryData(rankKey, result.summary)
       return result

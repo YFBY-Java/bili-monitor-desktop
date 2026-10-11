@@ -4,6 +4,8 @@ import type { Socket } from "node:net"
 import { promisify } from "node:util"
 import { brotliDecompress, gunzip, inflate } from "node:zlib"
 import { BilibiliLiveHttpConfigurationSchema, type BilibiliLiveHttpConfiguration } from "@bmd/contracts"
+import { bilibiliStringDecoder } from "./bilibili-response-text"
+import { parseBilibiliApiJson } from "./bilibili-api-json"
 
 const MAX_BYTES = 8 * 1024 * 1024
 const API_HOSTS = new Set(["api.bilibili.com", "api.live.bilibili.com"])
@@ -11,6 +13,7 @@ interface HttpInput {
   configuration: BilibiliLiveHttpConfiguration
   headers: Record<string, string>
   signal?: AbortSignal
+  responseText?: "spring-string"
 }
 interface HttpResponse {
   status: number
@@ -46,6 +49,8 @@ export async function getBilibiliJson(address: string | URL, input: HttpInput) {
       url = next
       continue
     }
+    // Original String consumers validate headers before HTTP status handlers.
+    const decode = input.responseText === "spring-string" ? bilibiliStringDecoder(response.headers) : undefined
     let body: Buffer
     try {
       const encoding = response.headers["content-encoding"]?.trim().toLowerCase()
@@ -61,7 +66,8 @@ export async function getBilibiliJson(address: string | URL, input: HttpInput) {
     return { status: response.status, ok: response.status >= 200 && response.status < 300,
       json: async (): Promise<unknown> => {
         ensureNotCancelled(input.signal)
-        try { return JSON.parse(body.toString("utf8").replace(/^\uFEFF/u, "")) as unknown }
+        try { return decode ? parseBilibiliApiJson(decode(body))
+          : JSON.parse(body.toString("utf8").replace(/^\uFEFF/u, "")) as unknown }
         catch { throw httpError("BILIBILI_PARSE_ERROR", "Bilibili HTTP response is not valid JSON.") }
       } }
   }

@@ -2,12 +2,13 @@ import {
   startupConfigurationErrorMessage,
   RuntimeEnvelopeSchema,
   createRuntimeEnvelope,
-  HTTP_CORE_REQUESTS,
+  CORE_KEEP_ALIVE_REQUESTS,
   REQUEST_KEEP_ALIVE_INTERVAL_MS,
   type RuntimeEnvelope,
   type RuntimeError
 } from "@bmd/contracts"
 import { LocalCoreRuntime } from "@bmd/core-runtime"
+import { preparedExportMainContextFromEnvironment } from "@bmd/core-runtime/export-prepared-workspace"
 
 import { dispatchBusinessRequest } from "./core-request-router"
 
@@ -18,8 +19,10 @@ const dataDirectory = process.env.BMD_DATA_DIR
 if (!dataDirectory) throw new Error("BMD_DATA_DIR is required.")
 
 let startupError: RuntimeError | undefined
+const mainContext = preparedExportMainContextFromEnvironment(process.env)
 const runtime = await LocalCoreRuntime.start({
   dataDirectory,
+  ...(mainContext ? { mainContext } : {}),
   version: process.env.BMD_CORE_VERSION ?? "0.2.0"
 }).catch((error: unknown) => {
   const details = applicationErrorDetails(error)
@@ -51,11 +54,15 @@ function applicationErrorDetails(error: unknown): { code: string; retryable: boo
   return { code: error.code, retryable }
 }
 
+const activeKeepAliveReporters = new Set<(now: number) => void>()
+
 async function handleMessage(message: unknown): Promise<void> {
   const parsed = RuntimeEnvelopeSchema.safeParse(message)
   if (!parsed.success) return
   const request = parsed.data as RuntimeEnvelope
   let heartbeat: NodeJS.Timeout | undefined
+  let reportProgress: (() => void) | undefined
+  let keepAliveReporter: ((now: number) => void) | undefined
 
   try {
     if (request.type === "core.shutdown") {
@@ -73,18 +80,35 @@ async function handleMessage(message: unknown): Promise<void> {
       parentPort.postMessage(response(request, "core.bootstrap.result", runtime.bootstrap()))
       return
     }
-    if (request.keepAlive && HTTP_CORE_REQUESTS.some(type => type === request.type)) {
+    if (request.keepAlive && CORE_KEEP_ALIVE_REQUESTS.some(type => type === request.type)) {
       const report = () => parentPort.postMessage(response(request, "core.request-alive", { requestType: request.type }))
+      let lastReportedAt = Date.now()
+      keepAliveReporter = (now) => {
+        if (now - lastReportedAt >= REQUEST_KEEP_ALIVE_INTERVAL_MS) {
+          report()
+          lastReportedAt = now
+        }
+      }
+      activeKeepAliveReporters.add(keepAliveReporter)
+      // Synchronous snapshots block every request's interval. Traversal must keep
+      // all already accepted long requests alive using their own matching envelopes.
+      reportProgress = () => {
+        const now = Date.now()
+        for (const reporter of activeKeepAliveReporters) reporter(now)
+      }
       report()
       heartbeat = setInterval(() => {
-        try { report() } catch {
+        try {
+          report()
+          lastReportedAt = Date.now()
+        } catch {
           clearInterval(heartbeat)
-          // Losing the supervising Main also cancels any active Core/Worker operations.
+          // Stop workers and drain current exports before leaving on supervising Main loss.
           void runtime.stop().finally(() => process.exit(1))
         }
       }, REQUEST_KEEP_ALIVE_INTERVAL_MS)
     }
-    const result = await dispatchBusinessRequest(runtime, request)
+    const result = await dispatchBusinessRequest(runtime, request, reportProgress)
     parentPort.postMessage(response(request, result.responseType, result.payload))
   } catch (error) {
     const details = applicationErrorDetails(error)
@@ -96,6 +120,7 @@ async function handleMessage(message: unknown): Promise<void> {
     parentPort.postMessage(response(request, "core.error", payload))
   } finally {
     clearInterval(heartbeat)
+    if (keepAliveReporter) activeKeepAliveReporters.delete(keepAliveReporter)
   }
 }
 

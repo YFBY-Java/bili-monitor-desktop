@@ -11,6 +11,8 @@ describe("secureWebPreferences", () => {
       sandbox: true,
       webSecurity: true
     })
+    expect(security.shouldRegisterProtocolClient({ BMD_E2E_HEADLESS: "1" })).toBe(false)
+    expect(security.shouldRegisterProtocolClient({})).toBe(true)
   })
 
   it("allows only explicit Bilibili profiles and live rooms as static external URLs", () => {

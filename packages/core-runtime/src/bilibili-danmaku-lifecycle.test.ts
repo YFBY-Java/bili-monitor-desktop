@@ -30,7 +30,7 @@ describe("local login upgrade transport lifecycle", () => {
     await new Promise<void>(resolveTurn => setImmediate(resolveTurn))
     try { expect(stopped).toBe(true) }
     finally { gate.release(); await stopping; await starting }
-    expect(h.database.findLatestBilibiliLiveDanmakuSession(id)?.status).toBe("STOPPED")
+    expect(h.database.findLatestBilibiliLiveDanmakuSession(id)).toBeUndefined()
   })
 
   it("stops a CONNECTED room while another room is waiting for HTTP", async () => {
@@ -87,7 +87,7 @@ describe("local login upgrade transport lifecycle", () => {
     await h.reopen()
     gate.release()
     expect(await starting).toMatchObject({ code: "CORE_STOPPED" })
-    expect(h.database.findLatestBilibiliLiveDanmakuSession(id)?.status).toBe("STOPPED")
+    expect(h.database.findLatestBilibiliLiveDanmakuSession(id)).toBeUndefined()
     expect(source.starts).toHaveLength(stage === "credential" ? 0 : 1)
     expect(source.stopAllCalls).toBe(1)
   })
@@ -109,7 +109,7 @@ describe("local login upgrade transport lifecycle", () => {
         ? { type, receivedAt, code: 1006, reason: "synthetic close" }
         : { type, receivedAt, errorType: "SYNTHETIC_SOCKET_FAILURE", message: "synthetic failure" })
     }
-    await expect(service.start({ roomMonitorId: id })).rejects.toMatchObject({ code: "BILIBILI_DANMAKU_CONNECTION_ENDED" })
+    await expect(service.start({ roomMonitorId: id })).resolves.toMatchObject({ running: false, status: type === "closed" ? "CLOSED" : "ERROR" })
     expect(h.database.findLatestBilibiliLiveDanmakuSession(id)?.status).toBe(type === "closed" ? "CLOSED" : "ERROR")
   })
 

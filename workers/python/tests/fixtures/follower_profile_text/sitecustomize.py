@@ -20,6 +20,13 @@ def replay(request):
     assert request.url.params["photo"] == "true"
     mid = request.url.params["mid"]
     calls[mid] = calls.get(mid, 0) + 1
+    if mid == "14":
+        body = (
+            '{"code":0,"data":{"card":{"mid":"14","name":1e7,"face":-0.0},"follower":21}}'
+            if calls[mid] == 1
+            else '{"code":-101,"message":0.0001}'
+        )
+        return httpx.Response(200, text=body)
     name = {
         "2": "  合成昵称\t ",
         "3": "\u00a0",
@@ -43,6 +50,8 @@ def replay(request):
             name = {}
         if mid == "13":
             name = "名" * 161
+        if mid == "15":
+            name = "private\0nickname"
     return httpx.Response(
         200,
         json={

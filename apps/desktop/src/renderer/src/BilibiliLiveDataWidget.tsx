@@ -1,5 +1,6 @@
 import type { BilibiliLiveDanmakuRecent, BilibiliLiveRankEntry, BilibiliLiveRankRefreshInput,
-  BilibiliLiveRankRefreshResult, BilibiliLiveRankSummary, BilibiliSubjectWorkbench } from "@bmd/contracts"
+  BilibiliLiveRankRefreshResult, BilibiliLiveRankSummary, BilibiliLiveRankRefreshResultV2,
+  BilibiliLiveRankSummaryV2, BilibiliLiveRankEntryV2, BilibiliSubjectWorkbench } from "@bmd/contracts"
 import { useEffect, useRef, useState, type JSX } from "react"
 import { widgetAvatarUrl, widgetCount, widgetGuardLevel, widgetRankEntries, widgetRankHint, widgetRankKey,
   widgetRankLabel, widgetRankSnapshots, widgetRankSortLabel, widgetRankValue, widgetRelativeTime } from "./bilibili-live-widget-format"
@@ -9,7 +10,7 @@ export interface BilibiliLiveDataWidgetProps {
   room?: LiveWidgetRoom
   danmu: BilibiliSubjectWorkbench["danmu"]
   recentMessages?: BilibiliLiveDanmakuRecent[]
-  rankSummary?: BilibiliLiveRankSummary
+  rankSummary?: BilibiliLiveRankSummary | BilibiliLiveRankSummaryV2
   rankLoading?: boolean
   danmuLoading?: boolean
   danmuError?: string
@@ -17,7 +18,7 @@ export interface BilibiliLiveDataWidgetProps {
   onRanksVisible?: () => void
   onStart?: (protocolVersion?: number) => Promise<void>
   onStop?: () => Promise<void>
-  onRankRefresh?: (input: BilibiliLiveRankRefreshInput) => Promise<BilibiliLiveRankRefreshResult>
+  onRankRefresh?: (input: BilibiliLiveRankRefreshInput) => Promise<BilibiliLiveRankRefreshResult | BilibiliLiveRankRefreshResultV2>
 }
 
 export function BilibiliLiveDataWidget({ room, danmu, recentMessages, rankSummary, rankLoading = false,
@@ -141,14 +142,14 @@ export function BilibiliLiveDataWidget({ room, danmu, recentMessages, rankSummar
                 <em>{entry.rankNo ? entry.rankNo <= 3 ? `榜${entry.rankNo}` : entry.rankNo : "-"}</em><RankAvatar entry={entry} />
                 <strong title={entry.displayName}>{entry.displayName || "匿名用户"}</strong>
                 <small>{family === "GUARD" ? `${widgetGuardLevel(entry.guardLevel)}${entry.accompanyDays ? ` · 陪伴 ${entry.accompanyDays} 天` : ""}` : entry.medalName ? `${entry.medalName}${entry.medalLevel ? ` Lv.${entry.medalLevel}` : ""}` : "无粉丝牌"}</small>
-                <b>{widgetRankValue(active, entry)}</b>
+                <b title={entry.score === undefined ? undefined : BigInt(entry.score).toLocaleString("zh-CN")}>{widgetRankValue(active, entry)}</b>
               </div>)) : <span>这个榜单暂无明细</span>}</div>
           </>}
       </div>}
     </div>
   </article>
 }
-function RankAvatar({ entry }: { entry: BilibiliLiveRankEntry }): JSX.Element {
+function RankAvatar({ entry }: { entry: BilibiliLiveRankEntry | BilibiliLiveRankEntryV2 }): JSX.Element {
   const [failed, setFailed] = useState(false)
   const url = widgetAvatarUrl(entry.faceUrl)
   useEffect(() => setFailed(false), [url])

@@ -3,8 +3,13 @@ import {
   BilibiliSubjectTrendSchema,
   BilibiliSubjectWorkbenchSchema,
   BilibiliSubjectTrendV2Schema,
+  BilibiliSubjectTrendV3Schema,
+  BilibiliSubjectWorkbenchV3Schema,
+  type BilibiliSubjectWorkbenchV3,
+  type BilibiliSubjectTrendV3,
   BilibiliSubjectWorkbenchV2Schema,
   CreateBilibiliSubjectInputSchema,
+  ListBilibiliSubjectsInputSchema,
   QueryBilibiliSubjectTrendsInputSchema,
   UpdateBilibiliSubjectBindingInputSchema,
   UpdateBilibiliSubjectInputSchema,
@@ -29,6 +34,8 @@ import {
 } from "@bmd/contracts"
 import {
   ControlDatabase,
+  compareLiveSnapshotTime,
+  hasLiveSnapshotText,
   type NewStoredOutboxMessage,
   type StoredBilibiliFollowerMonitor,
   type StoredBilibiliLiveRoomMonitor,
@@ -37,9 +44,10 @@ import {
   type StoredBilibiliSubjectWidgetLayout
 } from "@bmd/storage"
 
+import { safeLiveLegacyProjection } from "./live-long64-projection"
 import { CoreApplicationError } from "./account-subject-service"
-import type { BilibiliFollowerMonitorService } from "./bilibili-follower-service"
-import type { BilibiliLiveMonitorService } from "./bilibili-live-service"
+import type { BilibiliFollowerMonitorService, PreparedBilibiliFollowerMonitor } from "./bilibili-follower-service"
+import type { BilibiliLiveMonitorService, PreparedBilibiliLiveMonitor } from "./bilibili-live-service"
 
 interface BilibiliSubjectDanmakuReader {
   status: (roomMonitorId: string) => BilibiliLiveDanmakuStatus
@@ -60,7 +68,7 @@ interface BindingPayload {
   bilibiliLiveRoomMonitorId?: string | undefined
   mid?: string | undefined
   roomId?: string | undefined
-  enabledCapabilities?: Array<"follower" | "live_heat"> | undefined
+  enabledCapabilities?: BilibiliSubjectBinding["enabledCapabilities"] | undefined
   danmuEnabled?: boolean | undefined
 }
 
@@ -83,15 +91,24 @@ export class BilibiliSubjectService {
 
   async create(input: CreateBilibiliSubjectInput): Promise<BilibiliSubject> {
     const parsed = CreateBilibiliSubjectInputSchema.parse(input)
-    const resolved = this.hasBindingIdentity(parsed)
-      ? await this.resolveBinding(parsed)
-      : undefined
+    return this.options.database.runBilibiliPreparedTransaction(async () => {
+      const commitBinding = this.hasBindingPayload(parsed)
+        ? await this.prepareCreationBinding(parsed)
+        : undefined
+      return () => this.createResolvedSubject(parsed, commitBinding?.())
+    })
+  }
+
+  private createResolvedSubject(
+    parsed: ReturnType<typeof CreateBilibiliSubjectInputSchema.parse>,
+    resolved: ResolvedBinding | undefined
+  ): BilibiliSubject {
     const timestamp = this.options.now().toISOString()
     const subjectId = this.options.idFactory()
     const subject: StoredBilibiliSubject = {
       subjectId,
       displayName: this.resolveDisplayName(parsed.displayName, resolved),
-      avatarUrl: parsed.avatarUrl ?? resolved?.user?.avatarUrl ?? resolved?.room?.faceUrl ?? null,
+      avatarUrl: this.resolveAvatarUrl(parsed.avatarUrl, resolved),
       remark: this.blankToNull(parsed.remark),
       tags: this.normalizeTags(parsed.tags),
       monitorStatus: "ACTIVE",
@@ -120,12 +137,13 @@ export class BilibiliSubjectService {
     return this.get(subjectId)
   }
 
-  list(limit = 100): BilibiliSubject[] {
-    return this.options.database.listBilibiliSubjects(Math.max(1, Math.min(500, limit)))
-      .map((subject) => this.toSubject(
-        this.maybeBackfillProfile(subject),
-        this.options.database.findBilibiliSubjectBinding(subject.subjectId)
-      ))
+  list(limit?: number): BilibiliSubject[] {
+    const query = ListBilibiliSubjectsInputSchema.parse(limit === undefined ? {} : { limit })
+    return this.options.database.listBilibiliSubjects(query.limit)
+      .map((subject) => {
+        const binding = this.options.database.findBilibiliSubjectBinding(subject.subjectId)
+        return this.toSubject(this.maybeBackfillProfile(subject, binding), binding)
+      })
   }
 
   get(subjectId: string): BilibiliSubject {
@@ -139,7 +157,7 @@ export class BilibiliSubjectService {
     this.requireSubject(parsed.subjectId)
     const updated = this.options.database.updateBilibiliSubject({
       subjectId: parsed.subjectId,
-      ...(parsed.displayName !== undefined ? { displayName: parsed.displayName } : {}),
+      ...(parsed.displayName !== undefined ? { displayName: this.normalizeDisplayName(parsed.displayName) } : {}),
       ...(parsed.avatarUrl !== undefined ? { avatarUrl: this.blankToNull(parsed.avatarUrl) } : {}),
       ...(parsed.remark !== undefined ? { remark: this.blankToNull(parsed.remark) } : {}),
       ...(parsed.tags !== undefined ? { tags: this.normalizeTags(parsed.tags) } : {}),
@@ -165,29 +183,28 @@ export class BilibiliSubjectService {
     const parsed = UpdateBilibiliSubjectBindingInputSchema.parse(input)
     this.requireSubject(parsed.subjectId)
     const existing = this.options.database.findBilibiliSubjectBinding(parsed.subjectId)
-    const resolved = await this.resolveBinding({
-      bilibiliUserMonitorId: parsed.bilibiliUserMonitorId ?? existing?.bilibiliUserMonitorId ?? undefined,
-      bilibiliLiveRoomMonitorId: parsed.bilibiliLiveRoomMonitorId
-        ?? existing?.bilibiliLiveRoomMonitorId
-        ?? undefined,
-      mid: parsed.mid ?? existing?.mid ?? undefined,
-      roomId: parsed.roomId ?? existing?.roomId ?? undefined,
-      enabledCapabilities: parsed.enabledCapabilities,
-      danmuEnabled: parsed.danmuEnabled
-    })
+    // Match SubjectService: resolve only this request. Old identities are merged
+    // after resolution, like SubjectRepository's COALESCE, not used for lookups.
+    const resolved = await this.resolveBinding(parsed)
     const timestamp = this.options.now().toISOString()
     const binding = this.storedBinding(parsed.subjectId, resolved, {
-      enabledCapabilities: parsed.enabledCapabilities
-        ?? (existing?.enabledCapabilities as Array<"follower" | "live_heat"> | undefined),
+      enabledCapabilities: parsed.enabledCapabilities ?? existing?.enabledCapabilities,
       danmuEnabled: parsed.danmuEnabled ?? existing?.danmuEnabled
     }, timestamp, existing)
     this.options.database.upsertBilibiliSubjectBinding(binding)
-    this.maybeBackfillProfile(this.requireSubject(parsed.subjectId), binding)
-    return this.toBinding(binding)
+    const persisted = this.options.database.findBilibiliSubjectBinding(parsed.subjectId)
+    if (!persisted) throw new Error("Subject binding storage result missing.")
+    return this.toBinding(persisted)
   }
 
-  updateLayout(input: UpdateBilibiliSubjectLayoutInput): BilibiliSubjectWidgetLayout[] {
-    const parsed = UpdateBilibiliSubjectLayoutInputSchema.parse(input)
+  updateLayout(input: Omit<UpdateBilibiliSubjectLayoutInput, "items"> & {
+    items: UpdateBilibiliSubjectLayoutInput["items"] | null
+  }): BilibiliSubjectWidgetLayout[] {
+    // The original service accepts an internal null list; IPC still validates
+    // the required array before this method, matching the mandatory HTTP body.
+    const parsed = UpdateBilibiliSubjectLayoutInputSchema.parse(
+      input.items === null ? { ...input, items: [] } : input
+    )
     this.requireSubject(parsed.subjectId)
     const timestamp = this.options.now().toISOString()
     const layouts = parsed.items.length === 0
@@ -216,11 +233,18 @@ export class BilibiliSubjectService {
   }
 
   workbenchV2(subjectId: string): BilibiliSubjectWorkbenchV2 {
+    const view = this.workbenchV3(subjectId)
+    return BilibiliSubjectWorkbenchV2Schema.parse({ ...view,
+      summary: safeLiveLegacyProjection(view.summary),
+      ...(view.bilibiliLiveRoom ? { bilibiliLiveRoom: safeLiveLegacyProjection(view.bilibiliLiveRoom) } : {}) })
+  }
+
+  workbenchV3(subjectId: string): BilibiliSubjectWorkbenchV3 {
     let subject = this.requireSubject(subjectId)
     const binding = this.options.database.findBilibiliSubjectBinding(subjectId)
     const user = this.resolveStoredUser(binding)
     const room = this.resolveStoredRoom(binding, user)
-    subject = this.maybeBackfillProfile(subject, binding)
+    subject = this.maybeBackfillWorkbenchAvatar(subject, user, room)
 
     const now = this.options.now()
     const from = new Date(now.getTime() - 24 * 60 * 60 * 1_000).toISOString()
@@ -234,16 +258,17 @@ export class BilibiliSubjectService {
     const firstFollower = followerSnapshots.find((item) => item.followerCount !== null)?.followerCount
     const firstOnline = liveSnapshots.find((item) => item.onlineCount !== null)?.onlineCount
     const followerDelta24h = followerDelta(user?.currentFollowerCount, firstFollower)
-    const onlineDelta24h = delta(room?.onlineCount, firstOnline)
+    const onlineDelta24h = followerDelta(room?.onlineCount, firstOnline)
     const onlinePeak24h = liveSnapshots
       .map((item) => item.onlineCount)
-      .filter((value): value is number => value !== null)
-      .reduce<number | undefined>((peak, value) => peak === undefined ? value : Math.max(peak, value), room?.onlineCount ?? undefined)
+      .filter((value): value is bigint => value !== null)
+      .reduce<bigint | undefined>((peak, value) => peak === undefined || value > peak ? value : peak, undefined)
+      ?? room?.onlineCount ?? undefined
     const danmu = this.danmuView(binding, room)
-    const recentEvents = this.recentEvents(subject, user, room)
+    const recentEvents = this.recentEvents(user, room)
     const healthScore = this.healthScore(subject, binding, user, room)
     const lastSuccessAt = maxIso(user?.lastSuccessAt, room?.lastSuccessAt)
-    const lastEventAt = recentEvents.map((event) => event.occurredAt).sort().at(-1) ?? null
+    const lastEventAt = recentEvents[0]?.occurredAt ?? null
     this.options.database.updateBilibiliSubjectHealth({
       subjectId,
       healthScore,
@@ -258,7 +283,7 @@ export class BilibiliSubjectService {
     if (room) enabledModuleCount += 1
     if (binding?.danmuEnabled) enabledModuleCount += 1
 
-    return BilibiliSubjectWorkbenchV2Schema.parse({
+    return BilibiliSubjectWorkbenchV3Schema.parse({
       subject: this.toSubject(subject, binding),
       ...(binding ? { bilibiliBinding: this.toBinding(binding) } : {}),
       ...(user ? { bilibiliUser: {
@@ -289,9 +314,9 @@ export class BilibiliSubjectService {
         ...(room.parentAreaName ? { parentAreaName: room.parentAreaName } : {}),
         liveStatus: room.liveStatus,
         ...(room.liveTime ? { liveTime: room.liveTime } : {}),
-        ...(room.onlineCount !== null ? { onlineCount: room.onlineCount } : {}),
+        ...(room.onlineCount !== null ? { onlineCount: room.onlineCount.toString() } : {}),
         ...(onlineDelta24h !== undefined ? { onlineDelta24h } : {}),
-        ...(onlinePeak24h !== undefined ? { onlinePeak24h } : {}),
+        ...(onlinePeak24h !== undefined ? { onlinePeak24h: onlinePeak24h.toString() } : {}),
         monitorStatus: room.monitorStatus,
         ...(room.lastSuccessAt ? { lastSuccessAt: room.lastSuccessAt } : {}),
         ...(room.nextCollectAt ? { nextCollectAt: room.nextCollectAt } : {}),
@@ -305,10 +330,10 @@ export class BilibiliSubjectService {
         ...(followerDelta24h !== undefined ? { followerDelta24h } : {}),
         ...(room ? { liveStatus: room.liveStatus } : {}),
         ...(room?.onlineCount !== null && room?.onlineCount !== undefined
-          ? { onlineCount: room.onlineCount }
+          ? { onlineCount: room.onlineCount.toString() }
           : {}),
         ...(onlineDelta24h !== undefined ? { onlineDelta24h } : {}),
-        ...(onlinePeak24h !== undefined ? { onlinePeak24h } : {}),
+        ...(onlinePeak24h !== undefined ? { onlinePeak24h: onlinePeak24h.toString() } : {}),
         ...(danmu.ratePerMinute !== undefined ? { danmuPerMinute: danmu.ratePerMinute } : {}),
         ...(danmu.last5MinutesCount !== undefined
           ? { danmuLast5Minutes: danmu.last5MinutesCount }
@@ -335,6 +360,11 @@ export class BilibiliSubjectService {
   }
 
   trendsV2(input: QueryBilibiliSubjectTrendsInput): BilibiliSubjectTrendV2 {
+    const view = this.trendsV3(input)
+    return BilibiliSubjectTrendV2Schema.parse({ ...view, points: safeLiveLegacyProjection(view.points) })
+  }
+
+  trendsV3(input: QueryBilibiliSubjectTrendsInput): BilibiliSubjectTrendV3 {
     const parsed = QueryBilibiliSubjectTrendsInputSchema.parse(input)
     this.requireSubject(parsed.subjectId)
     const binding = this.options.database.findBilibiliSubjectBinding(parsed.subjectId)
@@ -343,7 +373,7 @@ export class BilibiliSubjectService {
     const to = this.options.now()
     const from = new Date(to.getTime() - parseDurationMs(parsed.range))
     const bucketMs = Math.max(60_000, parseDurationMs(parsed.bucket))
-    const points = new Map<string, { bucketAt: string; followerCount?: string; liveOnlineCount?: number }>()
+    const points = new Map<string, { bucketAt: string; followerCount?: string; liveOnlineCount?: string }>()
     const pointAt = (capturedAt: string) => {
       const bucketAt = new Date(Math.floor(new Date(capturedAt).getTime() / bucketMs) * bucketMs)
         .toISOString()
@@ -360,7 +390,7 @@ export class BilibiliSubjectService {
       for (const snapshot of this.options.database.findBilibiliLiveRoomSnapshots(room.monitorId, {
         from: from.toISOString(), to: to.toISOString(), limit: 3_000
       })) {
-        if (snapshot.onlineCount !== null) pointAt(snapshot.capturedAt).liveOnlineCount = snapshot.onlineCount
+        if (snapshot.onlineCount !== null) pointAt(snapshot.capturedAt).liveOnlineCount = snapshot.onlineCount.toString()
       }
     }
     if (points.size === 0 && (user || room)) {
@@ -369,10 +399,10 @@ export class BilibiliSubjectService {
         point.followerCount = user.currentFollowerCount.toString()
       }
       if (room?.onlineCount !== null && room?.onlineCount !== undefined) {
-        point.liveOnlineCount = room.onlineCount
+        point.liveOnlineCount = room.onlineCount.toString()
       }
     }
-    return BilibiliSubjectTrendV2Schema.parse({
+    return BilibiliSubjectTrendV3Schema.parse({
       subjectId: parsed.subjectId,
       metrics: parsed.metrics,
       range: parsed.range,
@@ -381,6 +411,59 @@ export class BilibiliSubjectService {
     })
   }
 
+  private async prepareCreationBinding(payload: BindingPayload): Promise<() => ResolvedBinding> {
+    let user = payload.bilibiliUserMonitorId
+      ? this.options.database.findBilibiliFollowerMonitorById(payload.bilibiliUserMonitorId)
+      : payload.mid ? this.options.database.findBilibiliFollowerMonitorByMid(payload.mid) : undefined
+    if (payload.bilibiliUserMonitorId && !user) {
+      throw new CoreApplicationError("BILIBILI_FOLLOWER_NOT_FOUND", "B站粉丝监控用户不存在。")
+    }
+    let preparedUser: PreparedBilibiliFollowerMonitor | undefined
+    if (!user && payload.mid) preparedUser = await this.options.followers.prepareAddUserV2({ mid: payload.mid })
+    let mid = user?.mid ?? preparedUser?.mid ?? payload.mid
+
+    const room = payload.bilibiliLiveRoomMonitorId
+      ? this.options.database.findBilibiliLiveRoomById(payload.bilibiliLiveRoomMonitorId)
+      : payload.roomId ? this.options.database.findBilibiliLiveRoomByRoomId(payload.roomId)
+        : mid ? this.options.database.findBilibiliLiveRoomByUid(mid) : undefined
+    if (payload.bilibiliLiveRoomMonitorId && !room) {
+      throw new CoreApplicationError("BILIBILI_LIVE_ROOM_NOT_FOUND", "B站直播间监控不存在。")
+    }
+    let preparedRoom: PreparedBilibiliLiveMonitor | undefined
+    if (!room && payload.roomId) {
+      preparedRoom = await this.options.live.prepareAddRoomV2({ roomId: payload.roomId })
+    } else if (!room && mid) {
+      try {
+        preparedRoom = await this.options.live.prepareAddRoomV2({ uid: mid })
+      } catch (error) {
+        if (!(error instanceof CoreApplicationError)) throw error
+      }
+    }
+    mid ??= room?.uid ?? preparedRoom?.uid
+    if (!user && !preparedUser && mid) {
+      user = this.options.database.findBilibiliFollowerMonitorByMid(mid)
+      if (!user) preparedUser = await this.options.followers.prepareAddUserV2({ mid })
+    }
+    return () => {
+      const userId = preparedUser?.commit().id ?? user?.monitorId
+      const roomId = preparedRoom?.commit().id ?? room?.monitorId
+      const committedUser = userId ? this.options.database.findBilibiliFollowerMonitorById(userId) : undefined
+      const committedRoom = roomId ? this.options.database.findBilibiliLiveRoomById(roomId) : undefined
+      if (userId && !committedUser) {
+        throw new CoreApplicationError("BILIBILI_FOLLOWER_NOT_FOUND", "B站粉丝监控用户不存在。")
+      }
+      if (roomId && !committedRoom) {
+        throw new CoreApplicationError("BILIBILI_LIVE_ROOM_NOT_FOUND", "B站直播间监控不存在。")
+      }
+      return {
+        user: committedUser, room: committedRoom,
+        mid: committedUser?.mid ?? mid,
+        roomId: committedRoom?.roomId ?? payload.roomId
+      }
+    }
+  }
+
+  // Binding edits are intentionally not the original createSubject transaction.
   private async resolveBinding(payload: BindingPayload): Promise<ResolvedBinding> {
     let user = payload.bilibiliUserMonitorId
       ? this.options.database.findBilibiliFollowerMonitorById(payload.bilibiliUserMonitorId)
@@ -407,11 +490,11 @@ export class BilibiliSubjectService {
       throw new CoreApplicationError("BILIBILI_LIVE_ROOM_NOT_FOUND", "B站直播间监控不存在。")
     }
     if (!room && payload.roomId) {
-      const created = await this.options.live.addRoom({ roomId: payload.roomId })
+      const created = await this.options.live.addRoomV2({ roomId: payload.roomId })
       room = this.options.database.findBilibiliLiveRoomById(created.id)
     } else if (!room && mid) {
       try {
-        const created = await this.options.live.addRoom({ uid: mid })
+        const created = await this.options.live.addRoomV2({ uid: mid })
         room = this.options.database.findBilibiliLiveRoomById(created.id)
       } catch (error) {
         if (!(error instanceof CoreApplicationError)) throw error
@@ -460,14 +543,12 @@ export class BilibiliSubjectService {
   }
 
   private recentEvents(
-    subject: StoredBilibiliSubject,
     user: StoredBilibiliFollowerMonitor | undefined,
     room: StoredBilibiliLiveRoomMonitor | undefined
   ): BilibiliSubjectWorkbench["recentEvents"] {
     const events: BilibiliSubjectWorkbench["recentEvents"] = []
     if (room) {
-      for (const event of this.options.database.listBilibiliLiveStatusEvents(200)
-        .filter((item) => item.monitorId === room.monitorId).slice(0, 6)) {
+      for (const event of this.options.database.listBilibiliLiveStatusEvents(6, room.monitorId)) {
         const title = event.eventType === "LIVE_STARTED"
           ? "直播间已开播"
           : event.eventType === "LIVE_ENDED"
@@ -478,7 +559,8 @@ export class BilibiliSubjectService {
         events.push({
           eventType: event.eventType,
           title,
-          description: event.titleAfter || `在线/热度 ${event.onlineCount ?? "--"}`,
+          description: hasLiveSnapshotText(event.titleAfter)
+            ? event.titleAfter : `在线/热度 ${event.onlineCount}`,
           source: "bilibili-live",
           occurredAt: event.occurredAt,
           level: "info"
@@ -486,18 +568,20 @@ export class BilibiliSubjectService {
       }
       if (room.lastErrorAt) events.push({
         eventType: "LIVE_COLLECT_ERROR", title: "直播间采集异常",
-        description: room.lastErrorMessage ?? "未知错误", source: "bilibili-live",
+        ...(room.lastErrorMessage !== null ? { description: room.lastErrorMessage } : {}),
+        source: "bilibili-live",
         occurredAt: room.lastErrorAt, level: "warning"
       })
       if (room.lastSuccessAt) events.push({
         eventType: "LIVE_COLLECT_OK", title: "直播间采集成功",
-        description: room.title ?? room.uname, source: "bilibili-live",
+        ...(room.title !== null ? { description: room.title } : {}), source: "bilibili-live",
         occurredAt: room.lastSuccessAt, level: "success"
       })
     }
     if (user?.lastErrorAt) events.push({
       eventType: "FOLLOWER_COLLECT_ERROR", title: "粉丝数采集异常",
-      description: user.lastErrorMessage ?? "未知错误", source: "bilibili-follower",
+      ...(user.lastErrorMessage !== null ? { description: user.lastErrorMessage } : {}),
+      source: "bilibili-follower",
       occurredAt: user.lastErrorAt, level: "warning"
     })
     if (user?.lastSuccessAt) events.push({
@@ -508,9 +592,9 @@ export class BilibiliSubjectService {
     if (events.length === 0) events.push({
       eventType: "SUBJECT_CREATED", title: "工作台已创建",
       description: "绑定 B站粉丝监控或直播间监控后会显示采集事件。",
-      source: "subject", occurredAt: subject.createdAt, level: "info"
+      source: "subject", occurredAt: this.options.now().toISOString(), level: "info"
     })
-    return events.sort((left, right) => right.occurredAt.localeCompare(left.occurredAt)).slice(0, 8)
+    return events.sort((left, right) => compareLiveSnapshotTime(right.occurredAt, left.occurredAt)).slice(0, 8)
   }
 
   private healthScore(
@@ -560,13 +644,48 @@ export class BilibiliSubjectService {
 
   private maybeBackfillProfile(
     subject: StoredBilibiliSubject,
-    binding = this.options.database.findBilibiliSubjectBinding(subject.subjectId)
+    binding: StoredBilibiliSubjectBinding | undefined
   ): StoredBilibiliSubject {
-    if (!binding || subject.avatarUrl) return subject
-    const user = this.resolveStoredUser(binding)
-    const room = this.resolveStoredRoom(binding, user)
-    const avatarUrl = user?.avatarUrl ?? room?.faceUrl
-    if (!avatarUrl) return subject
+    if (!binding || hasLiveSnapshotText(subject.avatarUrl)) return subject
+    // SubjectService uses bound monitor IDs only, unlike the workbench lookup.
+    let avatarUrl: string | null = null
+    let displayName = subject.displayName
+    if (binding.bilibiliUserMonitorId) {
+      const user = this.options.database.findBilibiliFollowerMonitorById(binding.bilibiliUserMonitorId)
+      if (user) {
+        avatarUrl = user.avatarUrl
+        if (!hasLiveSnapshotText(displayName)) displayName = user.nickname
+      }
+    }
+    // Source checks null here, not blank: even an empty user avatar wins.
+    if (avatarUrl === null && binding.bilibiliLiveRoomMonitorId) {
+      const room = this.options.database.findBilibiliLiveRoomById(binding.bilibiliLiveRoomMonitorId)
+      if (room) {
+        avatarUrl = room.faceUrl
+        if (!hasLiveSnapshotText(displayName)) displayName = room.uname
+      }
+    }
+    if (avatarUrl === null) return subject
+    return this.options.database.updateBilibiliSubject({
+      subjectId: subject.subjectId,
+      displayName,
+      avatarUrl,
+      remark: subject.remark,
+      tags: subject.tags,
+      updatedAt: this.options.now().toISOString()
+    }) ?? subject
+  }
+
+  private maybeBackfillWorkbenchAvatar(
+    subject: StoredBilibiliSubject,
+    user: StoredBilibiliFollowerMonitor | undefined,
+    room: StoredBilibiliLiveRoomMonitor | undefined
+  ): StoredBilibiliSubject {
+    if (hasLiveSnapshotText(subject.avatarUrl)) return subject
+    const avatarUrl = hasLiveSnapshotText(user?.avatarUrl)
+      ? user.avatarUrl : hasLiveSnapshotText(room?.faceUrl) ? room.faceUrl : null
+    if (avatarUrl === null) return subject
+    // SubjectWorkbenchService only backfills the avatar, never the name.
     return this.options.database.updateBilibiliSubject({
       subjectId: subject.subjectId,
       avatarUrl,
@@ -587,7 +706,7 @@ export class BilibiliSubjectService {
     return BilibiliSubjectSchema.parse({
       id: subject.subjectId,
       displayName: subject.displayName,
-      ...(subject.avatarUrl ? { avatarUrl: subject.avatarUrl } : {}),
+      ...(subject.avatarUrl !== null ? { avatarUrl: subject.avatarUrl } : {}),
       ...(subject.remark ? { remark: subject.remark } : {}),
       tags: subject.tags,
       monitorStatus: subject.monitorStatus,
@@ -612,7 +731,7 @@ export class BilibiliSubjectService {
         : {}),
       ...(binding.mid ? { mid: binding.mid } : {}),
       ...(binding.roomId ? { roomId: binding.roomId } : {}),
-      enabledCapabilities: binding.enabledCapabilities as Array<"follower" | "live_heat">,
+      enabledCapabilities: binding.enabledCapabilities,
       danmuEnabled: binding.danmuEnabled,
       createdAt: binding.createdAt,
       updatedAt: binding.updatedAt
@@ -632,7 +751,7 @@ export class BilibiliSubjectService {
     subjectId: string,
     resolved: ResolvedBinding,
     settings: {
-      enabledCapabilities?: Array<"follower" | "live_heat"> | undefined
+      enabledCapabilities?: BilibiliSubjectBinding["enabledCapabilities"] | undefined
       danmuEnabled?: boolean | undefined
     },
     timestamp: string,
@@ -641,10 +760,10 @@ export class BilibiliSubjectService {
     return {
       bindingId: existing?.bindingId ?? this.options.idFactory(),
       subjectId,
-      bilibiliUserMonitorId: resolved.user?.monitorId ?? null,
-      bilibiliLiveRoomMonitorId: resolved.room?.monitorId ?? null,
-      mid: resolved.mid ?? null,
-      roomId: resolved.roomId ?? null,
+      bilibiliUserMonitorId: resolved.user?.monitorId ?? existing?.bilibiliUserMonitorId ?? null,
+      bilibiliLiveRoomMonitorId: resolved.room?.monitorId ?? existing?.bilibiliLiveRoomMonitorId ?? null,
+      mid: resolved.mid ?? existing?.mid ?? null,
+      roomId: resolved.roomId ?? existing?.roomId ?? null,
       enabledCapabilities: settings.enabledCapabilities ?? ["follower", "live_heat"],
       danmuEnabled: settings.danmuEnabled ?? false,
       createdAt: existing?.createdAt ?? timestamp,
@@ -670,29 +789,47 @@ export class BilibiliSubjectService {
     resolved: ResolvedBinding | undefined
   ): string {
     return this.blankToNull(requested)
-      // Source SubjectService tests presence but returns the stored nickname
-      // itself. It is already non-Java-blank and VARCHAR-validated by followers.
-      ?? resolved?.user?.nickname
-      ?? this.blankToNull(resolved?.room?.uname)
+      // The original checks presence but returns the raw stored profile text.
+      ?? (this.blankToNull(resolved?.user?.nickname) !== null ? resolved?.user?.nickname : undefined)
+      ?? (this.blankToNull(resolved?.room?.uname) !== null ? resolved?.room?.uname : undefined)
       ?? (resolved?.mid ? `Bilibili UID ${resolved.mid}` : undefined)
       ?? (() => { throw new CoreApplicationError("BAD_REQUEST", "用户监控名称不能为空。") })()
   }
 
-  private hasBindingIdentity(payload: BindingPayload): boolean {
+  private resolveAvatarUrl(
+    requested: string | undefined,
+    resolved: ResolvedBinding | undefined
+  ): string | null {
+    const avatarUrl = this.blankToNull(requested)
+    if (avatarUrl !== null || !resolved) return avatarUrl
+    if (this.blankToNull(resolved.user?.avatarUrl) !== null) return resolved.user!.avatarUrl
+    if (this.blankToNull(resolved.room?.faceUrl) !== null) return resolved.room!.faceUrl
+    return null
+  }
+
+  private normalizeDisplayName(value: string): string {
+    const normalized = this.blankToNull(value)
+    if (normalized === null) throw new CoreApplicationError("BAD_REQUEST", "用户监控名称不能为空。")
+    return normalized
+  }
+
+  private hasBindingPayload(payload: BindingPayload): boolean {
     return Boolean(
       payload.bilibiliUserMonitorId
       || payload.bilibiliLiveRoomMonitorId
       || payload.mid
       || payload.roomId
-    )
+    ) || payload.danmuEnabled !== undefined
   }
 
-  private normalizeTags(tags: string[]): string[] {
-    return [...new Set(tags.map((tag) => tag.trim()).filter(Boolean))].slice(0, 12)
+  private normalizeTags(tags: Array<string | null>): string[] {
+    return [...new Set(tags.map((tag) => this.blankToNull(tag))
+      .filter((tag): tag is string => tag !== null))].slice(0, 12)
   }
 
-  private blankToNull(value: string | undefined): string | null {
-    const normalized = value?.trim()
+  private blankToNull(value: string | null | undefined): string | null {
+    // java.lang.String.trim removes code units U+0000..U+0020 only.
+    const normalized = value?.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/gu, "")
     return normalized ? normalized : null
   }
 
@@ -716,12 +853,6 @@ export class BilibiliSubjectService {
       createdAt: timestamp
     }
   }
-}
-
-function delta(current: number | null | undefined, previous: number | null | undefined): number | undefined {
-  return current === null || current === undefined || previous === null || previous === undefined
-    ? undefined
-    : current - previous
 }
 
 function followerDelta(current: bigint | null | undefined, previous: bigint | null | undefined): string | undefined {

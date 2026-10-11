@@ -1,0 +1,66 @@
+{
+  "create": {
+    "displayName": null,
+    "avatarUrl": " \tavatars/custom.svg\r\n",
+    "tags": [
+      null,
+      " \t",
+      " 关注 ",
+      "关注",
+      "source-tag-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789",
+      "\u00a0标签\u00a0",
+      "tag-04",
+      "tag-05",
+      "tag-06",
+      "tag-07",
+      "tag-08",
+      "tag-09",
+      "tag-10",
+      "tag-11",
+      "tag-12",
+      "tag-13"
+    ],
+    "bilibiliUserMonitorId": null,
+    "bilibiliLiveRoomMonitorId": null,
+    "mid": "99",
+    "roomId": null,
+    "danmuEnabled": true
+  },
+  "remarkUnit": "备注",
+  "remarkRepeat": 1100,
+  "update": {
+    "displayName": " \t\u00a0新工作台\u00a0\r\n",
+    "avatarUrl": null,
+    "remark": null,
+    "tags": null,
+    "enabled": null
+  },
+  "expected": {
+    "displayName": "无直播用户",
+    "avatarUrl": "avatars/custom.svg",
+    "tags": [
+      "关注",
+      "source-tag-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789",
+      "\u00a0标签\u00a0",
+      "tag-04",
+      "tag-05",
+      "tag-06",
+      "tag-07",
+      "tag-08",
+      "tag-09",
+      "tag-10",
+      "tag-11",
+      "tag-12"
+    ]
+  },
+  "expectedUpdatedName": "\u00a0新工作台\u00a0",
+  "bindingUpdate": {
+    "bilibiliUserMonitorId": null,
+    "bilibiliLiveRoomMonitorId": null,
+    "mid": null,
+    "roomId": null,
+    "enabledCapabilities": [" follower ", null, "extension.custom", "follower", "follower", ""],
+    "danmuEnabled": null
+  },
+  "expectedCapabilities": [" follower ", null, "extension.custom", "follower", "follower", ""]
+}

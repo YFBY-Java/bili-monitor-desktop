@@ -1,65 +1,43 @@
-import {
-  BilibiliLiveFetchedOptionalSnapshotSchema,
-  BilibiliLiveFetchedSnapshotSchema,
-  BilibiliLiveFetchedStatusBatchSchema,
-  BilibiliLiveRoomRequestSchema,
-  BilibiliLiveStatusByUidsRequestSchema,
-  BilibiliLiveUidRequestSchema,
-  type BilibiliLiveFetchedOptionalSnapshot,
-  type BilibiliLiveFetchedSnapshot,
-  type BilibiliLiveFetchedStatusBatch,
-  type BilibiliLiveRoomRequest,
-  type BilibiliLiveStatusByUidsRequest,
-  type BilibiliLiveUidRequest,
-  type BilibiliLiveHttpConfiguration
-} from "@bmd/contracts"
-
+import { BilibiliLiveFetchedOptionalSnapshotSchema, BilibiliLiveFetchedSnapshotSchema, BilibiliLiveFetchedStatusBatchSchema,
+  BilibiliLiveFetchedOptionalSnapshotV2Schema, BilibiliLiveFetchedSnapshotV2Schema, BilibiliLiveFetchedStatusBatchV2Schema,
+  BilibiliLiveRoomRequestSchema, BilibiliLiveStatusByUidsRequestSchema, BilibiliLiveUidRequestSchema,
+  type BilibiliLiveRoomRequest, type BilibiliLiveStatusByUidsRequest, type BilibiliLiveUidRequest,
+  type BilibiliLiveHttpConfiguration } from "@bmd/contracts"
 import type { WorkerRequestTransport } from "./bilibili-follower-worker-source"
 
 export class BilibiliLiveWorkerSource {
   constructor(private readonly transport: WorkerRequestTransport,
     private readonly httpConfiguration?: BilibiliLiveHttpConfiguration) {}
 
-  fetchRoomInit(request: BilibiliLiveRoomRequest): Promise<BilibiliLiveFetchedSnapshot> {
-    return this.fetchRoom("bilibili.live.fetch-room-init", request)
+  async fetchRoomInit(request: BilibiliLiveRoomRequest) {
+    return BilibiliLiveFetchedSnapshotSchema.parse(await this.fetch("room-init", BilibiliLiveRoomRequestSchema.parse(this.configuredRequest(request)), false))
   }
-
-  fetchRoomInfo(request: BilibiliLiveRoomRequest): Promise<BilibiliLiveFetchedSnapshot> {
-    return this.fetchRoom("bilibili.live.fetch-room-info", request)
+  async fetchRoomInfo(request: BilibiliLiveRoomRequest) {
+    return BilibiliLiveFetchedSnapshotSchema.parse(await this.fetch("room-info", BilibiliLiveRoomRequestSchema.parse(this.configuredRequest(request)), false))
   }
-
-  async fetchRoomInfoOld(
-    request: BilibiliLiveUidRequest
-  ): Promise<BilibiliLiveFetchedOptionalSnapshot> {
-    const payload = BilibiliLiveUidRequestSchema.parse(this.configuredRequest(request))
-    return BilibiliLiveFetchedOptionalSnapshotSchema.parse(
-      await this.transport.request("bilibili.live.fetch-room-info-old", payload)
-    )
+  async fetchRoomInfoOld(request: BilibiliLiveUidRequest) {
+    return BilibiliLiveFetchedOptionalSnapshotSchema.parse(await this.fetch("room-info-old", BilibiliLiveUidRequestSchema.parse(this.configuredRequest(request)), false))
   }
-
-  async fetchStatusByUids(
-    request: BilibiliLiveStatusByUidsRequest
-  ): Promise<BilibiliLiveFetchedStatusBatch> {
-    const payload = BilibiliLiveStatusByUidsRequestSchema.parse(this.configuredRequest(request))
-    return BilibiliLiveFetchedStatusBatchSchema.parse(
-      await this.transport.request("bilibili.live.fetch-status-by-uids", payload)
-    )
+  async fetchStatusByUids(request: BilibiliLiveStatusByUidsRequest) {
+    return BilibiliLiveFetchedStatusBatchSchema.parse(await this.fetch("status-by-uids", BilibiliLiveStatusByUidsRequestSchema.parse(this.configuredRequest(request)), false))
   }
-
-  async stop(): Promise<void> {
-    await this.transport.stop?.()
+  async fetchRoomInitV2(request: BilibiliLiveRoomRequest) {
+    return BilibiliLiveFetchedSnapshotV2Schema.parse(await this.fetch("room-init", BilibiliLiveRoomRequestSchema.parse(this.configuredRequest(request)), true))
   }
-
-  private async fetchRoom(
-    type: "bilibili.live.fetch-room-init" | "bilibili.live.fetch-room-info",
-    request: BilibiliLiveRoomRequest
-  ): Promise<BilibiliLiveFetchedSnapshot> {
-    const payload = BilibiliLiveRoomRequestSchema.parse(this.configuredRequest(request))
-    return BilibiliLiveFetchedSnapshotSchema.parse(
-      await this.transport.request(type, payload)
-    )
+  async fetchRoomInfoV2(request: BilibiliLiveRoomRequest) {
+    return BilibiliLiveFetchedSnapshotV2Schema.parse(await this.fetch("room-info", BilibiliLiveRoomRequestSchema.parse(this.configuredRequest(request)), true))
   }
+  async fetchRoomInfoOldV2(request: BilibiliLiveUidRequest) {
+    return BilibiliLiveFetchedOptionalSnapshotV2Schema.parse(await this.fetch("room-info-old", BilibiliLiveUidRequestSchema.parse(this.configuredRequest(request)), true))
+  }
+  async fetchStatusByUidsV2(request: BilibiliLiveStatusByUidsRequest) {
+    return BilibiliLiveFetchedStatusBatchV2Schema.parse(await this.fetch("status-by-uids", BilibiliLiveStatusByUidsRequestSchema.parse(this.configuredRequest(request)), true))
+  }
+  async stop(): Promise<void> { await this.transport.stop?.() }
 
+  private fetch(endpoint: string, request: object, exact: boolean) {
+    return this.transport.request(`bilibili.live.fetch-${endpoint}${exact ? ".v2" : ""}`, request)
+  }
   private configuredRequest<T>(request: T) {
     return this.httpConfiguration ? { ...request, httpConfiguration: this.httpConfiguration } : request
   }

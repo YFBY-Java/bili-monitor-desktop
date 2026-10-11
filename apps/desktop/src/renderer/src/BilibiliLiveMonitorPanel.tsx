@@ -1,4 +1,4 @@
-import type { BilibiliLiveRoom } from "@bmd/contracts"
+import type { BilibiliLiveRoomV2 } from "@bmd/contracts"
 import { ChevronDown, ExternalLink, Pause, Play, Radio, RefreshCcw, Trash2, TrendingUp } from "lucide-react"
 import { useEffect, useState, type ReactNode } from "react"
 import type { BilibiliLiveWorkspacePresentationProps } from "./BilibiliLiveWorkspace"
@@ -7,7 +7,7 @@ import { clampLiveInterval, formatLiveDateTime, formatLiveDelta, formatLiveShort
 import "./live-monitor-panel.css"
 
 // Owned by Workspace, not a tab/card: switching tabs or collapsing must not erase drafts.
-export function useLiveMonitorPanel(rooms: BilibiliLiveRoom[], revision: number | undefined) {
+export function useLiveMonitorPanel(rooms: BilibiliLiveRoomV2[], revision: number | undefined) {
   const [now, setNow] = useState(Date.now)
   const [expandedId, setExpandedId] = useState<string | undefined>(rooms[0]?.id)
   const [drafts, setDrafts] = useState<Record<string, number>>({})
@@ -33,7 +33,7 @@ export function useLiveMonitorPanel(rooms: BilibiliLiveRoom[], revision: number 
     const { [id]: _, ...rest } = current
     return rest
   })
-  const editInterval = (room: BilibiliLiveRoom, value: number) => {
+  const editInterval = (room: BilibiliLiveRoomV2, value: number) => {
     const next = clampLiveInterval(value)
     if (next === (savedDrafts[room.id] ?? room.intervalSeconds)) clearDraft(room.id)
     else setDrafts(current => ({ ...current, [room.id]: next }))
@@ -43,21 +43,21 @@ export function useLiveMonitorPanel(rooms: BilibiliLiveRoom[], revision: number 
     // A successful command is not undone by a failed overview read.
     setSavedDrafts(current => ({ ...current, [id]: value }))
   }
-  const isDirty = (room: BilibiliLiveRoom) => (drafts[room.id] ?? savedDrafts[room.id] ?? room.intervalSeconds)
+  const isDirty = (room: BilibiliLiveRoomV2) => (drafts[room.id] ?? savedDrafts[room.id] ?? room.intervalSeconds)
     !== (savedDrafts[room.id] ?? room.intervalSeconds)
   return { now, expandedId, setExpandedId, drafts: { ...savedDrafts, ...drafts }, clearDraft, editInterval, markSaved, isDirty }
 }
 
 export function BilibiliLiveMonitorPanel({ rooms, state, selectedTrendIds, busyRoomIds, roomActionErrors,
   onToggleTrend, onAction, renderRoomData }: {
-  rooms: BilibiliLiveRoom[]
+  rooms: BilibiliLiveRoomV2[]
   state: ReturnType<typeof useLiveMonitorPanel>
   selectedTrendIds: string[]
   busyRoomIds: string[]
   roomActionErrors: Record<string, string | undefined>
   onToggleTrend: (id: string) => void
   onAction: BilibiliLiveWorkspacePresentationProps["onRoomAction"]
-  renderRoomData: ((room: BilibiliLiveRoom) => ReactNode) | undefined
+  renderRoomData: ((room: BilibiliLiveRoomV2) => ReactNode) | undefined
 }) {
   const room = rooms.find(item => item.id === state.expandedId)
   return <div className="live-monitor-panel">
@@ -80,7 +80,7 @@ export function BilibiliLiveMonitorPanel({ rooms, state, selectedTrendIds, busyR
 }
 
 function LiveRoomTile({ room, now, expanded, selected, locked, busy, onExpand, onToggleTrend }: {
-  room: BilibiliLiveRoom; now: number; expanded: boolean; selected: boolean; locked: boolean; busy: boolean
+  room: BilibiliLiveRoomV2; now: number; expanded: boolean; selected: boolean; locked: boolean; busy: boolean
   onExpand: () => void; onToggleTrend: () => void
 }) {
   const status = liveMonitorStatus(room), schedule = liveCollectionSchedule(room, now)
@@ -94,8 +94,8 @@ function LiveRoomTile({ room, now, expanded, selected, locked, busy, onExpand, o
         <ChevronDown size={17} aria-hidden="true" />
       </div>
       <div className="live-monitor-tile-title"><span title={room.title || "未获取到房间标题"}>{room.title || "未获取到房间标题"}</span><span className={`live-monitor-status is-${status.tone}`}>{status.label}</span></div>
-      <div className="live-monitor-metrics"><div><span>在线/热度</span><strong title={room.onlineCount?.toLocaleString("zh-CN")}>{formatLiveShortCount(room.onlineCount)}</strong></div>
-        <div><span>变化</span><strong>{formatLiveDelta(room.onlineDelta)}</strong></div></div>
+      <div className="live-monitor-metrics"><div><span>在线/热度</span><strong title={room.onlineCount}>{formatLiveShortCount(room.onlineCount)}</strong></div>
+        <div><span>变化</span><strong title={room.onlineDelta} aria-label={room.onlineDelta === undefined ? undefined : `变化 ${room.onlineDelta}`}>{formatLiveDelta(room.onlineDelta)}</strong></div></div>
       <span className="live-monitor-next">{schedule.brief}</span>
     </button>
     <div className="live-monitor-rhythm" role="progressbar" aria-label={`${room.uname}采集节奏`} aria-valuemin={0} aria-valuemax={100}
@@ -106,7 +106,7 @@ function LiveRoomTile({ room, now, expanded, selected, locked, busy, onExpand, o
 }
 
 function LiveRoomDetail({ room, now, draft, dirty, busy, actionError, onAction, onEdit, onSaved, onDeleted }: {
-  room: BilibiliLiveRoom; now: number; draft: number; dirty: boolean; busy: boolean; actionError: string | undefined
+  room: BilibiliLiveRoomV2; now: number; draft: number; dirty: boolean; busy: boolean; actionError: string | undefined
   onAction: BilibiliLiveWorkspacePresentationProps["onRoomAction"]; onEdit: (value: number) => void; onSaved: (value: number) => void; onDeleted: () => void
 }) {
   const status = liveMonitorStatus(room)
@@ -140,7 +140,7 @@ function LiveRoomDetail({ room, now, draft, dirty, busy, actionError, onAction, 
     {room.lastErrorType && <p className="live-monitor-error">{room.lastErrorType}: {room.lastErrorMessage || "采集失败"}</p>}
     {actionError && <p className="inline-error" role="alert">{actionError}</p>}
     {busy && <p role="status">正在处理，请稍候…</p>}
-    <dl className="live-monitor-facts">{facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd title={value}>{value}</dd></div>)}</dl>
+    <dl className="live-monitor-facts">{facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd title={label === "关注数" ? room.attentionCount : label === "在线/热度" ? room.onlineCount : value}>{value}</dd></div>)}</dl>
     <div className="live-monitor-detail-bottom"><div className="live-monitor-interval">
       <label htmlFor={`interval-${room.id}`}>{dirty ? "采集间隔（未保存）" : "采集间隔"}</label>
       <input id={`interval-${room.id}`} type="text" inputMode="numeric" role="spinbutton" aria-valuemin={1} aria-valuemax={2_592_000}

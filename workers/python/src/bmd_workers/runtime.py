@@ -22,12 +22,15 @@ from .bilibili_follower import (
     RELATION_STAT_ENDPOINT,
     BilibiliCrawlerError,
     BilibiliFollowerFetchRequest,
+    _write_object_sync,
     fetch_follower_endpoint,
     fetch_follower_profile,
     legacy_follower_result,
 )
 from .bilibili_follower_http import BilibiliFollowerHttpConfiguration
+from .bilibili_follower_response_text import FollowerResponseConversionError
 from .bilibili_follower_v2 import (
+    BilibiliFollowerFetchFailureV2,
     BilibiliFollowerFetchRequestV2,
     fetch_follower_endpoint_v2,
     fetch_follower_profile_v2,
@@ -44,7 +47,9 @@ from .bilibili_live import (
     fetch_live_endpoint,
 )
 from .bilibili_live_contract import validate_live_result
+from .bilibili_platform_account import BilibiliPlatformAccountFetchRequestV1
 from .bilibili_rank import BilibiliLiveRankRequest, fetch_live_rank
+from .bilibili_rank_v2_contract import rank_wire_result
 from .douyin_oauth import DouyinOAuthError, request_oauth
 from .protocol import RuntimeEnvelope
 from .request_lifetime import handle_with_liveness
@@ -113,11 +118,17 @@ class WorkerRuntime:
                     "bilibili.follower.fetch-card.v2",
                     "bilibili.follower.fetch-relation-stat.v2",
                     "bilibili.follower.fetch-profile.v2",
+                    "bilibili.platform.fetch-account.v1",
                     "bilibili.live.fetch-room-init",
                     "bilibili.live.fetch-room-info",
                     "bilibili.live.fetch-room-info-old",
                     "bilibili.live.fetch-status-by-uids",
+                    "bilibili.live.fetch-room-init.v2",
+                    "bilibili.live.fetch-room-info.v2",
+                    "bilibili.live.fetch-room-info-old.v2",
+                    "bilibili.live.fetch-status-by-uids.v2",
                     "bilibili.live.rank.fetch",
+                    "bilibili.live.rank.fetch.v2",
                 ],
                 "data": [],
             }
@@ -133,6 +144,7 @@ class WorkerRuntime:
             "bilibili.follower.fetch-card.v2",
             "bilibili.follower.fetch-relation-stat.v2",
             "bilibili.follower.fetch-profile.v2",
+            "bilibili.platform.fetch-account.v1",
         }:
             if self.role != "crawler":
                 return self._response(
@@ -144,12 +156,17 @@ class WorkerRuntime:
                         "retryable": False,
                     },
                 )
-            is_v2 = request.type.endswith(".v2")
+            is_platform_account = request.type == "bilibili.platform.fetch-account.v1"
+            is_v2 = is_platform_account or request.type.endswith(".v2")
             operation = request.type.removesuffix(".v2")
             payload = (
-                BilibiliFollowerFetchRequestV2.model_validate(request.payload)
-                if is_v2
-                else BilibiliFollowerFetchRequest.model_validate(request.payload)
+                BilibiliPlatformAccountFetchRequestV1.model_validate(request.payload)
+                if is_platform_account
+                else (
+                    BilibiliFollowerFetchRequestV2.model_validate(request.payload)
+                    if is_v2
+                    else BilibiliFollowerFetchRequest.model_validate(request.payload)
+                )
             )
             endpoint = (
                 CARD_ENDPOINT
@@ -175,6 +192,16 @@ class WorkerRuntime:
                     if is_v2
                     else legacy_follower_result(result, endpoint, profile=profile)
                 )
+            except FollowerResponseConversionError as error:
+                return self._response(
+                    request,
+                    "worker.error",
+                    {
+                        "code": "BILIBILI_RESPONSE_CONVERSION_ERROR",
+                        "message": str(error),
+                        "retryable": False,
+                    },
+                )
             except BilibiliCrawlerError as error:
                 error_payload: dict[str, object] = {
                     "code": error.code,
@@ -186,6 +213,24 @@ class WorkerRuntime:
                     error_payload["statusCode"] = error.status_code
                 if error.bili_code is not None:
                     error_payload["biliCode"] = error.bili_code
+                if (
+                    isinstance(
+                        payload,
+                        (BilibiliFollowerFetchRequestV2, BilibiliPlatformAccountFetchRequestV1),
+                    )
+                    and payload.capture_failure_evidence
+                    and not profile
+                    and error.raw_bytes is not None
+                ):
+                    # Generic run-once preserves the original failed response
+                    # through a CAS reference, not sensitive inline NDJSON.
+                    data_directory = self.data_directory or _data_directory_from_environment()
+                    error_payload["evidenceObject"] = await asyncio.to_thread(
+                        _write_object_sync, data_directory, error.raw_bytes, error.raw_media_type
+                    )
+                    error_payload = BilibiliFollowerFetchFailureV2.model_validate(
+                        error_payload
+                    ).model_dump(by_alias=True, exclude_none=True)
                 return self._response(request, "worker.error", error_payload)
             return self._response(request, f"{request.type}.result", result)
         if request.type in {
@@ -221,7 +266,7 @@ class WorkerRuntime:
                     },
                 )
             return self._response(request, f"{request.type}.result", result)
-        if request.type == "bilibili.live.rank.fetch":
+        if request.type in {"bilibili.live.rank.fetch", "bilibili.live.rank.fetch.v2"}:
             if self.role != "crawler":
                 return self._response(
                     request,
@@ -237,6 +282,17 @@ class WorkerRuntime:
             try:
                 result = await self.rank_fetcher(
                     rank_payload.model_dump(by_alias=True), data_directory
+                )
+                result = rank_wire_result(result, request.type.endswith(".v2"))
+            except FollowerResponseConversionError as error:
+                return self._response(
+                    request,
+                    "worker.error",
+                    {
+                        "code": "BILIBILI_RESPONSE_CONVERSION_ERROR",
+                        "message": str(error),
+                        "retryable": False,
+                    },
                 )
             except BilibiliCrawlerError as error:
                 error_payload = {
@@ -256,6 +312,10 @@ class WorkerRuntime:
             "bilibili.live.fetch-room-info",
             "bilibili.live.fetch-room-info-old",
             "bilibili.live.fetch-status-by-uids",
+            "bilibili.live.fetch-room-init.v2",
+            "bilibili.live.fetch-room-info.v2",
+            "bilibili.live.fetch-room-info-old.v2",
+            "bilibili.live.fetch-status-by-uids.v2",
         }:
             if self.role != "crawler":
                 return self._response(
@@ -275,7 +335,8 @@ class WorkerRuntime:
                 "bilibili.live.fetch-room-info-old": ROOM_INFO_OLD_ENDPOINT,
                 "bilibili.live.fetch-room-init": ROOM_INIT_ENDPOINT,
                 "bilibili.live.fetch-room-info": ROOM_INFO_ENDPOINT,
-            }[request.type]
+            }[request.type.removesuffix(".v2")]
+            exact = request.type.endswith(".v2")
             try:
                 if endpoint == STATUS_BY_UIDS_ENDPOINT:
                     live_payload = BilibiliLiveStatusRequest.model_validate(request.payload)
@@ -298,10 +359,23 @@ class WorkerRuntime:
             try:
                 result = await self.live_fetcher(
                     endpoint,
-                    live_payload.model_dump(by_alias=True, exclude_none=True),
+                    {
+                        **live_payload.model_dump(by_alias=True, exclude_none=True),
+                        **({"_long64": True} if exact else {}),
+                    },
                     data_directory,
                 )
-                result = validate_live_result(endpoint, result)
+                result = validate_live_result(endpoint, result, exact)
+            except FollowerResponseConversionError as error:
+                return self._response(
+                    request,
+                    "worker.error",
+                    {
+                        "code": "BILIBILI_RESPONSE_CONVERSION_ERROR",
+                        "message": str(error),
+                        "retryable": False,
+                    },
+                )
             except BilibiliCrawlerError as error:
                 error_payload = {
                     "code": error.code,

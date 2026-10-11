@@ -1,10 +1,10 @@
-import type { BilibiliLiveRoom, DesktopBridge } from "@bmd/contracts"
+import type { BilibiliLiveRoomV2, DesktopBridge } from "@bmd/contracts"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { liveOverviewKey, type LiveOverview } from "./useLiveOverviewQuery"
 
 // Original queueTrendRefresh: merge selection clicks for 180ms; rereads refresh immediately.
-export function useLiveTrendQuery(bridge: DesktopBridge, rooms: BilibiliLiveRoom[], revision: number, selectedIds: string[], deletedRoomIds: ReadonlySet<string>) {
+export function useLiveTrendQuery(bridge: DesktopBridge, rooms: BilibiliLiveRoomV2[], revision: number, selectedIds: string[], deletedRoomIds: ReadonlySet<string>) {
   const queryClient = useQueryClient(), key = selectedIds.join(",")
   // Identity marks this selection occurrence, including A→B→A within the debounce window.
   const queued = useMemo(() => ({ key, revision }), [key, revision])
@@ -29,7 +29,7 @@ export function useLiveTrendQuery(bridge: DesktopBridge, rooms: BilibiliLiveRoom
       const currentRooms = queryClient.getQueryData<LiveOverview>(liveOverviewKey)?.roomList.items ?? []
       const currentIds = ids.filter(id => !deletedRoomIds.has(id) && currentRooms.some(room => room.id === id))
       if (!currentIds.length) return []
-      const result = await bridge.bilibiliLive.trends({ roomMonitorIds: currentIds, limitPerRoom: 500 })
+      const result = await bridge.bilibiliLiveV2.trends({ roomMonitorIds: currentIds, limitPerRoom: 500 })
       // Native bridge reads cannot be interrupted; ignore an obsolete reply after it returns.
       signal.throwIfAborted()
       return result

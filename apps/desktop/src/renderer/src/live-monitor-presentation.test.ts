@@ -1,10 +1,10 @@
-import type { BilibiliLiveRoom } from "@bmd/contracts"
+import type { BilibiliLiveRoomV2 } from "@bmd/contracts"
 import { describe, expect, it } from "vitest"
 import { clampLiveInterval, formatLiveDateTime, formatLiveDelta, formatLiveShortCount, liveCollectionSchedule,
   liveDurationText, liveFieldHealth, liveIntervalStep, liveMonitorStatus } from "./live-monitor-presentation"
 
 const now = Date.parse("2026-09-13T04:00:00Z")
-const room: BilibiliLiveRoom = { id: "018f0f39-7b5e-4cc1-862d-000000000000", uid: "2", roomId: "102",
+const room: BilibiliLiveRoomV2 = { id: "018f0f39-7b5e-4cc1-862d-000000000000", uid: "2", roomId: "102",
   uname: "合成主播", monitorStatus: "ACTIVE", liveStatus: 1, intervalSeconds: 300, recentTrend: [], version: 1 }
 
 describe("original live monitor presentation boundaries", () => {
@@ -71,7 +71,7 @@ describe("original live monitor presentation boundaries", () => {
     expect(liveFieldHealth(room).filter(field => !field.ok).map(field => field.label))
       .toEqual(["头像", "封面", "分区", "在线", "关注", "标题", "开播时间"])
     const complete = { ...room, faceUrl: "https://synthetic.invalid/face", keyframeUrl: "https://synthetic.invalid/cover",
-      parentAreaName: "合成分区", onlineCount: 0, attentionCount: 0, title: "标题", liveStatus: 0 as const }
+      parentAreaName: "合成分区", onlineCount: "0", attentionCount: "0", title: "标题", liveStatus: 0 as const }
     expect(liveFieldHealth(complete).every(field => field.ok)).toBe(true)
   })
 })

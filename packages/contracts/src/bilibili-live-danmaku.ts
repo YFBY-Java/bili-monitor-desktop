@@ -11,7 +11,7 @@ export const BilibiliLiveDanmakuConnectionStateSchema = z.enum([
   "STOPPED",
   "ERROR"
 ])
-export const BilibiliLiveDanmakuProtocolVersionSchema = z.number().int().min(-1).max(3)
+export const BilibiliLiveDanmakuProtocolVersionSchema = z.number().int().min(-2_147_483_648).max(2_147_483_647)
 export const BilibiliLiveDanmakuAuthModeSchema = z.enum(["ANONYMOUS", "LOGIN"])
 
 export const BilibiliLiveDanmakuStatusSchema = z.object({
@@ -48,7 +48,7 @@ export const BilibiliLiveDanmakuRecentListSchema = z.array(BilibiliLiveDanmakuRe
 
 export const BilibiliLiveDanmakuMetricBucketSchema = z.object({
   bucketStart: z.iso.datetime(),
-  bucketSeconds: z.number().int().min(10).max(3_600),
+  bucketSeconds: z.number().int().min(-2_147_483_648).max(2_147_483_647),
   danmuCount: z.number().int().nonnegative(),
   likeCount: z.number().int().nonnegative().optional(),
   likeIncrement: z.number().int().nonnegative(),
@@ -69,11 +69,14 @@ export const BilibiliLiveDanmakuRoomInputSchema = z.object({
 }).strict()
 export const QueryBilibiliLiveDanmakuRecentInputSchema = z.object({
   roomMonitorId: z.uuid(),
-  limit: z.number().int().min(1).max(200).default(30)
+  // The original controller accepts a Java int; the service then clamps it.
+  limit: z.number().int().min(-2_147_483_648).max(2_147_483_647).default(30)
+    .transform(value => Math.min(Math.max(value, 1), 200))
 }).strict()
 export const QueryBilibiliLiveDanmakuMetricsInputSchema = z.object({
   roomMonitorId: z.uuid(),
-  range: z.string().trim().regex(/^\d+[mhd]$/i).default("1h")
+  // Preserve the raw input: the original service, not the transport, parses it.
+  range: z.string().nullish().transform(value => value ?? "1h")
 }).strict()
 
 export type BilibiliLiveDanmakuStatus = z.infer<typeof BilibiliLiveDanmakuStatusSchema>

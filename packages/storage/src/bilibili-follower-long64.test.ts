@@ -62,7 +62,9 @@ async function createV13Fixture(directory: string, brokenReference = false, cros
       database.exec(`DROP TABLE ${table}; ALTER TABLE ${table}_v13_fixture RENAME TO ${table};`)
       for (const index of indexes) database.exec(String(index.sql))
     }
-    database.exec("DELETE FROM schema_migration WHERE version > 13; PRAGMA user_version=13; COMMIT;")
+    database.exec(`ALTER TABLE bilibili_api_call DROP COLUMN request_meta_json;
+      ALTER TABLE bilibili_api_call DROP COLUMN response_meta_json;
+      DELETE FROM schema_migration WHERE version > 13; PRAGMA user_version=13; COMMIT;`)
     database.prepare(`INSERT INTO object_artifact(object_id, sha256, relative_path, media_type, size_bytes, created_at)
       VALUES (?, ?, 'objects/synthetic.json', 'application/json', 2, ?)`).run(artifactId, "a".repeat(64), timestamp)
     const insertMonitor = database.prepare(`INSERT INTO bilibili_follower_monitor(rowid, monitor_id, mid, nickname,
@@ -129,7 +131,7 @@ describe("follower signed Long64 SQLite storage", () => {
     const before = await createV13Fixture(directory)
     const upgraded = await ControlDatabase.open(directory)
     try {
-      expect(upgraded.status().schemaVersion).toBe(14)
+      expect(upgraded.status().schemaVersion).toBe(18)
       expect(upgraded.listBilibiliFollowerMonitors().map(row => row.monitorId))
         .toEqual(["larger-follower", monitorId, "tied-follower", "null-follower"])
     } finally { upgraded.close() }
@@ -148,7 +150,7 @@ describe("follower signed Long64 SQLite storage", () => {
     } finally { raw.close() }
     const reopened = await ControlDatabase.open(directory)
     try {
-      expect(reopened.status().schemaVersion).toBe(14)
+      expect(reopened.status().schemaVersion).toBe(18)
       expect(reopened.findBilibiliFollowerMonitorById(monitorId)?.currentFollowerCount).toBe(-1n)
     } finally { reopened.close() }
     const inspection = new DatabaseSync(resolve(directory, "control.db"))
@@ -301,7 +303,7 @@ describe("follower signed Long64 SQLite storage", () => {
     const before = await createV13Fixture(directory, false, true)
     const database = await ControlDatabase.open(directory)
     try {
-      expect(database.status().schemaVersion).toBe(14)
+      expect(database.status().schemaVersion).toBe(18)
       expect(database.findBilibiliFollowerMonitorById(monitorId)?.currentFollowerCount).toBe(9007199254740992n)
     } finally { database.close() }
     const raw = new DatabaseSync(resolve(directory, "control.db"))
@@ -356,7 +358,7 @@ describe("follower signed Long64 SQLite storage", () => {
       } finally { raw.close() }
       const reopened = await ControlDatabase.open(directory)
       try {
-        expect(reopened.status().schemaVersion).toBe(14)
+        expect(reopened.status().schemaVersion).toBe(18)
         expect(reopened.findBilibiliFollowerMonitorById(monitorId)?.currentFollowerCount).toBe(minimum)
         expect(reopened.findBilibiliFollowerSnapshots(monitorId, { limit: 30 })[0]?.followerCount).toBe(maximum)
       } finally { reopened.close() }

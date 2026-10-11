@@ -182,8 +182,7 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 48
+                "minLength": 1
               }
             },
             "monitorStatus": {
@@ -251,11 +250,7 @@
                 "enabledCapabilities": {
                   "type": "array",
                   "items": {
-                    "type": "string",
-                    "enum": [
-                      "follower",
-                      "live_heat"
-                    ]
+                    "type": ["string", "null"]
                   }
                 },
                 "danmuEnabled": {
@@ -326,11 +321,7 @@
             "enabledCapabilities": {
               "type": "array",
               "items": {
-                "type": "string",
-                "enum": [
-                  "follower",
-                  "live_heat"
-                ]
+                "type": ["string", "null"]
               }
             },
             "danmuEnabled": {
@@ -380,19 +371,16 @@
               "type": "string"
             },
             "faceUrl": {
-              "type": "string",
-              "format": "uri"
+              "type": "string"
             },
             "title": {
               "type": "string"
             },
             "coverUrl": {
-              "type": "string",
-              "format": "uri"
+              "type": "string"
             },
             "keyframeUrl": {
-              "type": "string",
-              "format": "uri"
+              "type": "string"
             },
             "areaName": {
               "type": "string"

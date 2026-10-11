@@ -1,4 +1,5 @@
-import { BilibiliLiveHttpConfigurationSchema, type BilibiliLiveHttpConfiguration } from "@bmd/contracts"
+import { BilibiliLiveHttpConfigurationSchema, BilibiliDanmakuWorkerStartResultSchema,
+  BilibiliDanmakuWorkerLifecycleEventSchema, type BilibiliLiveHttpConfiguration } from "@bmd/contracts"
 import type {
   BilibiliLiveDanmakuSource,
   BilibiliLiveDanmakuSourceEvent,
@@ -21,19 +22,46 @@ export class BilibiliLiveDanmakuWorkerSource implements BilibiliLiveDanmakuSourc
     onEvent: (event: BilibiliLiveDanmakuSourceEvent) => void
   ): Promise<BilibiliLiveDanmakuSourceStartResult> {
     if (this.stopped) throw Object.assign(new Error("Realtime Worker stopped."), { code: "REALTIME_WORKER_STOPPED", retryable: false })
+    let rejectEventFailure!: (error: unknown) => void
+    const eventFailure = new Promise<never>((_resolve, reject) => { rejectEventFailure = reject })
     this.unsubscribe.get(input.connectionId)?.()
     this.unsubscribe.set(input.connectionId, this.transport.subscribe(
       input.connectionId,
-      (event) => onEvent(parseSourceEvent(event))
+      (event) => {
+        try {
+          const parsed = parseSourceEvent(event)
+          onEvent(parsed)
+          if (parsed.type === "error" || parsed.type === "closed") {
+            this.unsubscribe.get(input.connectionId)?.()
+            this.unsubscribe.delete(input.connectionId)
+          }
+        } catch (error) {
+          // A subscription runs on the NDJSON reader's stack, outside start's await.
+          // Reject pending start and release the owned transport without escaping that reader.
+          rejectEventFailure(error)
+          this.unsubscribe.get(input.connectionId)?.()
+          this.unsubscribe.delete(input.connectionId)
+          void this.stop(input.connectionId).catch(() => console.error("Realtime event failure cleanup failed."))
+          try {
+            onEvent({ type: "error", receivedAt: new Date().toISOString(),
+              errorType: "REALTIME_WORKER_EVENT_FAILED", message: "Realtime worker event could not be applied." })
+          } catch {
+            console.error("Realtime terminal event could not be persisted.")
+          }
+        }
+      }
     ))
     try {
-      const result = await this.transport.request("start", {
+      const result = await Promise.race([eventFailure, this.transport.request("start", {
         ...(this.httpConfiguration ? { httpConfiguration: BilibiliLiveHttpConfigurationSchema.parse(this.httpConfiguration) } : {}),
         connectionId: input.connectionId,
         roomId: input.roomId,
         ...(input.protocolVersion === undefined ? {} : { protocolVersion: input.protocolVersion }),
+        ...(input.preferredProtocolVersion === undefined ? {} : { preferredProtocolVersion: input.preferredProtocolVersion }),
+        ...(input.connectionConfiguration ? { connectionConfiguration: input.connectionConfiguration } : {}),
+        ...(input.cacheConfiguration ? { cacheConfiguration: input.cacheConfiguration } : {}),
         ...(input.credential ? { credential: input.credential } : {})
-      })
+      })])
       return parseStartResult(result)
     } catch (error) {
       this.unsubscribe.get(input.connectionId)?.()
@@ -66,29 +94,23 @@ export class BilibiliLiveDanmakuWorkerSource implements BilibiliLiveDanmakuSourc
 }
 
 function parseStartResult(value: unknown): BilibiliLiveDanmakuSourceStartResult {
-  if (!isRecord(value)) throw new Error("Realtime Worker returned an invalid start result.")
-  const connectHost = requiredString(value.connectHost, "connectHost")
-  const protocolVersion = requiredInteger(value.protocolVersion, "protocolVersion")
-  if (protocolVersion < 0 || protocolVersion > 3) throw new Error("Invalid protocolVersion.")
-  if (value.authMode !== "ANONYMOUS" && value.authMode !== "LOGIN") {
-    throw new Error("Invalid authMode.")
-  }
-  const authUid = optionalPositiveId(value.authUid)
-  return {
-    connectHost,
-    protocolVersion,
-    authMode: value.authMode,
-    ...(authUid ? { authUid } : {})
-  }
+  return BilibiliDanmakuWorkerStartResultSchema.parse(value)
 }
 
 function parseSourceEvent(value: unknown): BilibiliLiveDanmakuSourceEvent {
   if (!isRecord(value)) throw new Error("Realtime Worker returned an invalid event.")
   const type = requiredString(value.type, "event.type")
   const receivedAt = requiredIso(value.receivedAt, "event.receivedAt")
+  if (["connecting", "attempt-failed", "connected", "heartbeat-sent"].includes(type)) {
+    return BilibiliDanmakuWorkerLifecycleEventSchema.parse(value)
+  }
+  const attemptNumber = value.attempt === undefined ? undefined : requiredInteger(value.attempt, "event.attempt")
+  if (attemptNumber !== undefined && attemptNumber < 1) throw new Error("event.attempt must be positive.")
+  const attempt = attemptNumber === undefined ? {} : { attempt: attemptNumber }
   if (type === "heartbeat") {
     return {
       type,
+      ...attempt,
       popularity: nonNegativeInteger(value.popularity, "event.popularity"),
       receivedAt
     }
@@ -96,6 +118,7 @@ function parseSourceEvent(value: unknown): BilibiliLiveDanmakuSourceEvent {
   if (type === "closed") {
     return {
       type,
+      ...attempt,
       code: requiredInteger(value.code, "event.code"),
       reason: typeof value.reason === "string" ? value.reason : "",
       receivedAt
@@ -104,13 +127,14 @@ function parseSourceEvent(value: unknown): BilibiliLiveDanmakuSourceEvent {
   if (type === "error") {
     return {
       type,
+      ...attempt,
       errorType: requiredString(value.errorType, "event.errorType"),
       message: requiredString(value.message, "event.message"),
       receivedAt
     }
   }
   if (type === "command") {
-    return { type, receivedAt, event: parseNormalizedEvent(value.event) }
+    return { type, ...attempt, receivedAt, event: parseNormalizedEvent(value.event) }
   }
   throw new Error(`Unknown Realtime Worker event type: ${type}`)
 }

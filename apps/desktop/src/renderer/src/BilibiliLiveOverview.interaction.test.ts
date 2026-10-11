@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react"
 import { chromium, type Browser, type Page, type Request } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { browserFixtureCacheDirectory } from "./__fixtures__/browser-fixture-cache"
 
 type SetupProbe = {
   startedAt: number
@@ -45,7 +46,7 @@ describe("original live loadAll and overview", () => {
   }
   beforeAll(async () => {
     server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
-      cacheDir: resolve("node_modules/.vite-live-overview-test"), plugins: [react()],
+      cacheDir: browserFixtureCacheDirectory, plugins: [react()],
       server: { host: "127.0.0.1", port: 0 }, logLevel: "error" })
     await server.listen()
     const address = server.httpServer!.address()
@@ -89,7 +90,7 @@ describe("original live loadAll and overview", () => {
   async function changeProjection() {
     await page.evaluate(() => {
       window.liveFixture.updateRoom(0, { uname: "更新后的主播", intervalSeconds: 600 })
-      window.liveFixture.summaryValues = { liveRooms: 3, totalOnlineCount: 50000, todayLiveStarts: 8 }
+      window.liveFixture.summaryValues = { liveRooms: 3, totalOnlineCount: "50000", todayLiveStarts: 8 }
       window.liveFixture.setEvents([{ id: crypto.randomUUID(), monitorId: "018f0f39-7b5e-7cc1-962d-000000000000",
         uid: "20", roomId: "120", eventType: "TITLE_CHANGED", titleBefore: "原始标题", titleAfter: "整体更新标题", occurredAt: new Date().toISOString() }])
     })
@@ -210,7 +211,7 @@ describe("original live loadAll and overview", () => {
       const event = { id: crypto.randomUUID(), monitorId: "018f0f39-7b5e-7cc1-962d-000000000000", uid: "20", roomId: "120",
         eventType: "LIVE_STARTED" as const, occurredAt: "2026-09-13T03:59:01Z" }
       window.liveFixture.setEvents([event])
-      window.liveFixture.summaryValues = { totalRooms: 5, liveRooms: 1, errorRooms: 2, todayLiveStarts: 3, totalOnlineCount: 12345,
+      window.liveFixture.summaryValues = { totalRooms: 5, liveRooms: 1, errorRooms: 2, todayLiveStarts: 3, totalOnlineCount: "12345",
         latestEvent: { ...event, id: crypto.randomUUID(), occurredAt: "2026-09-13T02:00:00Z" } }
     })
     await refresh()

@@ -3,6 +3,46 @@ import react from "@vitejs/plugin-react"
 import { chromium, type Browser, type Page, type Request } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { createBrowserStartupObserver, type BrowserStartupObserver } from "./__fixtures__/browser-startup-observer"
+import { browserFixtureCacheDirectory } from "./__fixtures__/browser-fixture-cache"
+
+async function closeAfterEvidence<T>(extract: () => Promise<T>, output: (evidence: T) => void,
+  failed: (phase: "EVIDENCE_EXTRACTION_FAILED") => void, close: () => Promise<void>, budget = 500): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const evidence = await Promise.race([Promise.resolve().then(extract), new Promise<T>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("Evidence extraction deadline")), budget)
+    })])
+    output(evidence)
+  } catch { failed("EVIDENCE_EXTRACTION_FAILED") }
+  finally { clearTimeout(timer); await close() }
+}
+
+describe("teardown evidence boundary", () => {
+  it("closes the resource when evidence extraction throws without exposing the error", async () => {
+    const phases: string[] = []
+    let closed = false, evidence = false
+    await closeAfterEvidence(() => Promise.reject(new Error("synthetic private failure")), () => { evidence = true },
+      phase => phases.push(phase), async () => { closed = true }, 20).catch(() => {})
+    expect(closed).toBe(true)
+    expect(evidence).toBe(false)
+    expect(phases).toEqual(["EVIDENCE_EXTRACTION_FAILED"])
+  })
+  it("bounds unresolved extraction and closes before it settles", async () => {
+    const phases: string[] = []
+    let closed = false, evidence = false, release!: () => void
+    const extraction = new Promise<void>(resolve => { release = resolve })
+    const teardown = closeAfterEvidence(() => extraction, () => { evidence = true }, phase => phases.push(phase), async () => { closed = true }, 20)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const outcome = await Promise.race([teardown.then(() => "closed"), new Promise<string>(resolve => { timer = setTimeout(() => resolve("unsettled"), 100) })])
+      expect(outcome).toBe("closed")
+      expect(closed).toBe(true)
+      expect(evidence).toBe(false)
+      expect(phases).toEqual(["EVIDENCE_EXTRACTION_FAILED"])
+    } finally { clearTimeout(timer); release(); await teardown }
+  })
+})
 
 // The real connected workspace, Query and SVG run in Chromium; only IPC is synthetic.
 describe("original follower trend interactions", () => {
@@ -10,25 +50,42 @@ describe("original follower trend interactions", () => {
   let browser: Browser
   let page: Page
   let url: string
+  let suiteStartup: BrowserStartupObserver, pageStartup: BrowserStartupObserver
   let volumePhases: { phase: string; ms: number }[] = []
+  let hintObserved = false, volumeObserved = false
   let setupProbe: { startedAt: number; phases: { phase: string; ms: number }[]; pending: Map<Request, string>; pendingCount: number; failed: string[]; failureCount: number; finished: boolean }
   beforeAll(async () => {
-    server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
-      plugins: [react()], server: { host: "127.0.0.1", port: 0 }, logLevel: "error" })
-    await server.listen()
+    const startup = createBrowserStartupObserver("trend", "beforeAll")
+    suiteStartup = startup
+    server = await startup.run("server.create", () => createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
+      cacheDir: browserFixtureCacheDirectory,
+      plugins: [react()], server: { host: "127.0.0.1", port: 0 }, logLevel: "error" }))
+    await startup.run("server.listen", () => server.listen())
     const address = server.httpServer!.address()
     if (!address || typeof address === "string") throw new Error("Missing fixture port")
     url = `http://127.0.0.1:${address.port}/__fixtures__/follower-workspace.html`
-    browser = await chromium.launch({ headless: true })
+    browser = await startup.run("browser.launch", () => chromium.launch({ headless: true }))
   }, 30_000)
-  afterAll(async () => { await browser?.close(); await server?.close() })
+  afterAll(async () => {
+    const startup = suiteStartup; startup?.stop()
+    try { await startup.run("browser.close", () => browser?.close()); await startup.run("server.close", () => server?.close()) }
+    finally { startup?.finish() }
+  })
   beforeEach(async () => {
+    const startup = createBrowserStartupObserver("trend", "beforeEach")
+    pageStartup = startup
     volumePhases = []
+    hintObserved = false; volumeObserved = false
     const probe = { startedAt: performance.now(), phases: [] as { phase: string; ms: number }[], pending: new Map<Request, string>(), pendingCount: 0, failed: [] as string[], failureCount: 0, finished: false }
     setupProbe = probe
     const phase = (name: string) => { if (probe.phases.length < 100) probe.phases.push({ phase: name, ms: Math.round(performance.now() - probe.startedAt) }) }
     phase("page:create")
-    page = await browser.newPage({ viewport: { width: 1440, height: 1200 } })
+    const setupPage = await startup.run("page.create", () => browser.newPage({ viewport: { width: 1440, height: 1200 } }))
+    if (!startup.attachPage(setupPage)) {
+      try { await startup.run("page.close", () => setupPage.close()) } finally { startup.finish() }
+      return
+    }
+    page = setupPage
     phase("page:created")
     if (probe.finished) console.warn("Follower trend page created after teardown", { phases: probe.phases })
     page.on("request", request => {
@@ -51,18 +108,34 @@ describe("original follower trend interactions", () => {
     })
     page.on("pageerror", error => { throw error })
     phase("fixture:navigate")
-    await page.goto(url)
+    await startup.run("page.goto", () => page.goto(url))
     phase("fixture:loaded")
-    await page.getByRole("button", { name: "展开测试用户1的详情" }).waitFor()
+    await startup.run("page.visible", () => page.getByRole("button", { name: "展开测试用户1的详情" }).waitFor())
     phase("fixture:ready")
   })
   afterEach(async ({ task }) => {
+    const startup = pageStartup; startup?.stop()
+    try {
     setupProbe.finished = true
     if (task.result?.state === "fail") console.warn("Follower trend setup phases", {
       phases: setupProbe.phases, pendingCount: setupProbe.pendingCount, pending: [...setupProbe.pending.values()], failureCount: setupProbe.failureCount, failed: setupProbe.failed
     })
     if (task.result?.state === "fail" && volumePhases.length) console.warn("Follower volume fixture phases", volumePhases)
-    await page?.close()
+    await closeAfterEvidence(async () => {
+      if (!page || (!hintObserved && !volumeObserved)) return undefined
+      return page.evaluate(() => {
+        const hints = Reflect.get(window, "trendObservations") as { text: string; at: number }[] | undefined
+        const volume = Reflect.get(window, "volumeObservations") as { events: { phase: string; at: number }[]; longtasks: { at: number; duration: number }[] } | undefined
+        const observers = Reflect.get(window, "followerProbeObservers") as { disconnect: () => void }[] | undefined
+        observers?.forEach(observer => observer.disconnect())
+        return { hints: hints?.map(item => ({ phase: item.text === "趋势刷新中" ? "REFRESHING" : item.text === "趋势已更新" ? "DONE" : item.text === "" ? "IDLE" : "ERROR", at: item.at })), volume,
+          trendStartedAt: window.followerFixture.trendStartedAt.slice(0, 64), trendFinishedAt: window.followerFixture.trendFinishedAt.slice(0, 64),
+          trendCount: window.followerFixture.trendRequests.length, active: window.followerFixture.activeTrends, maxActive: window.followerFixture.maxActiveTrends,
+          lists: window.followerFixture.listPhases }
+      })
+    }, evidence => { if (evidence) console.warn("Follower browser bounded observations", evidence) },
+    phase => console.warn("Follower browser diagnostic phase", { phase }), async () => { await startup.run("page.close", () => page?.close()) })
+    } finally { startup?.finish() }
   })
   const choose = async (count: number) => {
     for (let i = 1; i <= count; i++) await page.getByRole("checkbox", { name: `测试用户${i}趋势对比` }).check()
@@ -249,7 +322,21 @@ describe("original follower trend interactions", () => {
 
   it("displays all 500 history points for each of four users without creating 2000 keyboard tab stops", async () => {
     const started = performance.now()
-    const phase = (label: string) => volumePhases.push({ phase: label, ms: Math.round(performance.now() - started) })
+    const phase = (label: string) => { if (volumePhases.length < 100) volumePhases.push({ phase: label, ms: Math.round(performance.now() - started) }) }
+    volumeObserved = true
+    await page.evaluate(() => {
+      const events: { phase: string; at: number }[] = [], longtasks: { at: number; duration: number }[] = []
+      const event = (phase: string) => { if (events.length < 64) events.push({ phase, at: performance.now() }) }
+      const focused = () => event("POINT_FOCUS")
+      document.addEventListener("focusin", focused)
+      const observer = new MutationObserver(() => { if (document.querySelector('[role="tooltip"]')) event("TOOLTIP_PRESENT") })
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+      const performanceObserver = new PerformanceObserver(list => {
+        for (const entry of list.getEntries()) if (longtasks.length < 32) longtasks.push({ at: entry.startTime, duration: entry.duration })
+      })
+      performanceObserver.observe({ type: "longtask", buffered: false })
+      Object.assign(window, { volumeObservations: { events, longtasks }, followerProbeObservers: [observer, performanceObserver, { disconnect: () => document.removeEventListener("focusin", focused) }] })
+    })
     phase("populate:start")
     await page.evaluate(() => {
       for (const mid of ["2", "3", "4", "5"]) window.followerFixture.history[mid] = Array.from({ length: 500 }, (_, index) => ({
@@ -265,27 +352,37 @@ describe("original follower trend interactions", () => {
     const points = page.locator(".follower-history-svg circle")
     await expect.poll(() => points.count()).toBe(2000)
     phase("points:ready")
+    phase("tabindex-count:start")
     expect(await page.locator('.follower-history-svg circle[tabindex="0"]').count()).toBe(4)
+    phase("tabindex-count:end")
     const first = page.locator(".follower-history-svg").first()
+    phase("point-focus:start")
     await first.locator("circle").first().focus()
     phase("point:focused")
     await page.keyboard.press("End")
     phase("key:end")
+    phase("end-tooltip:start")
     expect(await page.getByRole("tooltip").textContent()).toContain("100,499")
+    phase("end-tooltip:end")
+    phase("key-home:start")
     await page.keyboard.press("Home")
     phase("key:home")
+    phase("home-tooltip:start")
     expect(await page.getByRole("tooltip").textContent()).toContain("100,000")
+    phase("home-tooltip:end")
     expect(await page.evaluate(() => window.followerFixture.trendRequests.every(input => input.limitPerUser === 500))).toBe(true)
     phase("complete")
   })
 
   it("keeps the original 700ms refreshing and 900ms result hints, cancelling old timers on another refresh", async () => {
+    hintObserved = true
     await page.evaluate(() => {
       const indicator = document.querySelector(".follower-trend-refresh")!
       const observations: { text: string; at: number }[] = []
       Object.assign(window, { trendObservations: observations })
-      new MutationObserver(() => observations.push({ text: indicator.textContent ?? "", at: performance.now() }))
-        .observe(indicator, { childList: true, subtree: true, characterData: true })
+      const observer = new MutationObserver(() => { if (observations.length < 64) observations.push({ text: indicator.textContent ?? "", at: performance.now() }) })
+      observer.observe(indicator, { childList: true, subtree: true, characterData: true })
+      Object.assign(window, { followerProbeObservers: [observer] })
     })
     await choose(1)
     await expect.poll(() => page.locator(".follower-trend-refresh").textContent()).toBe("趋势刷新中")

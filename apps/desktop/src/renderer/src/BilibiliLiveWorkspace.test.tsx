@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
 import { BilibiliLiveWorkspacePresentation } from "./BilibiliLiveWorkspace"
+import { BilibiliLiveRankSnapshotV2Schema } from "@bmd/contracts"
+import { widgetCount, widgetRankEntries } from "./bilibili-live-widget-format"
 
 describe("BilibiliLiveWorkspace", () => {
   it("renders only persisted original live room values and real lifecycle controls", () => {
@@ -19,8 +21,8 @@ describe("BilibiliLiveWorkspace", () => {
           areaName: "单机游戏",
           liveStatus: 1,
           liveTime: "2026-08-29T12:00:00.000Z",
-          onlineCount: 1234,
-          attentionCount: 5678,
+          onlineCount: "1234",
+          attentionCount: "5678",
           monitorStatus: "ACTIVE",
           intervalSeconds: 300,
           lastSuccessAt: "2026-08-29T12:00:01.000Z",
@@ -36,7 +38,7 @@ describe("BilibiliLiveWorkspace", () => {
           roundRooms: 0,
           offlineRooms: 0,
           errorRooms: 0,
-          totalOnlineCount: 1234,
+          totalOnlineCount: "1234",
           todayLiveStarts: 1
         }}
         events={[]}
@@ -96,6 +98,16 @@ describe("BilibiliLiveWorkspace", () => {
   })
 
   it("renders only persisted original audience and guard rank entries", () => {
+    const precise = BilibiliLiveRankSnapshotV2Schema.parse({ id: "018f0f39-7b5e-4cc1-862d-9a208b3d0701",
+      roomMonitorId: "018f0f39-7b5e-4cc1-862d-9a208b3d0700", roomId: "330033", ruid: "22",
+      rankFamily: "AUDIENCE", rankType: "online_rank", rankSwitch: "contribution_rank", pageNo: 1, pageSize: 50,
+      sourceEndpoint: "xlive/general-interface/v1/rank/queryContributionRank", signedRequired: true,
+      capturedAt: "2026-08-29T12:00:00.000Z", totalCount: "9223372036854775807",
+      entries: [{ rankNo: 1, entryKind: "LIST", displayName: "一分之差低值", score: "9007199254740992" },
+        { rankNo: 2, entryKind: "LIST", displayName: "一分之差高值", score: "9007199254740993" }] })
+    expect(widgetRankEntries(precise, "desc").map(entry => entry.displayName)).toEqual(["一分之差高值", "一分之差低值"])
+    expect(widgetRankEntries(precise, "asc").map(entry => entry.displayName)).toEqual(["一分之差低值", "一分之差高值"])
+    expect(widgetCount(precise.totalCount)).toBe("92233720368.55亿")
     const room = {
       id: "018f0f39-7b5e-4cc1-862d-9a208b3d0700",
       uid: "22",
@@ -291,4 +303,29 @@ describe("BilibiliLiveWorkspace", () => {
     expect(html).toContain("¥128.00")
     expect(html).not.toContain("演示场次")
   })
+})
+import { LiveTrendChart } from "./LiveTrendChart"
+it("keeps exact signed total and deltas accessible beside compact values", () => {
+  const room = { id: "018f0f39-7b5e-4cc1-862d-9a208b3d0700", uid: "22", roomId: "122", uname: "exact",
+    monitorStatus: "ACTIVE" as const, liveStatus: 1 as const, intervalSeconds: 300,
+    onlineCount: "-9223372036854775808", onlineDelta: "-9223372036854775808", recentTrend: [], version: 1 }
+  const html = renderToStaticMarkup(<BilibiliLiveWorkspacePresentation view="直播间" creationOpen={false}
+    rooms={[room]} events={[]} trends={[]} selectedTrendIds={[room.id]} pending={false}
+    onAdd={async () => undefined} onRoomAction={async () => undefined}
+    onCloseCreation={() => undefined} onTrendSelectionChange={() => undefined} />)
+  expect(html).toContain('aria-label="总在线/热度 -9223372036854775808"')
+  expect(html).toContain('aria-label="变化 -9223372036854775808"')
+  expect(html).toContain('aria-label="较上次 -9223372036854775808"')
+  expect(html).toContain("-92233720368.5亿")
+})
+it("renders adjacent unsafe Live counts at distinct coordinates with exact accessible titles", () => {
+  const html = renderToStaticMarkup(<LiveTrendChart roomName="精确直播" height={320} samples={{
+    source: "history", provisionalTime: false, points: [
+      { capturedAt: "2026-10-07T00:00:00Z", onlineCount: "9007199254740992" },
+      { capturedAt: "2026-10-07T00:01:00Z", onlineCount: "9007199254740993" }
+    ] }} />)
+  expect(html).toContain("9,007,199,254,740,992")
+  expect(html).toContain("9,007,199,254,740,993")
+  const heights = [...html.matchAll(/<circle[^>]+cy="([^"]+)"/g)].map(match => match[1])
+  expect(new Set(heights).size).toBe(2)
 })

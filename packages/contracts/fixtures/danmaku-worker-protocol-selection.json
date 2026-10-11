@@ -1,0 +1,7 @@
+[
+  { "name": "preferred protocol two", "input": { "preferredProtocolVersion": 2 }, "valid": true },
+  { "name": "raw preference outside candidates", "input": { "preferredProtocolVersion": 4 }, "valid": true },
+  { "name": "raw preference signed minimum", "input": { "preferredProtocolVersion": -2147483648 }, "valid": true },
+  { "name": "preference overflow", "input": { "preferredProtocolVersion": 2147483648 }, "valid": false },
+  { "name": "explicit remains strict", "input": { "protocolVersion": 4 }, "valid": false }
+]

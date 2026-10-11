@@ -30,9 +30,14 @@ describe("read-only live collection configuration loader", () => {
     const contents = '\uFEFF{ "enabled": true, "schedulerDelayMs": 250, "dueBatchSize": 99, "statusBatchSize": 50 }\r\n'
     await writeFile(path, contents, "utf8")
     expect(await loadLiveCollectionConfiguration(directory, {
-      SOCIAL_MONITOR_BILIBILI_LIVE_MONITOR_ENABLED: " FALSE ",
-      SOCIAL_MONITOR_BILIBILI_LIVE_STATUS_BATCH_SIZE: " +64 "
-    })).toMatchObject({ enabled: false, schedulerDelayMs: 250, dueBatchSize: 99, statusBatchSize: 64 })
+      SOCIAL_MONITOR_BILIBILI_LIVE_MONITOR_ENABLED: "true",
+      APP_BILIBILI_LIVEMONITOR_ENABLED: " off ",
+      SOCIAL_MONITOR_BILIBILI_LIVE_STATUS_BATCH_SIZE: "50",
+      APP_BILIBILI_LIVEMONITOR_STATUSBATCHSIZE: " #40 ",
+      APP_BILIBILI_LIVEMONITOR_REFERER: "${LIVE_REFERER}",
+      LIVE_REFERER: "https://live.bilibili.com/custom/"
+    })).toMatchObject({ enabled: false, schedulerDelayMs: 250, dueBatchSize: 99, statusBatchSize: 64,
+      referer: "https://live.bilibili.com/custom/" })
     expect(await readFile(path, "utf8")).toBe(contents)
   })
   it("reads the original storage switch alias independently of automatic collection", async () => {
@@ -42,10 +47,29 @@ describe("read-only live collection configuration loader", () => {
     await writeFile(path, contents, "utf8")
     expect(await loadLiveCollectionConfiguration(directory, {
       SOCIAL_MONITOR_BILIBILI_LIVE_STORAGE_ENABLED: " FALSE "
-    })).toMatchObject({ enabled: false, storageEnabled: false })
+    })).toMatchObject({ enabled: false, storageEnabled: true })
     expect(await readFile(path, "utf8")).toBe(contents)
-    await expect(loadLiveCollectionConfiguration(directory, {
+    expect(await loadLiveCollectionConfiguration(directory, {
       SOCIAL_MONITOR_BILIBILI_LIVE_STORAGE_ENABLED: "0"
+    })).toMatchObject({ enabled: false, storageEnabled: true })
+    expect(await loadLiveCollectionConfiguration(directory, {
+      SOCIAL_MONITOR_BILIBILI_LIVE_STORAGE_ENABLED: "false"
+    })).toMatchObject({ enabled: false, storageEnabled: false })
+    await expect(loadLiveCollectionConfiguration(directory, {
+      SOCIAL_MONITOR_BILIBILI_LIVE_STORAGE_ENABLED: "not-a-boolean"
+    })).rejects.toMatchObject({ code: "BILIBILI_LIVE_CONFIG_INVALID" })
+  })
+  it("validates the raw scheduled delay only when the original scheduler conditions match", async () => {
+    await setup()
+    const environment = { APP_BILIBILI_LIVEMONITOR_SCHEDULERDELAYMS: "0" }
+    expect(await loadLiveCollectionConfiguration(directory, {
+      ...environment, APP_BILIBILI_LIVEMONITOR_ENABLED: "false"
+    })).toMatchObject({ enabled: false, storageEnabled: true, schedulerDelayMs: 0 })
+    await expect(loadLiveCollectionConfiguration(directory, {
+      ...environment, APP_BILIBILI_LIVEMONITOR_ENABLED: "off"
+    })).rejects.toMatchObject({ code: "BILIBILI_LIVE_CONFIG_INVALID" })
+    await expect(loadLiveCollectionConfiguration(directory, {
+      APP_BILIBILI_LIVEMONITOR_SCHEDULERDELAYMS: "0x100"
     })).rejects.toMatchObject({ code: "BILIBILI_LIVE_CONFIG_INVALID" })
   })
   it.each(["", "12.5", "1e3", "NaN", "Infinity", "2147483648"])("rejects invalid integer environment value %j", async value => {

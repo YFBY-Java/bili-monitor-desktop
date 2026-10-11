@@ -4,13 +4,14 @@ import react from "@vitejs/plugin-react"
 import { chromium, type Browser, type Page } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { browserFixtureCacheDirectory } from "./__fixtures__/browser-fixture-cache"
 
 describe("original live trend board", () => {
   let server: ViteDevServer, browser: Browser, page: Page, url: string
   const roomId = (index: number) => `018f0f39-7b5e-7cc1-962d-${String(index).padStart(12, "0")}`
   beforeAll(async () => {
     server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
-      cacheDir: resolve("node_modules/.vite-live-trend-test"), plugins: [react()],
+      cacheDir: browserFixtureCacheDirectory, plugins: [react()],
       server: { host: "127.0.0.1", port: 0 }, logLevel: "error" })
     await server.listen()
     const address = server.httpServer!.address()
@@ -79,7 +80,7 @@ describe("original live trend board", () => {
 
   it("retains precise compact format in ticks and tooltip", async () => {
     await page.evaluate(async () => {
-      window.liveFixture.updateRoom(1, { onlineCount: 10023, recentTrend: [10013, 10023].map((onlineCount, index) => ({
+      window.liveFixture.updateRoom(1, { onlineCount: "10023", recentTrend: ["10013", "10023"].map((onlineCount, index) => ({
         roomId: "121", uid: "21", capturedAt: `2026-09-05T02:0${index}:00.000Z`, liveStatus: 1,
         onlineCount, sourceEndpoint: "room/v1/Room/get_info" })) })
       await window.liveFixture.reload()
@@ -96,7 +97,7 @@ describe("original live trend board", () => {
     await page.getByText("房间近期快照", { exact: true }).waitFor()
     expect(await page.locator(".live-history-svg circle").count()).toBe(3)
     await page.evaluate(async () => {
-      window.liveFixture.updateRoom(1, { recentTrend: [], onlineCount: 0 }); await window.liveFixture.reload()
+      window.liveFixture.updateRoom(1, { recentTrend: [], onlineCount: "0" }); await window.liveFixture.reload()
     })
     await page.getByText("当前值参考（非新增历史）", { exact: true }).waitFor()
     expect(await page.locator(".live-history-svg circle").count()).toBe(1)
@@ -143,7 +144,7 @@ describe("original live trend board", () => {
     await page.getByRole("button", { name: "刷新监控数据", exact: true }).click()
     await expect.poll(() => page.evaluate(() => window.liveFixture.trendRequests.length)).toBe(1)
     await page.evaluate(id => { window.liveFixture.trendPoints[id] = [{ roomId: "121", uid: "21", liveStatus: 1,
-      capturedAt: "2026-09-05T03:00:00.000Z", onlineCount: 400, sourceEndpoint: "room/v1/Room/get_info" }] }, roomId(1))
+      capturedAt: "2026-09-05T03:00:00.000Z", onlineCount: "400", sourceEndpoint: "room/v1/Room/get_info" }] }, roomId(1))
     await page.getByRole("button", { name: "刷新监控数据", exact: true }).click()
     await expect.poll(() => page.evaluate(() => window.liveFixture.trendRequests.length)).toBe(2)
     await page.evaluate(() => window.liveFixture.releaseTrend(1))
@@ -177,7 +178,7 @@ describe("original live trend board", () => {
     await page.getByRole("button", { name: "查看趋势", exact: true }).click()
     await page.getByText("历史快照", { exact: true }).waitFor()
     await page.evaluate(id => { window.liveFixture.trendPoints[id] = [{ roomId: "121", uid: "21", liveStatus: 1,
-      capturedAt: "2026-09-05T03:00:00.000Z", onlineCount: 500, sourceEndpoint: "room/v1/Room/get_info" }] }, roomId(1))
+      capturedAt: "2026-09-05T03:00:00.000Z", onlineCount: "500", sourceEndpoint: "room/v1/Room/get_info" }] }, roomId(1))
     await page.getByRole("button", { name: "刷新监控数据", exact: true }).click()
     await expect.poll(() => page.locator(".live-history-svg circle").count()).toBe(1)
     await page.locator(".live-history-svg circle").focus()

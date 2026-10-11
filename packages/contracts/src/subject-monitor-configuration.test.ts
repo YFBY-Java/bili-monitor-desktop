@@ -16,7 +16,7 @@ describe("portable subject monitor startup configuration", () => {
     for (const code of [undefined, "toString", "__proto__", "synthetic-private-code", "CORE_STOPPED"]) {
       expect(startupConfigurationErrorMessage(code)).toBeUndefined()
     }
-    for (const code of ["BILIBILI_LIVE_CONFIG_INVALID", "SUBJECT_MONITOR_CONFIG_INVALID", "BILIBILI_LIVE_STORAGE_DEPENDENCY_INVALID"]) {
+    for (const code of ["BILIBILI_DANMAKU_CONFIG_INVALID", "BILIBILI_LIVE_CONFIG_INVALID", "SUBJECT_MONITOR_CONFIG_INVALID", "BILIBILI_LIVE_STORAGE_DEPENDENCY_INVALID"]) {
       expect(startupConfigurationErrorMessage(code)).toMatch(/重启/u)
     }
   })

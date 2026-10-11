@@ -37,6 +37,22 @@ function digit(character: number, radix: 10 | 16): number {
   return -1
 }
 
+/** Long.parseLong decimal syntax; share the existing Java UTF-16 digit mapping. */
+export function parseJavaDecimalLong(value: string): bigint {
+  const negative = value.startsWith("-")
+  let offset = negative || value.startsWith("+") ? 1 : 0
+  if (offset === value.length) throw new RangeError("Invalid decimal long")
+  const limit = negative ? 1n << 63n : (1n << 63n) - 1n
+  let result = 0n
+  for (; offset < value.length; offset++) {
+    const next = digit(value.charCodeAt(offset), 10)
+    if (next < 0) throw new RangeError("Invalid decimal long")
+    result = result * 10n + BigInt(next)
+    if (result > limit) throw new RangeError("Invalid decimal long")
+  }
+  return negative ? -result : result
+}
+
 function parseInteger(value: string, allowHex: boolean): number {
   const negative = value.startsWith("-")
   let offset = negative || value.startsWith("+") ? 1 : 0

@@ -6,9 +6,13 @@ import {
   QueryBilibiliLiveDanmakuRecentInputSchema,
   StartBilibiliLiveDanmakuInputSchema,
   type BilibiliCredential,
+  type BilibiliDanmakuWorkerLifecycleEvent,
+  type BilibiliDanmakuWorkerStartResult,
   type BilibiliLiveDanmakuMetricBucket,
   type BilibiliLiveDanmakuRecent,
   type BilibiliLiveDanmakuStatus,
+  type BilibiliLiveDanmakuConnectionConfiguration,
+  type BilibiliLiveDanmakuCacheConfiguration,
   type QueryBilibiliLiveDanmakuMetricsInput,
   type QueryBilibiliLiveDanmakuRecentInput,
   type StartBilibiliLiveDanmakuInput
@@ -18,8 +22,10 @@ import type {
   StoredBilibiliLiveDanmakuSession,
   StoredBilibiliLiveRoomMonitor
 } from "@bmd/storage"
+import { hasLiveSnapshotText } from "@bmd/storage"
 
 import { CoreApplicationError } from "./account-subject-service"
+import { parseJavaDecimalLong } from "./follower-configuration-values"
 
 export interface NormalizedBilibiliDanmakuEvent {
   command: string
@@ -67,26 +73,28 @@ export interface NormalizedBilibiliDanmakuEvent {
 }
 
 export type BilibiliLiveDanmakuSourceEvent =
-  | { type: "command"; receivedAt: string; event: NormalizedBilibiliDanmakuEvent }
-  | { type: "heartbeat"; popularity: number; receivedAt: string }
-  | { type: "closed"; receivedAt: string; code: number; reason: string }
-  | { type: "error"; receivedAt: string; errorType: string; message: string }
+  | BilibiliDanmakuWorkerLifecycleEvent
+  | { type: "command"; attempt?: number; receivedAt: string; event: NormalizedBilibiliDanmakuEvent }
+  | { type: "heartbeat"; attempt?: number; popularity: number; receivedAt: string }
+  | { type: "closed"; attempt?: number; receivedAt: string; code: number; reason: string }
+  | { type: "error"; attempt?: number; receivedAt: string; errorType: string; message: string }
 
 export interface BilibiliLiveDanmakuSourceStartInput {
   connectionId: string
   roomId: string
   protocolVersion?: number
+  preferredProtocolVersion?: number
+  connectionConfiguration?: BilibiliLiveDanmakuConnectionConfiguration
+  cacheConfiguration?: BilibiliLiveDanmakuCacheConfiguration
   credential?: {
     cookieHeader: string
     authUid: string
   }
 }
 
-export interface BilibiliLiveDanmakuSourceStartResult {
-  connectHost: string
-  protocolVersion: number
-  authMode: "ANONYMOUS" | "LOGIN"
-  authUid?: string
+export type BilibiliLiveDanmakuSourceStartResult = Omit<BilibiliDanmakuWorkerStartResult, "status" | "attempt"> & {
+  status?: BilibiliDanmakuWorkerStartResult["status"]
+  attempt?: number
 }
 
 export interface BilibiliLiveDanmakuSource {
@@ -105,16 +113,22 @@ export interface BilibiliLiveDanmakuServiceOptions {
   idFactory: () => string
   credentialProvider: () => Promise<BilibiliCredential | undefined>
   resolveDisplayName?: (uid: string) => Promise<string | null | undefined>
+  enabled?: boolean
+  autoStartEnabled?: boolean
   maxConnections?: number
+  protocolVersion?: number
   bucketSeconds?: number
   recentMessageLimitPerRoom?: number
+  connectionConfiguration?: BilibiliLiveDanmakuConnectionConfiguration
+  cacheConfiguration?: BilibiliLiveDanmakuCacheConfiguration
   sessionSink?: {
     ingest: (
       room: StoredBilibiliLiveRoomMonitor,
       transportSessionId: string,
       receiptOrdinal: number,
       protocolVersion: number | undefined,
-      event: NormalizedBilibiliDanmakuEvent
+      event: NormalizedBilibiliDanmakuEvent,
+      writtenAt?: string
     ) => boolean
   }
 }
@@ -123,6 +137,10 @@ interface ConnectionHandle {
   monitorId: string
   roomId: string
   sessionId: string
+  connectionId: string
+  attempt: number
+  persisted: boolean
+  cancelled: boolean
   autoManaged: boolean
   status: "CONNECTING" | "AUTHENTICATING" | "CONNECTED" | "CLOSED" | "STOPPED" | "ERROR"
   connectHost?: string | undefined
@@ -155,8 +173,8 @@ export class BilibiliLiveDanmakuService {
 
   constructor(private readonly options: BilibiliLiveDanmakuServiceOptions) {
     this.maxConnections = Math.max(1, options.maxConnections ?? 10)
-    this.bucketSeconds = Math.min(3_600, Math.max(10, options.bucketSeconds ?? 60))
-    this.recentMessageLimit = Math.min(500, Math.max(1, options.recentMessageLimitPerRoom ?? 200))
+    this.bucketSeconds = options.bucketSeconds ?? 60
+    this.recentMessageLimit = Math.max(20, options.recentMessageLimitPerRoom ?? 200)
     options.database.markOrphanedBilibiliLiveDanmakuSessions(options.now().toISOString())
   }
 
@@ -191,15 +209,17 @@ export class BilibiliLiveDanmakuService {
   private async stopInternal(roomMonitorId: string): Promise<BilibiliLiveDanmakuStatus> {
     const handle = this.connections.get(roomMonitorId)
     if (!handle) return this.status(roomMonitorId)
+    const activeAttempt = ACTIVE_STATUSES.has(handle.status)
     handle.status = "STOPPED"
+    handle.cancelled = true
     this.connections.delete(roomMonitorId)
     try {
       const timestamp = this.options.now().toISOString()
-      this.options.database.markBilibiliLiveDanmakuSessionStatus(handle.sessionId, "STOPPED", timestamp)
+      if (handle.persisted && activeAttempt) this.options.database.markBilibiliLiveDanmakuSessionStatus(handle.sessionId, "STOPPED", timestamp)
       return this.toStatus(roomMonitorId, handle, false)
     } finally {
       // A persistence/projection failure must not leave an untracked socket running.
-      await this.options.source.stop(handle.sessionId)
+      await this.options.source.stop(handle.connectionId)
       this.ensureRunning()
     }
   }
@@ -212,7 +232,7 @@ export class BilibiliLiveDanmakuService {
       roomMonitorId,
       this.options.now().toISOString()
     )
-    if (handle) return this.toStatus(roomMonitorId, handle, true, stats)
+    if (handle) return this.toStatus(roomMonitorId, handle, ACTIVE_STATUSES.has(handle.status), stats)
     const orphaned = latest ? ACTIVE_STATUSES.has(latest.status) : false
     return BilibiliLiveDanmakuStatusSchema.parse({
       liveRoomMonitorId: roomMonitorId,
@@ -257,11 +277,20 @@ export class BilibiliLiveDanmakuService {
   metrics(input: QueryBilibiliLiveDanmakuMetricsInput): BilibiliLiveDanmakuMetricBucket[] {
     const parsed = QueryBilibiliLiveDanmakuMetricsInputSchema.parse(input)
     const to = this.options.now()
-    const from = new Date(to.getTime() - parseRangeMillis(parsed.range))
+    const fromMillis = BigInt(to.getTime()) - parseRangeMillis(parsed.range)
+    // Original DISPLAY_OFFSET=+08. LocalDate.MIN epoch day (-365243219162)
+    // times 86400000 minus the offset, not the narrower JavaScript Date limit.
+    if (fromMillis < -31_557_014_135_625_600_000n) {
+      throw new RangeError("Danmaku metrics window exceeds the original date range")
+    }
+    // All persisted bucket instants are Date-representable. Below Date.min the
+    // true lower predicate is always satisfied: omit it, without clipping time.
+    const from = fromMillis < -8_640_000_000_000_000n
+      ? null : new Date(Number(fromMillis)).toISOString()
     return BilibiliLiveDanmakuMetricBucketListSchema.parse(
       this.options.database.findBilibiliLiveDanmakuMetricBuckets(
         parsed.roomMonitorId,
-        from.toISOString(),
+        from,
         to.toISOString(),
         2_000
       ).map((item) => ({
@@ -288,12 +317,17 @@ export class BilibiliLiveDanmakuService {
   }
 
   private async syncAutoConnectionsInternal(): Promise<void> {
-    const desired = this.options.database.listBilibiliLiveDanmakuAutoStartRoomIds(
-      this.maxConnections
-    )
+    if (this.options.enabled === false || this.options.autoStartEnabled === false) return
+    const desired = this.options.database.listBilibiliLiveDanmakuAutoStartRoomIds()
     const manualCount = [...this.connections.values()].filter((handle) => !handle.autoManaged).length
     const autoCapacity = Math.max(0, this.maxConnections - manualCount)
-    const targets = new Set(desired.slice(0, autoCapacity))
+    const targets = new Set<string>()
+    for (const roomMonitorId of desired) {
+      const existing = this.connections.get(roomMonitorId)
+      if (existing && !existing.autoManaged) continue
+      if (targets.size >= autoCapacity) break
+      targets.add(roomMonitorId)
+    }
     for (const handle of [...this.connections.values()]) {
       if (handle.autoManaged && !targets.has(handle.monitorId)) await this.stopInternal(handle.monitorId)
     }
@@ -349,8 +383,10 @@ export class BilibiliLiveDanmakuService {
         try {
           const now = this.options.now().toISOString()
           for (const handle of handles) {
+            const activeAttempt = ACTIVE_STATUSES.has(handle.status)
             handle.status = "STOPPED"
-            this.options.database.markBilibiliLiveDanmakuSessionStatus(handle.sessionId, "STOPPED", now)
+            handle.cancelled = true
+            if (handle.persisted && activeAttempt) this.options.database.markBilibiliLiveDanmakuSessionStatus(handle.sessionId, "STOPPED", now)
           }
         } finally {
           await this.options.source.stopAll()
@@ -392,12 +428,16 @@ export class BilibiliLiveDanmakuService {
     autoManaged: boolean
   ): Promise<BilibiliLiveDanmakuStatus> {
     this.ensureRunning()
+    if (this.options.enabled === false) {
+      throw new CoreApplicationError("BILIBILI_DANMAKU_DISABLED", "弹幕监听已由启动配置关闭。启用 enabled 后重启客户端可恢复，已有数据不会删除。")
+    }
+    const requestedProtocolVersion = input.protocolVersion !== undefined
+      && input.protocolVersion >= 0 && input.protocolVersion <= 3 ? input.protocolVersion : undefined
     const existing = this.connections.get(input.roomMonitorId)
     if (existing && ACTIVE_STATUSES.has(existing.status)) {
       if (
-        input.protocolVersion === undefined
-        || input.protocolVersion === -1
-        || input.protocolVersion === existing.protocolVersion
+        requestedProtocolVersion === undefined
+        || requestedProtocolVersion === existing.protocolVersion
       ) return this.status(input.roomMonitorId)
       await this.stopInternal(input.roomMonitorId)
     }
@@ -420,18 +460,15 @@ export class BilibiliLiveDanmakuService {
       monitorId: input.roomMonitorId,
       roomId: room.roomId,
       sessionId,
+      connectionId: sessionId,
+      attempt: 0,
+      persisted: false,
+      cancelled: false,
       autoManaged,
       status: "CONNECTING",
       startedAt,
       receiptOrdinal: 0
     }
-    this.options.database.createBilibiliLiveDanmakuSession({
-      sessionId,
-      monitorId: input.roomMonitorId,
-      roomId: room.roomId,
-      connectHost: null,
-      startedAt
-    })
     this.connections.set(input.roomMonitorId, handle)
     try {
       const credential = await this.credential()
@@ -439,49 +476,79 @@ export class BilibiliLiveDanmakuService {
       const result = await this.options.source.start({
         connectionId: sessionId,
         roomId: room.roomId,
-        ...(input.protocolVersion === undefined || input.protocolVersion === -1
+        preferredProtocolVersion: this.options.protocolVersion ?? 3,
+        ...(this.options.connectionConfiguration ? { connectionConfiguration: this.options.connectionConfiguration } : {}),
+        ...(this.options.cacheConfiguration ? { cacheConfiguration: this.options.cacheConfiguration } : {}),
+        ...(requestedProtocolVersion === undefined
           ? {}
-          : { protocolVersion: input.protocolVersion }),
+          : { protocolVersion: requestedProtocolVersion }),
         ...(credential ? { credential } : {})
       }, (event) => this.applySourceEvent(handle, event))
+      this.ensureRunning()
+      if (handle.cancelled) this.ensureCurrent(handle)
+      if (!ACTIVE_STATUSES.has(handle.status)) return this.toStatus(input.roomMonitorId, handle, false)
       this.ensureCurrent(handle)
+      if (!handle.persisted) this.createAttemptSession(handle, result.attempt ?? 1, startedAt)
       handle.connectHost = result.connectHost
       handle.protocolVersion = result.protocolVersion
       handle.authMode = result.authMode
       handle.authUid = result.authUid
-      handle.status = "CONNECTED"
       const connectedAt = this.options.now().toISOString()
-      this.options.database.updateBilibiliLiveDanmakuSessionTransport(
-        sessionId,
-        result.connectHost,
-        connectedAt
-      )
-      this.options.database.markBilibiliLiveDanmakuSessionConnected(sessionId, connectedAt)
+      if (handle.status === "CONNECTING") {
+        this.options.database.updateBilibiliLiveDanmakuSessionTransport(handle.sessionId, result.connectHost, connectedAt)
+        handle.status = result.status ?? "CONNECTED"
+        if (handle.status === "CONNECTED") this.options.database.markBilibiliLiveDanmakuSessionConnected(handle.sessionId, connectedAt)
+      }
       return this.status(input.roomMonitorId)
     } catch (error) {
-      this.ensureCurrent(handle)
+      this.ensureRunning()
+      if (handle.cancelled) this.ensureCurrent(handle)
       this.connections.delete(input.roomMonitorId)
       const timestamp = this.options.now().toISOString()
       const normalized = normalizeError(error)
-      this.options.database.markBilibiliLiveDanmakuSessionError(
-        sessionId,
-        timestamp,
-        normalized.code,
-        normalized.message
-      )
+      if (handle.persisted && handle.status !== "ERROR" && handle.status !== "CLOSED") {
+        this.options.database.markBilibiliLiveDanmakuSessionError(handle.sessionId, timestamp, normalized.code, normalized.message)
+      }
       throw new CoreApplicationError(normalized.code, normalized.message)
     }
   }
 
   private applySourceEvent(handle: ConnectionHandle, event: BilibiliLiveDanmakuSourceEvent): void {
     if (this.stopped || this.connections.get(handle.monitorId) !== handle) return
-    if (event.type === "heartbeat") {
+    if (event.type === "connecting") {
+      if (event.attempt <= handle.attempt) return
+      this.createAttemptSession(handle, event.attempt, event.receivedAt, event.connectHost)
+      handle.connectHost = event.connectHost
+      handle.protocolVersion = event.protocolVersion
+      handle.authMode = event.authMode
+      handle.authUid = event.authUid
+      return
+    }
+    if (event.attempt !== undefined && event.attempt !== handle.attempt) return
+    if (event.type === "attempt-failed") {
+      if (handle.persisted) {
+        handle.status = "ERROR"
+        handle.lastErrorAt = event.receivedAt
+        handle.lastErrorType = event.code
+        handle.lastErrorMessage = event.message
+        this.options.database.markBilibiliLiveDanmakuSessionError(handle.sessionId, event.receivedAt, event.code, event.message)
+      }
+      return
+    }
+    if (!ACTIVE_STATUSES.has(handle.status)) return
+    if (!handle.persisted) this.createAttemptSession(handle, 1, handle.startedAt)
+    if (event.type === "connected") {
+      handle.status = "CONNECTED"
+      this.options.database.markBilibiliLiveDanmakuSessionConnected(handle.sessionId, event.receivedAt)
+      return
+    }
+    if (event.type === "heartbeat" || event.type === "heartbeat-sent") {
       handle.lastHeartbeatAt = event.receivedAt
       this.options.database.markBilibiliLiveDanmakuSessionHeartbeat(
         handle.sessionId,
         event.receivedAt
       )
-      this.recordMetric(handle, event.receivedAt, {
+      if (event.type === "heartbeat") this.recordMetric(handle, event.receivedAt, {
         heartbeatPopularity: event.popularity,
         rawEventDelta: 0
       })
@@ -497,7 +564,9 @@ export class BilibiliLiveDanmakuService {
         && currentName?.includes("*")
         && this.options.resolveDisplayName
       ) {
+        const attempt = handle.attempt
         void this.resolveMaskedDisplayName(uid, currentName).then((displayName) => {
+          if (handle.attempt !== attempt) return
           this.applyCommandEvent(handle, {
             ...event.event,
             actor: { ...event.event.actor, displayName }
@@ -530,24 +599,45 @@ export class BilibiliLiveDanmakuService {
     )
   }
 
+  private createAttemptSession(handle: ConnectionHandle, attempt: number, startedAt: string, connectHost?: string): void {
+    const sessionId = handle.persisted ? this.options.idFactory() : handle.sessionId
+    this.options.database.createBilibiliLiveDanmakuSession({ sessionId,
+      monitorId: handle.monitorId, roomId: handle.roomId, connectHost: connectHost ?? null, startedAt })
+    handle.sessionId = sessionId
+    handle.attempt = attempt
+    handle.persisted = true
+    handle.status = "CONNECTING"
+    handle.startedAt = startedAt
+    handle.receiptOrdinal = 0
+    handle.lastHeartbeatAt = undefined
+    handle.lastErrorAt = undefined
+    handle.lastErrorType = undefined
+    handle.lastErrorMessage = undefined
+  }
+
   private applyCommandEvent(handle: ConnectionHandle, parsed: NormalizedBilibiliDanmakuEvent): void {
-    if (this.stopped || this.connections.get(handle.monitorId) !== handle) return
+    if (this.stopped || this.connections.get(handle.monitorId) !== handle || !ACTIVE_STATUSES.has(handle.status)) return
     handle.receiptOrdinal += 1
     const room = this.options.database.findBilibiliLiveRoomById(handle.monitorId)
     try {
       this.options.database.runInTransaction(() => {
+        // Original SQL now() is shared by the ingestion transaction, including
+        // facts and legacy projections, after any display-name lookup completes.
+        const writtenAt = this.options.now().toISOString()
         if (room && parsed.kind !== "UNKNOWN") this.options.sessionSink?.ingest(
           room,
           handle.sessionId,
           handle.receiptOrdinal,
           handle.protocolVersion,
-          parsed
+          parsed,
+          writtenAt
         )
         this.options.database.recordBilibiliLiveDanmakuEvent({
           monitorId: handle.monitorId,
           sessionId: handle.sessionId,
           roomId: handle.roomId,
           occurredAt: parsed.occurredAt,
+          writtenAt,
           bucketSeconds: this.bucketSeconds,
           danmuDelta: parsed.kind === "DANMAKU" ? 1 : 0,
           likeCount: parsed.likeCount ?? null,
@@ -557,7 +647,7 @@ export class BilibiliLiveDanmakuService {
           giftDelta: Math.max(0, parsed.giftDelta),
           superChatDelta: Math.max(0, parsed.superChatDelta),
           rawEventDelta: 1,
-          recent: parsed.kind === "DANMAKU"
+          recent: parsed.kind === "DANMAKU" && hasLiveSnapshotText(parsed.messageText)
             ? {
                 senderUid: parsed.actor?.uid && /^[1-9]\d*$/.test(parsed.actor.uid)
                   ? parsed.actor.uid
@@ -609,6 +699,7 @@ export class BilibiliLiveDanmakuService {
       sessionId: handle.sessionId,
       roomId: handle.roomId,
       occurredAt,
+      writtenAt: this.options.now().toISOString(),
       bucketSeconds: this.bucketSeconds,
       danmuDelta: 0,
       likeCount: null,
@@ -626,6 +717,7 @@ export class BilibiliLiveDanmakuService {
   private async credential(): Promise<
     { cookieHeader: string; authUid: string } | undefined
   > {
+    if (this.options.connectionConfiguration?.useLoginCredential === false) return undefined
     try {
       const credential = await this.options.credentialProvider()
       const authUid = credential?.account?.mid
@@ -687,12 +779,23 @@ function statusStats(stats: ReturnType<ControlDatabase["getBilibiliLiveDanmakuSt
   }
 }
 
-function parseRangeMillis(range: string): number {
-  const amount = Math.max(1, Number.parseInt(range.slice(0, -1), 10))
-  const unit = range.slice(-1).toLowerCase()
-  if (unit === "m") return amount * 60_000
-  if (unit === "d") return amount * 86_400_000
-  return amount * 3_600_000
+function parseRangeMillis(range: string): bigint {
+  // Java String.trim removes U+0000..U+0020 only, unlike JavaScript trim.
+  const value = range.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/gu, "").toLowerCase()
+  try {
+    const raw = parseJavaDecimalLong(value.slice(0, -1))
+    const amount = raw < 1n ? 1n : raw
+    const unit = value.slice(-1)
+    const secondsPerUnit = unit === "m" ? 60n : unit === "h" ? 3_600n : unit === "d" ? 86_400n : null
+    if (secondsPerUnit !== null) {
+      const seconds = amount * secondsPerUnit
+      // Duration.ofMinutes/Hours/Days uses signed-long exact multiplication.
+      if (seconds <= (1n << 63n) - 1n) return seconds * 1_000n
+    }
+  } catch {
+    // The original parser catches malformed/overflowed Long input, not minus().
+  }
+  return 3_600_000n
 }
 
 function normalizeError(error: unknown): { code: string; message: string } {

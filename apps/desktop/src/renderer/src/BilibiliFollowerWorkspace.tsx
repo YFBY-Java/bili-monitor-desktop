@@ -6,7 +6,7 @@ import type {
   UpdateBilibiliFollowerMonitorSettingsInput
 } from "@bmd/contracts"
 import { AddBilibiliFollowerMonitorInputV2Schema } from "@bmd/contracts"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import {
   Activity,
   CircleAlert,
@@ -45,8 +45,8 @@ export interface BilibiliFollowerWorkspaceProps {
   addSuccess?: boolean
   settingsSuccess?: string
   refreshSuccess?: boolean
+  deleteSuccess?: boolean
   actionError?: string | undefined
-  busyUserIds: string[]
   savingIntervalUserIds: string[]
   intervalDrafts: FollowerIntervalDrafts
   onIntervalDraftChange: (user: BilibiliFollowerMonitorV2, value: number) => void
@@ -60,7 +60,7 @@ export interface BilibiliFollowerWorkspaceProps {
   onRefreshUser: (userId: string) => Promise<void>
   onUpdateStatus: (userId: string, enabled: boolean) => Promise<void>
   onUpdateSettings: (input: UpdateBilibiliFollowerMonitorSettingsInput) => Promise<void>
-  onDelete: (userId: string) => Promise<void>
+  onDelete: (userId: string, onCommitted?: () => void) => Promise<void>
   onReload: () => void
   onToggleTrendUser?: (userId: string) => void
 }
@@ -197,7 +197,6 @@ function AddMonitorForm({
 
 function MonitorDetail({
   user,
-  busy,
   savingInterval,
   collecting,
   now,
@@ -209,7 +208,6 @@ function MonitorDetail({
   onDelete
 }: {
   user: BilibiliFollowerMonitorV2
-  busy: boolean
   savingInterval: boolean
   collecting: boolean
   now: number
@@ -270,7 +268,7 @@ function MonitorDetail({
 
       <div className="follower-actions">
         <button className="button button-secondary" type="button" onClick={() => void onRefreshUser(user.id)}><RefreshCcw size={14} />立即刷新</button>
-        <button className="button button-secondary" disabled={busy} type="button" onClick={() => void onUpdateStatus(user.id, !active)}>{active ? <Pause size={14} /> : <Play size={14} />}{active ? "暂停监控" : "恢复监控"}</button>
+        <button className="button button-secondary" type="button" onClick={() => void onUpdateStatus(user.id, !active)}>{active ? <Pause size={14} /> : <Play size={14} />}{active ? "暂停监控" : "恢复监控"}</button>
         <details className="follower-settings">
           <summary><Settings2 size={14} />采集设置</summary>
           <div>
@@ -278,7 +276,7 @@ function MonitorDetail({
             <small>当前：{formatInterval(user.intervalSeconds)}</small>
             {intervalSeconds < 60 && <small className="form-warning">短间隔会受全局请求节流和失败退避保护。</small>}
             <button className="button button-secondary" disabled={savingInterval || !intervalDirty} type="button" onClick={() => void onUpdateSettings({ userId: user.id, intervalSeconds })}>{savingInterval ? "正在保存…" : "保存间隔"}</button>
-            <button className="follower-delete" disabled={busy} type="button" onClick={deleteUser}><Trash2 size={14} />删除监控与全部历史快照</button>
+            <button className="follower-delete" type="button" onClick={deleteUser}><Trash2 size={14} />删除监控与全部历史快照</button>
           </div>
         </details>
       </div>
@@ -320,6 +318,7 @@ export function BilibiliFollowerWorkspace(props: BilibiliFollowerWorkspaceProps)
       {props.addSuccess && <div className="follower-state" role="status"><UserRoundPlus size={20} /><span>已添加监控用户</span></div>}
       {props.settingsSuccess && <div className="follower-state" role="status"><Settings2 size={20} /><span>{props.settingsSuccess}</span></div>}
       {props.refreshSuccess && <div className="follower-state" role="status"><RefreshCcw size={20} /><span>已刷新</span></div>}
+      {props.deleteSuccess && <div className="follower-state" role="status"><Trash2 size={20} /><span>已删除</span></div>}
       {props.actionError && <div className="follower-state is-error" role="alert"><CircleAlert size={20} /><span>{props.actionError}</span></div>}
       {props.monitors.phase === "success" && props.monitors.staleMessage && <div className="follower-state is-error" role="alert"><CircleAlert size={20} /><span>更新失败，保留上次数据：{props.monitors.staleMessage}</span><button className="button button-secondary" onClick={props.onReload}>重新加载</button></div>}
       <div ref={monitorAnchor}><FollowerCollectionSummary users={users} available={props.monitors.phase === "success"} /></div>
@@ -335,10 +334,11 @@ export function BilibiliFollowerWorkspace(props: BilibiliFollowerWorkspaceProps)
                 ? <div className="business-empty"><UserRoundPlus size={26} /><strong>还没有监控用户</strong><span>添加 B站 UID 后，会先校验用户并保存第一条粉丝快照。</span></div>
                 : <FollowerUserStrip users={users} selected={selected} expandedId={expandedId} collectingIds={props.collectingUserIds ?? []} now={now}
                   onExpand={id => setExpandedId(current => current === id ? undefined : id)} onToggleTrend={props.onToggleTrendUser} />}
-              {expanded && <MonitorDetail key={expanded.id} user={expanded} now={now} busy={props.busyUserIds.includes(expanded.id)} collecting={props.collectingUserIds?.includes(expanded.id) ?? false}
+              {expanded && <MonitorDetail key={expanded.id} user={expanded} now={now} collecting={props.collectingUserIds?.includes(expanded.id) ?? false}
                 savingInterval={props.savingIntervalUserIds.includes(expanded.id)} intervalDraft={props.intervalDrafts[expanded.id]}
                 onDraftChange={value => props.onIntervalDraftChange(expanded, value)}
-                onRefreshUser={props.onRefreshUser} onUpdateStatus={props.onUpdateStatus} onUpdateSettings={props.onUpdateSettings} onDelete={props.onDelete} />}
+                onRefreshUser={props.onRefreshUser} onUpdateStatus={props.onUpdateStatus} onUpdateSettings={props.onUpdateSettings}
+                onDelete={(userId) => props.onDelete(userId, () => setExpandedId(id => id === userId ? undefined : id))} />}
             </section>
           )}
         </div>
@@ -371,11 +371,10 @@ export function ConnectedBilibiliFollowerWorkspace({
   creationOpen: boolean
   onCloseCreation: () => void
 }): JSX.Element {
-  const queryClient = useQueryClient()
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([])
-  const [busyUserIds, setBusyUserIds] = useState<string[]>([])
   const [actionError, setActionError] = useState<string>()
   const [refreshSuccess, setRefreshSuccess] = useState(false)
+  const [deleteSuccess, setDeleteSuccess] = useState(false)
   const [addSuccess, setAddSuccess] = useState(false)
   const [intervalDrafts, setIntervalDrafts] = useState<FollowerIntervalDrafts>({})
   const [savingIntervalUserIds, setSavingIntervalUserIds] = useState<string[]>([])
@@ -405,12 +404,10 @@ export function ConnectedBilibiliFollowerWorkspace({
       }
     }
   })
-  const trendsQuery = useFollowerTrends(bridge, selectedUserIds, monitorsQuery.dataUpdatedAt)
-  const invalidate = async (): Promise<void> => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["bilibili-followers-v2"] }, { cancelRefetch: false }),
-      queryClient.invalidateQueries({ queryKey: ["bilibili-follower-trends-v2"] })
-    ])
+  const trendsQuery = useFollowerTrends(bridge, selectedUserIds, monitorsQuery.data?.items)
+  const loadMonitors = async (): Promise<void> => {
+    const result = await monitorsQuery.refetch({ cancelRefetch: false })
+    if (result.isSuccess) trendsQuery.reload()
   }
   const addMutation = useMutation({
     mutationFn: ({ input }: { input: AddBilibiliFollowerMonitorInputV2; onCommitted?: () => void }) => bridge.bilibiliFollowersV2.add(input),
@@ -420,19 +417,23 @@ export function ConnectedBilibiliFollowerWorkspace({
       request.onCommitted?.()
       // Match loadUsers: reuse an in-flight read, swallow read failure in Query,
       // and confirm the committed add without waiting for queued history reads.
-      await monitorsQuery.refetch({ cancelRefetch: false })
+      await loadMonitors()
       setSelectedUserIds((ids) => ids.includes(user.id) || ids.length >= 4 ? ids : [...ids, user.id])
       setAddSuccess(true)
     }
   })
-  const runUserAction = async (userId: string, action: () => Promise<unknown>): Promise<void> => {
-    setBusyUserIds((ids) => [...new Set([...ids, userId])])
+  const deleteUser = async (userId: string, onCommitted?: () => void): Promise<void> => {
     setActionError(undefined)
+    setReadErrorVisible(false)
+    setDeleteSuccess(false)
     try {
-      await action()
-      await invalidate()
+      await bridge.bilibiliFollowersV2.remove({ userId })
+      setSelectedUserIds(ids => ids.filter(id => id !== userId))
+      trendsQuery.removeUser(userId)
+      onCommitted?.()
+      await loadMonitors()
+      setDeleteSuccess(true)
     } catch (error) { setReadErrorVisible(false); setActionError(errorMessage(error)) }
-    finally { setBusyUserIds((ids) => ids.filter((id) => id !== userId)) }
   }
   const saveInterval = async (input: UpdateBilibiliFollowerMonitorSettingsInput): Promise<void> => {
     const intervalSeconds = clampFollowerInterval(input.intervalSeconds)
@@ -447,10 +448,18 @@ export function ConnectedBilibiliFollowerWorkspace({
       setIntervalDrafts(drafts => ({ ...drafts, [input.userId]: { value: updatedUser.intervalSeconds, dirty: false } }))
       // Reuse an existing read, accept its old snapshot, and swallow read errors.
       // A successful settings commit is not undone by a failed list or history.
-      await monitorsQuery.refetch({ cancelRefetch: false })
+      await loadMonitors()
       setSettingsSuccess(`已更新采集间隔为 ${formatFollowerInterval(intervalSeconds)}`)
     } catch (error) { setReadErrorVisible(false); setActionError(errorMessage(error)) }
     finally { setSavingIntervalUserIds(ids => ids.filter(id => id !== input.userId)) }
+  }
+  const updateStatus = async (userId: string, enabled: boolean): Promise<void> => {
+    setActionError(undefined)
+    setReadErrorVisible(false)
+    try {
+      await bridge.bilibiliFollowersV2.updateStatus({ userId, enabled })
+      await loadMonitors()
+    } catch (error) { setReadErrorVisible(false); setActionError(errorMessage(error)) }
   }
   const refreshUser = async (userId: string): Promise<void> => {
     setActionError(undefined)
@@ -460,7 +469,7 @@ export function ConnectedBilibiliFollowerWorkspace({
       await bridge.bilibiliFollowersV2.refresh({ userId })
       // Original manual refresh only awaits the shared list, not queued history.
       // Query retains old data and swallows read errors, as loadUsers does.
-      await monitorsQuery.refetch({ cancelRefetch: false })
+      await loadMonitors()
       setRefreshSuccess(true)
     } catch (error) { setReadErrorVisible(false); setActionError(errorMessage(error)) }
   }
@@ -492,8 +501,8 @@ export function ConnectedBilibiliFollowerWorkspace({
       addSuccess={addSuccess}
       settingsSuccess={settingsSuccess}
       refreshSuccess={refreshSuccess}
+      deleteSuccess={deleteSuccess}
       actionError={actionError}
-      busyUserIds={busyUserIds}
       savingIntervalUserIds={savingIntervalUserIds}
       intervalDrafts={intervalDrafts}
       onIntervalDraftChange={(user, value) => {
@@ -507,13 +516,10 @@ export function ConnectedBilibiliFollowerWorkspace({
       onCloseCreation={onCloseCreation}
       onAdd={async (input, onCommitted) => { await addMutation.mutateAsync({ input, ...(onCommitted ? { onCommitted } : {}) }) }}
       onRefreshUser={refreshUser}
-      onUpdateStatus={async (userId, enabled) => { await runUserAction(userId, () => bridge.bilibiliFollowersV2.updateStatus({ userId, enabled })) }}
+      onUpdateStatus={updateStatus}
       onUpdateSettings={saveInterval}
-      onDelete={async (userId) => { await runUserAction(userId, async () => {
-        await bridge.bilibiliFollowersV2.remove({ userId })
-        setSelectedUserIds((ids) => ids.filter((id) => id !== userId))
-      }) }}
-      onReload={() => { void monitorsQuery.refetch({ cancelRefetch: false }) }}
+      onDelete={deleteUser}
+      onReload={() => { void loadMonitors() }}
       onToggleTrendUser={toggleTrendUser}
     />
   )

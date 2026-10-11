@@ -2,10 +2,17 @@ import { randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { resolve } from "node:path"
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite"
-import { compareLiveSnapshotTime, hasLiveSnapshotText } from "./bilibili-live-snapshot-values"
+import { AsyncLocalStorage } from "node:async_hooks"
+import { compareLiveSnapshotTime, hasLiveSnapshotText, liveSnapshotStorageTime } from "./bilibili-live-snapshot-values"
 import { migrateLiveSignedCounters } from "./bilibili-live-counter-migration"
-import { followerStoredNickname } from "./follower-profile-storage-text"
+import { followerStoredNickname, followerStoredText } from "./follower-profile-storage-text"
+import { postgresStoredText } from "./postgres-storage-text"
+import { rankStoredCountText, rankStoredEntryJson, rankStoredText, rankStoredTruncatedText } from "./rank-storage-text"
+import { serializeSubjectJson } from "./subject-json-storage"
+import { serializeJacksonPostgresJson } from "./postgres-json-storage"
 import { migrateFollowerSignedCounters } from "./bilibili-follower-counter-migration"
+import { migrateDanmakuBucketSeconds } from "./bilibili-danmaku-bucket-migration"
+import { migrateRankSignedCounters } from "./bilibili-rank-counter-migration"
 
 export interface ControlDatabaseStatus {
   databasePath: string
@@ -96,7 +103,7 @@ export interface StoredBilibiliSubjectBinding {
   bilibiliLiveRoomMonitorId: string | null
   mid: string | null
   roomId: string | null
-  enabledCapabilities: string[]
+  enabledCapabilities: Array<string | null>
   danmuEnabled: boolean
   createdAt: string
   updatedAt: string
@@ -182,6 +189,13 @@ export interface StoredBilibiliFollowerSnapshot {
   createdAt: string
 }
 
+// IDs remain decimal strings, just like the lossless local business contracts.
+// Never pass the complete Worker request (credentials/WBI material) here.
+export type BilibiliApiRequestMeta = Readonly<Record<string, string | number | boolean | readonly string[]>>
+export type BilibiliApiResponseMeta =
+  | { success: true; sourceEndpoint?: string }
+  | { success: false; message: string; biliCode?: number }
+
 export interface StoredBilibiliApiCall {
   callId: string
   taskId: string
@@ -194,6 +208,8 @@ export interface StoredBilibiliApiCall {
   retryable: boolean
   evidenceObjectId: string | null
   createdAt: string
+  requestMeta?: BilibiliApiRequestMeta
+  responseMeta?: BilibiliApiResponseMeta
 }
 
 export interface StoredBilibiliAuthCredential {
@@ -270,8 +286,8 @@ export interface StoredBilibiliLiveRoomMonitor {
   parentAreaName: string | null
   liveStatus: number
   liveTime: string | null
-  onlineCount: number | null
-  attentionCount: number | null
+  onlineCount: bigint | null
+  attentionCount: bigint | null
   monitorStatus: string
   intervalSeconds: number
   nextCollectAt: string | null
@@ -299,8 +315,8 @@ export interface StoredBilibiliLiveRoomSnapshot {
   areaName: string | null
   parentAreaId: string | null
   parentAreaName: string | null
-  onlineCount: number | null
-  attentionCount: number | null
+  onlineCount: bigint | null
+  attentionCount: bigint | null
   liveTime: string | null
   sourceEndpoint: string
   capturedAt: string
@@ -422,11 +438,45 @@ export interface StoredBilibiliLiveSessionEvent {
   createdAt: string
 }
 
+export interface StoredBilibiliLiveSessionFactStatistics {
+  eventCount: number
+  danmakuCount: number
+  giftEventCount: number
+  giftCount: number
+  freeGiftCount: number
+  giftSenderCount: number
+  paidUserCount: number
+  interactingUserCount: number
+  unresolvedInteractingEventCount: number
+  unresolvedGiftEventCount: number
+  unresolvedPaidEventCount: number
+  paidEventCount: number
+  paidAmountMilliYuan: number
+  firstEventAt: string | null
+  lastEventAt: string | null
+}
+
+export interface StoredBilibiliLiveSessionExportUser {
+  actorKey: string
+  identityQuality: "VERIFIED_UID" | "UNRESOLVED_EVENT"
+  userUid: string | null
+  displayName: string | null
+  danmakuCount: number
+  giftEventCount: number
+  giftCount: number
+  freeGiftCount: number
+  paidEventCount: number
+  paidAmountMilliYuan: number
+  firstSeenAt: string
+  lastSeenAt: string
+}
+
 export interface RecordBilibiliLiveDanmakuEventInput {
   monitorId: string
   sessionId: string | null
   roomId: string
   occurredAt: string
+  writtenAt?: string
   bucketSeconds: number
   danmuDelta: number
   likeCount: number | null
@@ -456,7 +506,7 @@ export interface StoredBilibiliLiveStatusEvent {
   toLiveStatus: number | null
   titleBefore: string | null
   titleAfter: string | null
-  onlineCount: number | null
+  onlineCount: bigint | null
   occurredAt: string
 }
 
@@ -471,7 +521,7 @@ export interface StoredBilibiliLiveRankSnapshot {
   periodScope: string | null
   pageNo: number
   pageSize: number
-  totalCount: number | null
+  totalCount: number | string | null
   countText: string | null
   valueText: string | null
   remindMsg: string | null
@@ -494,19 +544,23 @@ export interface StoredBilibiliLiveRankEntry {
   entryKind: string
   displayName: string | null
   faceUrl: string | null
-  score: number | null
+  score: number | string | null
   guardLevel: number | null
   wealthLevel: number | null
   medalName: string | null
   medalLevel: number | null
+  medalRuid?: string | null
+  medalIsLight?: number | null
+  rawEntryJson?: string | null
   guardExpiredText: string | null
   accompanyDays: number | null
   createdAt: string
 }
 
 export interface UpsertBilibiliLiveRankSnapshotInput {
+  rawPayloadStorageStatus?: string
   snapshot: Omit<StoredBilibiliLiveRankSnapshot, "evidenceObjectId" | "createdAt">
-  entries: Array<Omit<StoredBilibiliLiveRankEntry, "snapshotId" | "monitorId" | "roomId" | "ruid" | "createdAt">>
+  entries: Array<Omit<StoredBilibiliLiveRankEntry, "snapshotId" | "monitorId" | "roomId" | "ruid" | "createdAt"> & { rawEntryStorageStatus?: string }>
   artifact: StoredObjectArtifact
 }
 
@@ -529,8 +583,8 @@ export interface ApplyBilibiliLiveRoomSnapshotInput {
     parentAreaName: string | null
     liveStatus: number
     liveTime: string | null
-    onlineCount: number | null
-    attentionCount: number | null
+    onlineCount: number | bigint | null
+    attentionCount: number | bigint | null
     intervalSeconds: number
     nextCollectAt: string
     capturedAt: string
@@ -539,6 +593,7 @@ export interface ApplyBilibiliLiveRoomSnapshotInput {
   snapshot: {
     snapshotId: string
     capturedBucket: string
+    rawPayloadStorageStatus?: string
   }
   artifact: StoredObjectArtifact
   outbox: NewStoredOutboxMessage
@@ -562,6 +617,7 @@ export interface UpsertBilibiliFollowerMonitorSnapshotInput {
   snapshot: {
     snapshotId: string
     capturedBucket: string
+    rawPayloadStorageStatus?: string
   }
   artifact: StoredObjectArtifact
   outbox: NewStoredOutboxMessage
@@ -569,11 +625,19 @@ export interface UpsertBilibiliFollowerMonitorSnapshotInput {
 
 export class ControlDatabase {
   private transactionDepth = 0
+  private readonly preparedApiCalls = new AsyncLocalStorage<{
+    accepting: boolean
+    calls: Array<{ call: StoredBilibiliApiCall; artifact?: StoredObjectArtifact }>
+  }>()
 
   private constructor(
     private readonly database: DatabaseSync,
     private readonly databasePath: string
-  ) {}
+  ) {
+    database.function("bilibili_live_lower", { deterministic: true }, (value) =>
+      typeof value === "string" ? value.toLocaleLowerCase() : null
+    )
+  }
 
   static async open(directory: string): Promise<ControlDatabase> {
     await mkdir(directory, { recursive: true })
@@ -1466,6 +1530,41 @@ export class ControlDatabase {
     }
     if (Number(version.user_version) < 13) migrateLiveSignedCounters(database)
     if (Number(version.user_version) < 14) migrateFollowerSignedCounters(database)
+    if (Number(version.user_version) < 15) migrateDanmakuBucketSeconds(database)
+    if (Number(version.user_version) < 16) {
+      // Existing calls have no recoverable metadata; leave NULL instead of
+      // inventing a success/message or reconstructing historical parameters.
+      database.exec(`
+        BEGIN IMMEDIATE;
+        ALTER TABLE bilibili_api_call ADD COLUMN request_meta_json TEXT
+          CHECK(request_meta_json IS NULL OR json_valid(request_meta_json));
+        ALTER TABLE bilibili_api_call ADD COLUMN response_meta_json TEXT
+          CHECK(response_meta_json IS NULL OR json_valid(response_meta_json));
+        INSERT INTO schema_migration(version, applied_at)
+        VALUES (16, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+        PRAGMA user_version = 16;
+        COMMIT;
+      `)
+    }
+    if (Number(version.user_version) < 17) migrateRankSignedCounters(database)
+    if (Number(version.user_version) < 18) {
+      database.exec("BEGIN IMMEDIATE")
+      try {
+        const columns = new Set(database.prepare("PRAGMA table_info(bilibili_live_rank_entry)").all().map(column => column.name))
+        for (const [column, definition] of [
+          ["medal_ruid", "INTEGER CHECK(medal_ruid IS NULL OR typeof(medal_ruid)='integer')"],
+          ["medal_is_light", "INTEGER CHECK(medal_is_light IS NULL OR (typeof(medal_is_light)='integer' AND medal_is_light BETWEEN -2147483648 AND 2147483647))"],
+          ["raw_entry_json", "TEXT CHECK(raw_entry_json IS NULL OR json_valid(raw_entry_json))"]
+        ] as const) {
+          if (!columns.has(column)) database.exec(`ALTER TABLE bilibili_live_rank_entry ADD COLUMN ${column} ${definition}`)
+        }
+        database.exec(`INSERT INTO schema_migration(version, applied_at) VALUES (18, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+          PRAGMA user_version=18; COMMIT;`)
+      } catch (error) {
+        database.exec("ROLLBACK")
+        throw error
+      }
+    }
   }
 
   status(): ControlDatabaseStatus {
@@ -1588,6 +1687,81 @@ export class ControlDatabase {
     )
   }
 
+  completeDouyinWebLogin(input: {
+    loginId: string
+    credential: NewStoredDouyinAuthCredential
+    rawResult: Record<string, unknown>
+  }): StoredDouyinAuthCredential | undefined {
+    return this.completeDouyinLogin("WEB_QR", input)
+  }
+
+  completeDouyinOAuthLogin(input: {
+    loginId: string
+    credential: NewStoredDouyinAuthCredential
+    rawResult: Record<string, unknown>
+  }): StoredDouyinAuthCredential | undefined {
+    return this.completeDouyinLogin("OAUTH_LOGIN", input)
+  }
+
+  private completeDouyinLogin(flowType: "WEB_QR" | "OAUTH_LOGIN", input: {
+    loginId: string
+    credential: NewStoredDouyinAuthCredential
+    rawResult: Record<string, unknown>
+  }): StoredDouyinAuthCredential | undefined {
+    return this.transaction(() => {
+      const session = this.findDouyinAuthSessionById(input.loginId)
+      const authType = flowType === "WEB_QR" ? "DOUYIN_WEB_SESSION" : "DOUYIN_OAUTH2"
+      if (!session || session.flowType !== flowType || input.credential.authType !== authType) return undefined
+      if (session.status === "SUCCESS") {
+        const result = JSON.parse(session.rawResultJson) as Record<string, unknown>
+        const stored = typeof result.credentialId === "string"
+          ? this.findDouyinCredentialById(result.credentialId)
+          : undefined
+        return stored?.authType === authType ? stored : undefined
+      }
+      if (session.status === "FAILED" || session.status === "EXPIRED") return undefined
+      if (flowType === "OAUTH_LOGIN" && session.status !== "VALIDATING") return undefined
+
+      const stored = this.saveActiveDouyinCredential(input.credential)
+      this.updateDouyinAuthSession({
+        loginId: input.loginId,
+        status: "SUCCESS",
+        rawResultJson: JSON.stringify({ ...input.rawResult, credentialId: stored.credentialId }),
+        completedAt: input.credential.updatedAt,
+        updatedAt: input.credential.updatedAt
+      })
+      return stored
+    })
+  }
+
+  completeDouyinOAuthRefresh(input: {
+    loginId: string
+    expectedCredentialId: string
+    credential: NewStoredDouyinAuthCredential
+  }): StoredDouyinAuthCredential | undefined {
+    return this.transaction(() => {
+      const session = this.findDouyinAuthSessionById(input.loginId)
+      if (!session || session.flowType !== "OAUTH_REFRESH" || session.status !== "VALIDATING"
+        || input.credential.authType !== "DOUYIN_OAUTH2") return undefined
+
+      const stored = this.replaceActiveDouyinCredentialIfCurrent(input.expectedCredentialId, input.credential)
+        ?? this.findActiveDouyinCredential("DOUYIN_OAUTH2")
+      if (!stored) return undefined
+      this.updateDouyinAuthSession({
+        loginId: input.loginId,
+        status: "SUCCESS",
+        rawResultJson: JSON.stringify({
+          credentialId: stored.credentialId,
+          sourceCredentialId: input.expectedCredentialId,
+          coalesced: stored.credentialId !== input.credential.credentialId
+        }),
+        completedAt: input.credential.updatedAt,
+        updatedAt: input.credential.updatedAt
+      })
+      return stored
+    })
+  }
+
   saveActiveDouyinCredential(input: NewStoredDouyinAuthCredential): StoredDouyinAuthCredential {
     this.transaction(() => {
       this.database.prepare(`
@@ -1692,10 +1866,10 @@ export class ControlDatabase {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         subject.subjectId,
-        subject.displayName,
-        subject.avatarUrl,
-        subject.remark,
-        JSON.stringify(subject.tags),
+        postgresStoredText(subject.displayName, "Subject"),
+        subject.avatarUrl === null ? null : postgresStoredText(subject.avatarUrl, "Subject"),
+        subject.remark === null ? null : postgresStoredText(subject.remark, "Subject"),
+        serializeSubjectJson(subject.tags),
         subject.monitorStatus,
         subject.healthScore,
         subject.lastSuccessAt,
@@ -1710,11 +1884,11 @@ export class ControlDatabase {
     })
   }
 
-  listBilibiliSubjects(limit: number): StoredBilibiliSubject[] {
+  listBilibiliSubjects(limit?: number): StoredBilibiliSubject[] {
     return (this.database.prepare(`${bilibiliSubjectSelect()}
       ORDER BY monitor_status ASC, updated_at DESC, subject_id ASC
-      LIMIT ?
-    `).all(limit) as Record<string, unknown>[]).map(toStoredBilibiliSubject)
+      ${limit === undefined ? "" : "LIMIT ?"}
+    `).all(...(limit === undefined ? [] : [limit])) as Record<string, unknown>[]).map(toStoredBilibiliSubject)
   }
 
   findBilibiliSubjectById(subjectId: string): StoredBilibiliSubject | undefined {
@@ -1733,6 +1907,7 @@ export class ControlDatabase {
     monitorStatus?: string
     updatedAt: string
   }): StoredBilibiliSubject | undefined {
+    const tagsJson = input.tags === undefined ? null : serializeSubjectJson(input.tags)
     this.database.prepare(`
       UPDATE bilibili_monitored_subject SET
         display_name = COALESCE(?, display_name),
@@ -1744,11 +1919,11 @@ export class ControlDatabase {
         updated_at = ?
       WHERE subject_id = ?
     `).run(
-      input.displayName ?? null,
-      input.avatarUrl ?? null,
-      input.remark ?? null,
-      input.tags === undefined ? null : JSON.stringify(input.tags),
-      input.tags === undefined ? null : JSON.stringify(input.tags),
+      input.displayName === undefined ? null : postgresStoredText(input.displayName, "Subject"),
+      input.avatarUrl === undefined || input.avatarUrl === null ? null : postgresStoredText(input.avatarUrl, "Subject"),
+      input.remark === undefined || input.remark === null ? null : postgresStoredText(input.remark, "Subject"),
+      tagsJson,
+      tagsJson,
       input.monitorStatus ?? null,
       input.updatedAt,
       input.subjectId
@@ -1824,7 +1999,7 @@ export class ControlDatabase {
       binding.bilibiliLiveRoomMonitorId,
       binding.mid,
       binding.roomId,
-      JSON.stringify(binding.enabledCapabilities),
+      serializeSubjectJson(binding.enabledCapabilities),
       binding.danmuEnabled ? 1 : 0,
       binding.createdAt,
       binding.updatedAt
@@ -1894,8 +2069,8 @@ export class ControlDatabase {
       layout.subjectId,
       layout.widgetKey,
       layout.enabled ? 1 : 0,
-      JSON.stringify(layout.position),
-      JSON.stringify(layout.settings),
+      serializeSubjectJson(layout.position),
+      serializeSubjectJson(layout.settings),
       layout.createdAt,
       layout.updatedAt
     )
@@ -2120,95 +2295,128 @@ export class ControlDatabase {
 
   upsertBilibiliFollowerMonitorSnapshot(input: UpsertBilibiliFollowerMonitorSnapshotInput): void {
     this.transaction(() => {
-      validateFollowerMid(input.monitor.mid, input.mode !== "collect")
-      const followerCount = followerCounterInput(input.monitor.followerCount)
-      const followingCount = input.monitor.followingCount === null
-        ? null : followerCounterInput(input.monitor.followingCount)
-      this.insertObjectArtifact(input.artifact)
-      const monitor = { ...input.monitor, followerCount, followingCount,
-        nickname: followerStoredNickname(input.monitor.nickname) }
-      if (input.mode === "collect") {
-        // A collection updates measurements, never the user's monitoring settings.
-        const result = this.database.prepare(`
-          UPDATE bilibili_follower_monitor SET
-            nickname = ?, avatar_url = ?, profile_url = ?, current_follower_count = ?,
-            following_count = ?, next_collect_at = ?, last_snapshot_at = ?, last_success_at = ?,
-            last_error_at = NULL, last_error_type = NULL, last_error_message = NULL,
-            source_endpoint = ?, current_evidence_object_id = ?, version = version + 1, updated_at = ?
-          WHERE monitor_id = ?
-        `).run(
-          monitor.nickname, monitor.avatarUrl, monitor.profileUrl, monitor.followerCount,
-          monitor.followingCount, monitor.nextCollectAt, monitor.capturedAt, monitor.capturedAt,
-          monitor.sourceEndpoint, input.artifact.objectId, monitor.capturedAt, monitor.monitorId
-        )
-        if (result.changes === 0) throw new Error("Cannot collect a deleted follower monitor")
-      } else this.database.prepare(`
-        INSERT INTO bilibili_follower_monitor (
-          monitor_id, mid, nickname, avatar_url, profile_url, current_follower_count,
-          following_count, monitor_status, interval_seconds, next_collect_at,
-          last_snapshot_at, last_success_at, source_endpoint, current_evidence_object_id,
-          version, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, 1, ?, ?)
-        ON CONFLICT(mid) DO UPDATE SET
-          nickname = excluded.nickname,
-          avatar_url = excluded.avatar_url,
-          profile_url = excluded.profile_url,
-          current_follower_count = excluded.current_follower_count,
-          following_count = excluded.following_count,
-          monitor_status = 'ACTIVE',
-          interval_seconds = excluded.interval_seconds,
-          next_collect_at = excluded.next_collect_at,
-          last_snapshot_at = excluded.last_snapshot_at,
-          last_success_at = excluded.last_success_at,
-          last_error_at = NULL,
-          last_error_type = NULL,
-          last_error_message = NULL,
-          source_endpoint = excluded.source_endpoint,
-          current_evidence_object_id = excluded.current_evidence_object_id,
-          version = bilibili_follower_monitor.version + 1,
-          updated_at = excluded.updated_at
-      `).run(
-        monitor.monitorId,
-        monitor.mid,
-        monitor.nickname,
-        monitor.avatarUrl,
-        monitor.profileUrl,
-        monitor.followerCount,
-        monitor.followingCount,
-        monitor.intervalSeconds,
-        monitor.nextCollectAt,
-        monitor.capturedAt,
-        monitor.capturedAt,
-        monitor.sourceEndpoint,
-        input.artifact.objectId,
-        monitor.capturedAt,
-        monitor.capturedAt
-      )
-      this.database.prepare(`
-        INSERT INTO bilibili_follower_snapshot (
-          snapshot_id, monitor_id, mid, follower_count, following_count,
-          captured_at, captured_bucket, source_endpoint, evidence_object_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(monitor_id, captured_bucket) DO UPDATE SET
-          follower_count = excluded.follower_count,
-          following_count = excluded.following_count,
-          captured_at = excluded.captured_at,
-          source_endpoint = excluded.source_endpoint,
-          evidence_object_id = excluded.evidence_object_id
-      `).run(
-        input.snapshot.snapshotId,
-        monitor.monitorId,
-        monitor.mid,
-        monitor.followerCount,
-        monitor.followingCount,
-        monitor.capturedAt,
-        input.snapshot.capturedBucket,
-        monitor.sourceEndpoint,
-        input.artifact.objectId,
-        monitor.capturedAt
-      )
+      this.persistBilibiliFollowerProfile(input)
+      this.persistBilibiliFollowerSnapshot(input)
       this.insertOutbox(input.outbox)
     })
+  }
+
+  /** The original non-transactional follower service commits profile before history.
+   * An enclosing Subject create transaction still owns and rolls back both writes.
+   */
+  upsertBilibiliFollowerMonitorSnapshotInOriginalOrder(
+    input: UpsertBilibiliFollowerMonitorSnapshotInput,
+    monitorOutbox: NewStoredOutboxMessage
+  ): void {
+    this.transaction(() => {
+      this.persistBilibiliFollowerProfile(input)
+      this.insertOutbox(monitorOutbox)
+    })
+    this.transaction(() => {
+      this.persistBilibiliFollowerSnapshot(input)
+      this.insertOutbox(input.outbox)
+    })
+  }
+
+  private persistBilibiliFollowerProfile(input: UpsertBilibiliFollowerMonitorSnapshotInput): void {
+    validateFollowerMid(input.monitor.mid, input.mode !== "collect")
+    const followerCount = followerCounterInput(input.monitor.followerCount)
+    const followingCount = input.monitor.followingCount === null
+      ? null : followerCounterInput(input.monitor.followingCount)
+    this.insertObjectArtifact(input.artifact)
+    const monitor = { ...input.monitor, followerCount, followingCount,
+      nickname: followerStoredNickname(input.monitor.nickname),
+      avatarUrl: input.monitor.avatarUrl === null ? null : followerStoredText(input.monitor.avatarUrl),
+      profileUrl: followerStoredText(input.monitor.profileUrl) }
+    if (input.mode === "collect") {
+      // A collection updates measurements, never the user's monitoring settings.
+      const result = this.database.prepare(`
+        UPDATE bilibili_follower_monitor SET
+          nickname = ?, avatar_url = ?, profile_url = ?, current_follower_count = ?,
+          following_count = ?, next_collect_at = ?, last_snapshot_at = ?, last_success_at = ?,
+          last_error_at = NULL, last_error_type = NULL, last_error_message = NULL,
+          source_endpoint = ?, current_evidence_object_id = ?, version = version + 1, updated_at = ?
+        WHERE monitor_id = ?
+      `).run(
+        monitor.nickname, monitor.avatarUrl, monitor.profileUrl, monitor.followerCount,
+        monitor.followingCount, monitor.nextCollectAt, monitor.capturedAt, monitor.capturedAt,
+        monitor.sourceEndpoint, input.artifact.objectId, monitor.capturedAt, monitor.monitorId
+      )
+      if (result.changes === 0) throw new Error("Cannot collect a deleted follower monitor")
+    } else this.database.prepare(`
+      INSERT INTO bilibili_follower_monitor (
+        monitor_id, mid, nickname, avatar_url, profile_url, current_follower_count,
+        following_count, monitor_status, interval_seconds, next_collect_at,
+        last_snapshot_at, last_success_at, source_endpoint, current_evidence_object_id,
+        version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      ON CONFLICT(mid) DO UPDATE SET
+        nickname = excluded.nickname,
+        avatar_url = excluded.avatar_url,
+        profile_url = excluded.profile_url,
+        current_follower_count = excluded.current_follower_count,
+        following_count = excluded.following_count,
+        monitor_status = 'ACTIVE',
+        interval_seconds = excluded.interval_seconds,
+        next_collect_at = excluded.next_collect_at,
+        last_snapshot_at = excluded.last_snapshot_at,
+        last_success_at = excluded.last_success_at,
+        last_error_at = NULL,
+        last_error_type = NULL,
+        last_error_message = NULL,
+        source_endpoint = excluded.source_endpoint,
+        current_evidence_object_id = excluded.current_evidence_object_id,
+        version = bilibili_follower_monitor.version + 1,
+        updated_at = excluded.updated_at
+    `).run(
+      monitor.monitorId,
+      monitor.mid,
+      monitor.nickname,
+      monitor.avatarUrl,
+      monitor.profileUrl,
+      monitor.followerCount,
+      monitor.followingCount,
+      monitor.intervalSeconds,
+      monitor.nextCollectAt,
+      monitor.capturedAt,
+      monitor.capturedAt,
+      monitor.sourceEndpoint,
+      input.artifact.objectId,
+      monitor.capturedAt,
+      monitor.capturedAt
+    )
+  }
+
+  private persistBilibiliFollowerSnapshot(input: UpsertBilibiliFollowerMonitorSnapshotInput): void {
+    const status = input.snapshot.rawPayloadStorageStatus
+    if (status !== undefined && status !== "ACCEPTED") {
+      throw new Error(`Bilibili follower snapshot JSONB input rejected: ${status}.`)
+    }
+    const monitor = { ...input.monitor, followerCount: followerCounterInput(input.monitor.followerCount),
+      followingCount: input.monitor.followingCount === null ? null : followerCounterInput(input.monitor.followingCount) }
+    this.database.prepare(`
+      INSERT INTO bilibili_follower_snapshot (
+        snapshot_id, monitor_id, mid, follower_count, following_count,
+        captured_at, captured_bucket, source_endpoint, evidence_object_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(monitor_id, captured_bucket) DO UPDATE SET
+        follower_count = excluded.follower_count,
+        following_count = excluded.following_count,
+        captured_at = excluded.captured_at,
+        source_endpoint = excluded.source_endpoint,
+        evidence_object_id = excluded.evidence_object_id
+    `).run(
+      input.snapshot.snapshotId,
+      monitor.monitorId,
+      monitor.mid,
+      monitor.followerCount,
+      monitor.followingCount,
+      monitor.capturedAt,
+      input.snapshot.capturedBucket,
+      monitor.sourceEndpoint,
+      input.artifact.objectId,
+      monitor.capturedAt
+    )
   }
 
   listBilibiliFollowerMonitors(limit?: number): StoredBilibiliFollowerMonitor[] {
@@ -2380,13 +2588,43 @@ export class ControlDatabase {
   }
 
   insertBilibiliApiCall(call: StoredBilibiliApiCall, artifact?: StoredObjectArtifact): void {
+    const preparation = this.preparedApiCalls.getStore()
+    if (preparation) {
+      if (!preparation.accepting || preparation.calls.length >= 64) {
+        throw new Error("Bilibili creation request log preparation is unavailable.")
+      }
+      preparation.calls.push({ call, ...(artifact ? { artifact } : {}) })
+      return
+    }
+    this.persistBilibiliApiCall(call, artifact)
+  }
+
+  /** Preparation must only fetch/read. Never keep a SQLite transaction across await. */
+  async runBilibiliPreparedTransaction<T>(prepare: () => Promise<() => T>): Promise<T> {
+    const preparation = { accepting: true, calls: [] as Array<{
+      call: StoredBilibiliApiCall; artifact?: StoredObjectArtifact
+    }> }
+    let commit: () => T
+    try {
+      commit = await this.preparedApiCalls.run(preparation, prepare)
+    } finally {
+      preparation.accepting = false
+    }
+    return this.transaction(() => {
+      for (const { call, artifact } of preparation.calls) this.persistBilibiliApiCall(call, artifact)
+      return commit()
+    })
+  }
+
+  private persistBilibiliApiCall(call: StoredBilibiliApiCall, artifact?: StoredObjectArtifact): void {
     this.transaction(() => {
       if (artifact) this.insertObjectArtifact(artifact)
       this.database.prepare(`
         INSERT INTO bilibili_api_call (
           call_id, task_id, attempt, endpoint_key, mid, status_code,
-          duration_ms, error_type, retryable, evidence_object_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          duration_ms, error_type, retryable, evidence_object_id, created_at,
+          request_meta_json, response_meta_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         call.callId,
         call.taskId,
@@ -2398,7 +2636,9 @@ export class ControlDatabase {
         call.errorType,
         call.retryable ? 1 : 0,
         call.evidenceObjectId,
-        call.createdAt
+        call.createdAt,
+        call.requestMeta === undefined ? null : serializeJacksonPostgresJson(call.requestMeta, "Bilibili API log"),
+        call.responseMeta === undefined ? null : serializeJacksonPostgresJson(call.responseMeta, "Bilibili API log")
       )
     })
   }
@@ -2415,12 +2655,19 @@ export class ControlDatabase {
              error_type AS errorType,
              retryable,
              evidence_object_id AS evidenceObjectId,
-             created_at AS createdAt
+             created_at AS createdAt,
+             request_meta_json AS requestMetaJson,
+             response_meta_json AS responseMetaJson
       FROM bilibili_api_call
       WHERE task_id = ?
       ORDER BY attempt ASC, created_at ASC, call_id ASC
-    `).all(taskId) as unknown as Array<Omit<StoredBilibiliApiCall, "retryable"> & { retryable: number }>
-    return rows.map((row) => ({ ...row, retryable: row.retryable === 1 }))
+    `).all(taskId) as unknown as Array<Omit<StoredBilibiliApiCall, "retryable" | "requestMeta" | "responseMeta"> & {
+      retryable: number; requestMetaJson: string | null; responseMetaJson: string | null
+    }>
+    return rows.map(({ requestMetaJson, responseMetaJson, ...row }) => ({ ...row, retryable: row.retryable === 1,
+      ...(requestMetaJson === null ? {} : { requestMeta: JSON.parse(requestMetaJson) as BilibiliApiRequestMeta }),
+      ...(responseMetaJson === null ? {} : { responseMeta: JSON.parse(responseMetaJson) as BilibiliApiResponseMeta })
+    }))
   }
 
   updateBilibiliFollowerMonitorStatus(
@@ -2487,7 +2734,7 @@ export class ControlDatabase {
         input.nextCollectAt,
         input.errorAt,
         input.errorType,
-        input.errorMessage.slice(0, 900),
+        followerStoredText(input.errorMessage.slice(0, 900)),
         input.errorAt,
         input.monitorId
       )
@@ -2514,7 +2761,9 @@ export class ControlDatabase {
         .some(value => value && compareLiveSnapshotTime(input.monitor.capturedAt, value) < 0)) return false
 
       this.insertObjectArtifact(input.artifact)
-      const monitor = input.monitor
+      const monitor = { ...input.monitor,
+        onlineCount: input.monitor.onlineCount === null ? null : followerCounterInput(input.monitor.onlineCount),
+        attentionCount: input.monitor.attentionCount === null ? null : followerCounterInput(input.monitor.attentionCount) }
       const appliedAt = input.appliedAt ?? new Date().toISOString()
       if (previous) {
         // Original collection: events -> boundary(current) -> monitor -> history.
@@ -2606,6 +2855,10 @@ export class ControlDatabase {
         const boundaryRoom = previous ?? this.findBilibiliLiveRoomById(persistedId)
         if (boundaryRoom) reconcileBeforeSnapshot?.(boundaryRoom)
       }
+      const rawStorageStatus = input.snapshot.rawPayloadStorageStatus
+      if (rawStorageStatus !== undefined && rawStorageStatus !== "ACCEPTED") {
+        throw new Error(`Bilibili live snapshot JSONB input rejected: ${rawStorageStatus}.`)
+      }
       this.database.prepare(`
         INSERT INTO bilibili_live_room_snapshot (
           snapshot_id, monitor_id, uid, room_id, live_status, title, area_id,
@@ -2652,25 +2905,33 @@ export class ControlDatabase {
   }
 
   listBilibiliLiveRooms(limit?: number): StoredBilibiliLiveRoomMonitor[] {
-    return this.database.prepare(`${bilibiliLiveRoomSelect()}
+    const statement = this.database.prepare(`${bilibiliLiveRoomSelect()}
       ORDER BY monitor_status ASC, live_status DESC, online_count DESC, rowid ASC
       ${limit === undefined ? "" : "LIMIT ?"}
-    `).all(...(limit === undefined ? [] : [limit])) as unknown as StoredBilibiliLiveRoomMonitor[]
+    `)
+    statement.setReadBigInts(true)
+    return statement.all(...(limit === undefined ? [] : [limit])).map(toStoredLiveMonitor)
   }
 
   findBilibiliLiveRoomById(monitorId: string): StoredBilibiliLiveRoomMonitor | undefined {
-    return this.database.prepare(`${bilibiliLiveRoomSelect()} WHERE monitor_id = ?`)
-      .get(monitorId) as unknown as StoredBilibiliLiveRoomMonitor | undefined
+    const statement = this.database.prepare(`${bilibiliLiveRoomSelect()} WHERE monitor_id = ?`)
+    statement.setReadBigInts(true)
+    const row = statement.get(monitorId)
+    return row ? toStoredLiveMonitor(row) : undefined
   }
 
   findBilibiliLiveRoomByUid(uid: string): StoredBilibiliLiveRoomMonitor | undefined {
-    return this.database.prepare(`${bilibiliLiveRoomSelect()} WHERE uid = ?`)
-      .get(uid) as unknown as StoredBilibiliLiveRoomMonitor | undefined
+    const statement = this.database.prepare(`${bilibiliLiveRoomSelect()} WHERE uid = ?`)
+    statement.setReadBigInts(true)
+    const row = statement.get(uid)
+    return row ? toStoredLiveMonitor(row) : undefined
   }
 
   findBilibiliLiveRoomByRoomId(roomId: string): StoredBilibiliLiveRoomMonitor | undefined {
-    return this.database.prepare(`${bilibiliLiveRoomSelect()} WHERE room_id = ?`)
-      .get(roomId) as unknown as StoredBilibiliLiveRoomMonitor | undefined
+    const statement = this.database.prepare(`${bilibiliLiveRoomSelect()} WHERE room_id = ?`)
+    statement.setReadBigInts(true)
+    const row = statement.get(roomId)
+    return row ? toStoredLiveMonitor(row) : undefined
   }
 
   findBilibiliLiveRoomSnapshots(
@@ -2699,7 +2960,7 @@ export class ControlDatabase {
       parameters.push(`${to.slice(0, 19)}Z`, to)
     }
     parameters.push(input.limit)
-    return this.database.prepare(`
+    const statement = this.database.prepare(`
       SELECT snapshot_id AS snapshotId,
              monitor_id AS monitorId,
              uid,
@@ -2725,17 +2986,29 @@ export class ControlDatabase {
         LIMIT ?
       ) limited
       ORDER BY captured_at ASC
-    `).all(...parameters) as unknown as StoredBilibiliLiveRoomSnapshot[]
+    `)
+    statement.setReadBigInts(true)
+    return statement.all(...parameters).map(toStoredLiveSnapshot)
   }
 
   findDueBilibiliLiveRooms(now: string, limit: number): StoredBilibiliLiveRoomMonitor[] {
-    return this.database.prepare(`${bilibiliLiveRoomSelect()}
+    const statement = this.database.prepare(`${bilibiliLiveRoomSelect()}
       WHERE monitor_status = 'ACTIVE'
         AND (next_collect_at IS NULL OR next_collect_at <= ?)
         AND (backoff_until IS NULL OR backoff_until <= ?)
       ORDER BY COALESCE(next_collect_at, created_at) ASC
       LIMIT ?
-    `).all(now, now, limit) as unknown as StoredBilibiliLiveRoomMonitor[]
+    `)
+    statement.setReadBigInts(true)
+    return statement.all(now, now, limit).map(toStoredLiveMonitor)
+  }
+
+  scheduleImmediateBilibiliLiveRoomCollection(monitorId: string, timestamp: string): void {
+    this.database.prepare(`
+      UPDATE bilibili_live_room_monitor
+      SET next_collect_at = ?, backoff_until = NULL, updated_at = ?
+      WHERE monitor_id = ?
+    `).run(timestamp, timestamp, monitorId)
   }
 
   updateBilibiliLiveRoomStatus(
@@ -2829,8 +3102,8 @@ export class ControlDatabase {
     })
   }
 
-  listBilibiliLiveStatusEvents(limit: number): StoredBilibiliLiveStatusEvent[] {
-    return this.database.prepare(`
+  listBilibiliLiveStatusEvents(limit: number, monitorId?: string): StoredBilibiliLiveStatusEvent[] {
+    const statement = this.database.prepare(`
       SELECT event_id AS eventId,
              monitor_id AS monitorId,
              uid,
@@ -2843,9 +3116,12 @@ export class ControlDatabase {
              online_count AS onlineCount,
              occurred_at AS occurredAt
       FROM bilibili_live_status_event
+      ${monitorId === undefined ? "" : "WHERE monitor_id = ?"}
       ORDER BY occurred_at DESC, rowid DESC
       LIMIT ?
-    `).all(limit) as unknown as StoredBilibiliLiveStatusEvent[]
+    `)
+    statement.setReadBigInts(true)
+    return statement.all(...(monitorId === undefined ? [limit] : [monitorId, limit])).map(toStoredLiveEvent)
   }
 
   countTodayBilibiliLiveStarts(startOfDay: string): number {
@@ -2860,8 +3136,14 @@ export class ControlDatabase {
   upsertBilibiliLiveRankSnapshot(
     input: UpsertBilibiliLiveRankSnapshotInput
   ): StoredBilibiliLiveRankSnapshot {
-    return this.transaction(() => {
-      const snapshot = input.snapshot
+    const snapshot = input.snapshot
+    const snapshotId = this.transaction(() => {
+      if (input.rawPayloadStorageStatus !== undefined && input.rawPayloadStorageStatus !== "ACCEPTED") {
+        throw new Error(`Bilibili live rank snapshot JSONB input rejected: ${input.rawPayloadStorageStatus}.`)
+      }
+      const countText = rankStoredCountText(snapshot.countText, "count_text")
+      const valueText = rankStoredCountText(snapshot.valueText, "value_text")
+      const remindMsg = rankStoredTruncatedText(snapshot.remindMsg, 512)
       this.insertObjectArtifact(input.artifact)
       const existing = this.database.prepare(`
         SELECT snapshot_id AS snapshotId
@@ -2895,18 +3177,16 @@ export class ControlDatabase {
           snapshot.roomId,
           snapshot.ruid,
           snapshot.pageSize,
-          snapshot.totalCount,
-          snapshot.countText,
-          snapshot.valueText,
-          snapshot.remindMsg,
+          snapshot.totalCount === null ? null : followerCounterInput(typeof snapshot.totalCount === "string" ? BigInt(snapshot.totalCount) : snapshot.totalCount),
+          countText,
+          valueText,
+          remindMsg,
           snapshot.sourceEndpoint,
           snapshot.signedRequired ? 1 : 0,
           snapshot.capturedAt,
           input.artifact.objectId,
           snapshotId
         )
-        this.database.prepare("DELETE FROM bilibili_live_rank_entry WHERE snapshot_id = ?")
-          .run(snapshotId)
       } else {
         this.database.prepare(`
           INSERT INTO bilibili_live_rank_snapshot (
@@ -2926,10 +3206,10 @@ export class ControlDatabase {
           snapshot.periodScope,
           snapshot.pageNo,
           snapshot.pageSize,
-          snapshot.totalCount,
-          snapshot.countText,
-          snapshot.valueText,
-          snapshot.remindMsg,
+          snapshot.totalCount === null ? null : followerCounterInput(typeof snapshot.totalCount === "string" ? BigInt(snapshot.totalCount) : snapshot.totalCount),
+          countText,
+          valueText,
+          remindMsg,
           snapshot.sourceEndpoint,
           snapshot.signedRequired ? 1 : 0,
           snapshot.capturedAt,
@@ -2938,12 +3218,19 @@ export class ControlDatabase {
           snapshot.capturedAt
         )
       }
+      return snapshotId
+    })
+    // The original repository commits its snapshot, DELETE and JDBC batch separately.
+    this.transaction(() => {
+      this.database.prepare("DELETE FROM bilibili_live_rank_entry WHERE snapshot_id = ?").run(snapshotId)
+    })
+    this.transaction(() => {
       const insertEntry = this.database.prepare(`
         INSERT INTO bilibili_live_rank_entry (
           entry_id, snapshot_id, monitor_id, room_id, ruid, user_uid, rank_no,
           entry_kind, display_name, face_url, score, guard_level, wealth_level,
-          medal_name, medal_level, guard_expired_text, accompany_days, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          medal_name, medal_level, medal_ruid, medal_is_light, raw_entry_json, guard_expired_text, accompany_days, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       for (const entry of input.entries) {
         insertEntry.run(
@@ -2955,20 +3242,41 @@ export class ControlDatabase {
           entry.userUid,
           entry.rankNo,
           entry.entryKind,
-          entry.displayName,
-          entry.faceUrl,
-          entry.score,
+          rankStoredTruncatedText(entry.displayName, 512),
+          rankStoredText(entry.faceUrl),
+          entry.score === null ? null : followerCounterInput(typeof entry.score === "string" ? BigInt(entry.score) : entry.score),
           entry.guardLevel,
           entry.wealthLevel,
-          entry.medalName,
+          rankStoredTruncatedText(entry.medalName, 128),
           entry.medalLevel,
-          entry.guardExpiredText,
+          entry.medalRuid == null ? null : followerCounterInput(BigInt(entry.medalRuid)),
+          entry.medalIsLight ?? null,
+          rankStoredEntryJson(entry.rawEntryJson ?? null, entry.rawEntryStorageStatus),
+          rankStoredTruncatedText(entry.guardExpiredText, 128),
           entry.accompanyDays,
           snapshot.capturedAt
         )
       }
-      return this.findBilibiliLiveRankSnapshotById(snapshotId) as StoredBilibiliLiveRankSnapshot
     })
+    return this.findBilibiliLiveRankSnapshotById(snapshotId) as StoredBilibiliLiveRankSnapshot
+  }
+
+  findLatestBilibiliLiveRankSnapshot(
+    monitorId: string,
+    input: { family?: string; type?: string; rankSwitch?: string } = {}
+  ): StoredBilibiliLiveRankSnapshot | undefined {
+    const row = this.database.prepare(`
+      SELECT snapshot_id AS snapshotId
+      FROM bilibili_live_rank_snapshot
+      WHERE monitor_id = ?
+        AND (? IS NULL OR rank_family = ?)
+        AND (? IS NULL OR rank_type = ?)
+        AND (? IS NULL OR COALESCE(rank_switch, '') = ?)
+      ORDER BY captured_at DESC, rowid DESC
+      LIMIT 1
+    `).get(monitorId, input.family ?? null, input.family ?? null,
+      input.type ?? null, input.type ?? null, input.rankSwitch ?? null, input.rankSwitch ?? null) as { snapshotId: string } | undefined
+    return row ? this.findBilibiliLiveRankSnapshotById(row.snapshotId) : undefined
   }
 
   findLatestBilibiliLiveRankSnapshots(
@@ -2990,6 +3298,12 @@ export class ControlDatabase {
       parameters.push(input.rankSwitch)
     }
     return this.database.prepare(`
+      WITH candidates AS (
+        SELECT *, rowid AS insertionId,
+               strftime('%Y-%m-%dT%H:%M:00.000Z', captured_bucket) AS minuteBucket
+        FROM bilibili_live_rank_snapshot
+        WHERE ${filters.join(" AND ")}
+      )
       SELECT snapshotId, monitorId, roomId, ruid, rankFamily, rankType, rankSwitch,
              periodScope, pageNo, pageSize, totalCount, countText, valueText,
              remindMsg, sourceEndpoint, signedRequired, capturedAt, capturedBucket,
@@ -3005,7 +3319,7 @@ export class ControlDatabase {
                period_scope AS periodScope,
                page_no AS pageNo,
                page_size AS pageSize,
-               total_count AS totalCount,
+               CAST(total_count AS TEXT) AS totalCount,
                count_text AS countText,
                value_text AS valueText,
                remind_msg AS remindMsg,
@@ -3015,20 +3329,28 @@ export class ControlDatabase {
                captured_bucket AS capturedBucket,
                evidence_object_id AS evidenceObjectId,
                created_at AS createdAt,
+               minuteBucket,
                ROW_NUMBER() OVER (
                  PARTITION BY rank_family, rank_type, COALESCE(rank_switch, ''),
-                              COALESCE(period_scope, ''), page_no
-                 ORDER BY captured_at DESC, rowid DESC
-               ) AS latestRow
-        FROM bilibili_live_rank_snapshot
-        WHERE ${filters.join(" AND ")}
+                              COALESCE(period_scope, ''), minuteBucket, page_no
+                 ORDER BY captured_at DESC, insertionId DESC
+               ) AS latestRow,
+               MAX(minuteBucket) OVER (
+                 PARTITION BY rank_family, rank_type, COALESCE(rank_switch, ''),
+                              COALESCE(period_scope, '')
+               ) AS latestMinute
+        FROM candidates
       ) latest
-      WHERE latestRow = 1
+      WHERE latestRow = 1 AND minuteBucket = latestMinute
       ORDER BY rankFamily, rankType, COALESCE(rankSwitch, ''), pageNo
     `).all(...parameters).map(toStoredRankSnapshot)
   }
 
-  findBilibiliLiveRankEntries(snapshotId: string, limit: number): StoredBilibiliLiveRankEntry[] {
+  findBilibiliLiveRankEntries(snapshotId: string, limit: number, javaIntegerView = false): StoredBilibiliLiveRankEntry[] {
+    // Project before ORDER/LIMIT and Core deduplication. Published v16 rows
+    // stay untouched; legacy callers still read the original wider integers.
+    const integerColumn = (column: "rank_no" | "guard_level" | "wealth_level" | "medal_level" | "accompany_days") =>
+      javaIntegerView ? `(((${column} % 4294967296) + 6442450944) % 4294967296) - 2147483648` : column
     return this.database.prepare(`
       SELECT entry_id AS entryId,
              snapshot_id AS snapshotId,
@@ -3036,21 +3358,24 @@ export class ControlDatabase {
              room_id AS roomId,
              ruid,
              user_uid AS userUid,
-             rank_no AS rankNo,
+             ${integerColumn("rank_no")} AS rankNo,
              entry_kind AS entryKind,
              display_name AS displayName,
              face_url AS faceUrl,
-             score,
-             guard_level AS guardLevel,
-             wealth_level AS wealthLevel,
+             CAST(score AS TEXT) AS score,
+             ${integerColumn("guard_level")} AS guardLevel,
+             ${integerColumn("wealth_level")} AS wealthLevel,
              medal_name AS medalName,
-             medal_level AS medalLevel,
+             ${integerColumn("medal_level")} AS medalLevel,
+             CAST(medal_ruid AS TEXT) AS medalRuid,
+             medal_is_light AS medalIsLight,
+             raw_entry_json AS rawEntryJson,
              guard_expired_text AS guardExpiredText,
-             accompany_days AS accompanyDays,
+             ${integerColumn("accompany_days")} AS accompanyDays,
              created_at AS createdAt
       FROM bilibili_live_rank_entry
       WHERE snapshot_id = ?
-      ORDER BY rank_no IS NULL, rank_no, rowid
+      ORDER BY rankNo IS NULL, rankNo, rowid
       LIMIT ?
     `).all(snapshotId, limit) as unknown as StoredBilibiliLiveRankEntry[]
   }
@@ -3153,37 +3478,38 @@ export class ControlDatabase {
     `).get(monitorId) as unknown as StoredBilibiliLiveDanmakuSession | undefined
   }
 
-  listBilibiliLiveDanmakuAutoStartRoomIds(limit: number): string[] {
+  listBilibiliLiveDanmakuAutoStartRoomIds(): string[] {
     const rows = this.database.prepare(`
       SELECT desired.monitorId
       FROM (
         SELECT binding.bilibili_live_room_monitor_id AS monitorId,
                CASE WHEN room.live_status = 1 THEN 0 ELSE 1 END AS livePriority,
-               room.online_count AS onlineCount
+               room.rowid AS insertionOrder
         FROM bilibili_subject_binding binding
         JOIN bilibili_live_room_monitor room
           ON room.monitor_id = binding.bilibili_live_room_monitor_id
         WHERE binding.danmu_enabled = 1
           AND room.monitor_status = 'ACTIVE'
         UNION
-        SELECT room.monitor_id AS monitorId, 0 AS livePriority, room.online_count AS onlineCount
+        SELECT room.monitor_id AS monitorId, 0 AS livePriority, room.rowid AS insertionOrder
         FROM bilibili_live_room_monitor room
         WHERE room.monitor_status = 'ACTIVE' AND room.live_status = 1
       ) desired
-      ORDER BY desired.livePriority ASC, desired.onlineCount DESC, desired.monitorId ASC
-      LIMIT ?
-    `).all(Math.max(1, limit)) as unknown as Array<{ monitorId: string }>
+      ORDER BY desired.livePriority ASC, desired.insertionOrder ASC
+    `).all() as unknown as Array<{ monitorId: string }>
     return rows.map((row) => row.monitorId)
   }
 
   recordBilibiliLiveDanmakuEvent(input: RecordBilibiliLiveDanmakuEventInput): void {
     this.transaction(() => {
-      const safeBucketSeconds = Math.min(3_600, Math.max(10, input.bucketSeconds))
-      const occurredAtMs = new Date(input.occurredAt).getTime()
-      const bucketMillis = safeBucketSeconds * 1_000
-      const bucketStart = new Date(Math.floor(occurredAtMs / bucketMillis) * bucketMillis)
+      // Event time determines the bucket/sent_at, never persistence metadata.
+      const writtenAt = input.writtenAt ?? new Date().toISOString()
+      const effectiveSeconds = Math.max(10, input.bucketSeconds)
+      const occurredAtSeconds = Math.floor(new Date(input.occurredAt).getTime() / 1_000)
+      // Java toEpochSecond floors subseconds, then integer division truncates toward zero.
+      const bucketStart = new Date(Math.trunc(occurredAtSeconds / effectiveSeconds) * effectiveSeconds * 1_000)
         .toISOString()
-      const bucketId = `${input.monitorId}:${bucketStart}:${safeBucketSeconds}`
+      const bucketId = `${input.monitorId}:${bucketStart}:${input.bucketSeconds}`
       this.database.prepare(`
         INSERT INTO bilibili_live_danmaku_metric_bucket (
           bucket_id, monitor_id, session_id, room_id, bucket_start, bucket_seconds,
@@ -3208,7 +3534,7 @@ export class ControlDatabase {
         input.sessionId,
         input.roomId,
         bucketStart,
-        safeBucketSeconds,
+        input.bucketSeconds,
         Math.max(0, input.danmuDelta),
         input.likeCount,
         Math.max(0, input.likeIncrement),
@@ -3217,8 +3543,8 @@ export class ControlDatabase {
         Math.max(0, input.giftDelta),
         Math.max(0, input.superChatDelta),
         Math.max(0, input.rawEventDelta),
-        input.occurredAt,
-        input.occurredAt
+        writtenAt,
+        writtenAt
       )
       if (input.recent) {
         const recent = input.recent
@@ -3240,17 +3566,17 @@ export class ControlDatabase {
           recent.displayName?.slice(0, 160) ?? null,
           recent.medalName?.slice(0, 80) ?? null,
           recent.sentAt,
-          input.occurredAt
+          writtenAt
         )
         this.database.prepare(`
           DELETE FROM bilibili_live_danmaku_recent
-          WHERE monitor_id = ? AND recent_id NOT IN (
-            SELECT recent_id FROM bilibili_live_danmaku_recent
+          WHERE rowid IN (
+            SELECT rowid FROM bilibili_live_danmaku_recent
             WHERE monitor_id = ?
             ORDER BY sent_at DESC, rowid DESC
-            LIMIT ?
+            LIMIT -1 OFFSET ?
           )
-        `).run(input.monitorId, input.monitorId, Math.min(500, Math.max(1, input.recentLimit)))
+        `).run(input.monitorId, Math.max(1, input.recentLimit))
       }
     })
   }
@@ -3278,7 +3604,7 @@ export class ControlDatabase {
 
   findBilibiliLiveDanmakuMetricBuckets(
     monitorId: string,
-    from: string,
+    from: string | null,
     to: string,
     limit: number
   ): StoredBilibiliLiveDanmakuMetricBucket[] {
@@ -3295,12 +3621,12 @@ export class ControlDatabase {
                super_chat_count AS superChatCount, raw_event_count AS rawEventCount,
                updated_at AS updatedAt, created_at AS createdAt, rowid AS sourceRowId
         FROM bilibili_live_danmaku_metric_bucket
-        WHERE monitor_id = ? AND bucket_start >= ? AND bucket_start <= ?
+        WHERE monitor_id = ? ${from === null ? "" : "AND bucket_start >= ?"} AND bucket_start <= ?
         ORDER BY bucket_start DESC
         LIMIT ?
       ) buckets
       ORDER BY bucketStart ASC, sourceRowId ASC
-    `).all(monitorId, from, to, Math.min(5_000, Math.max(1, limit))) as unknown as StoredBilibiliLiveDanmakuMetricBucket[]
+    `).all(monitorId, ...(from === null ? [] : [from]), to, Math.min(5_000, Math.max(1, limit))) as unknown as StoredBilibiliLiveDanmakuMetricBucket[]
   }
 
   getBilibiliLiveDanmakuStats(
@@ -3368,11 +3694,11 @@ export class ControlDatabase {
       session.state,
       session.platformLiveTime,
       session.liveKey,
-      session.startedAt,
+      liveSnapshotStorageTime(session.startedAt),
       session.startDetectedAt,
       session.startSource,
       session.endSignalAt,
-      session.endedAt,
+      session.endedAt === null ? null : liveSnapshotStorageTime(session.endedAt),
       session.endDetectedAt,
       session.endSource,
       session.lastLiveObservedAt,
@@ -3399,11 +3725,11 @@ export class ControlDatabase {
       session.state,
       session.platformLiveTime,
       session.liveKey,
-      session.startedAt,
+      liveSnapshotStorageTime(session.startedAt),
       session.startDetectedAt,
       session.startSource,
       session.endSignalAt,
-      session.endedAt,
+      session.endedAt === null ? null : liveSnapshotStorageTime(session.endedAt),
       session.endDetectedAt,
       session.endSource,
       session.lastLiveObservedAt,
@@ -3431,9 +3757,14 @@ export class ControlDatabase {
     monitorId: string,
     platformLiveTime: string
   ): StoredBilibiliLiveSession | undefined {
-    return this.database.prepare(`${bilibiliLiveSessionSelect()}
-      WHERE monitor_id = ? AND platform_live_time = ? LIMIT 1
-    `).get(monitorId, platformLiveTime) as unknown as StoredBilibiliLiveSession | undefined
+    // PostgreSQL timestamptz compares instants; legacy SQLite rows may have different ISO spelling.
+    for (const row of this.database.prepare(`${bilibiliLiveSessionSelect()}
+      WHERE monitor_id = ? AND platform_live_time IS NOT NULL ORDER BY rowid DESC
+    `).iterate(monitorId)) {
+      const session = row as unknown as StoredBilibiliLiveSession
+      if (session.platformLiveTime && compareLiveSnapshotTime(session.platformLiveTime, platformLiveTime) === 0) return session
+    }
+    return undefined
   }
 
   findBilibiliLiveSessionByLiveKey(
@@ -3441,7 +3772,7 @@ export class ControlDatabase {
     liveKey: string
   ): StoredBilibiliLiveSession | undefined {
     return this.database.prepare(`${bilibiliLiveSessionSelect()}
-      WHERE monitor_id = ? AND live_key = ? LIMIT 1
+      WHERE monitor_id = ? AND live_key = ? ORDER BY rowid DESC LIMIT 1
     `).get(monitorId, liveKey) as unknown as StoredBilibiliLiveSession | undefined
   }
 
@@ -3449,10 +3780,16 @@ export class ControlDatabase {
     monitorId: string,
     eventTime: string
   ): StoredBilibiliLiveSession | undefined {
-    return this.database.prepare(`${bilibiliLiveSessionSelect()}
-      WHERE monitor_id = ? AND started_at <= ? AND (ended_at IS NULL OR ended_at >= ?)
-      ORDER BY started_at DESC, rowid DESC LIMIT 1
-    `).get(monitorId, eventTime, eventTime) as unknown as StoredBilibiliLiveSession | undefined
+    let matched: StoredBilibiliLiveSession | undefined
+    for (const row of this.database.prepare(`${bilibiliLiveSessionSelect()}
+      WHERE monitor_id = ? ORDER BY rowid DESC
+    `).iterate(monitorId)) {
+      const session = row as unknown as StoredBilibiliLiveSession
+      if (compareLiveSnapshotTime(session.startedAt, eventTime) > 0
+        || (session.endedAt && compareLiveSnapshotTime(session.endedAt, eventTime) < 0)) continue
+      if (!matched || compareLiveSnapshotTime(session.startedAt, matched.startedAt) > 0) matched = session
+    }
+    return matched
   }
 
   listBilibiliLiveSessions(monitorId: string, limit: number): StoredBilibiliLiveSession[] {
@@ -3562,6 +3899,136 @@ export class ControlDatabase {
     return rows.map((row) => ({ ...row, paid: Boolean(row.paid) }))
   }
 
+  getBilibiliLiveSessionFactStatistics(sessionId: string): StoredBilibiliLiveSessionFactStatistics {
+    const row = this.database.prepare(`
+      WITH facts AS (
+        SELECT *, event_kind IN ('GIFT', 'SUPER_CHAT', 'GUARD_BUY')
+          AND (paid = 1 OR COALESCE(paid_amount_milli_yuan, 0) > 0) AS is_paid_event
+        FROM bilibili_live_session_event
+        WHERE live_session_id = ? AND event_kind IN ('DANMAKU', 'GIFT', 'SUPER_CHAT', 'GUARD_BUY')
+      )
+      SELECT COUNT(*) AS eventCount,
+        COUNT(*) FILTER (WHERE event_kind = 'DANMAKU') AS danmakuCount,
+        COUNT(*) FILTER (WHERE event_kind = 'GIFT') AS giftEventCount,
+        COALESCE(SUM(COALESCE(gift_count, 1)) FILTER (WHERE event_kind = 'GIFT'), 0) AS giftCount,
+        COALESCE(SUM(COALESCE(gift_count, 1)) FILTER (WHERE event_kind = 'GIFT' AND paid = 0), 0) AS freeGiftCount,
+        COUNT(DISTINCT sender_uid) FILTER (WHERE event_kind = 'GIFT') AS giftSenderCount,
+        COUNT(DISTINCT sender_uid) FILTER (WHERE is_paid_event) AS paidUserCount,
+        COUNT(DISTINCT sender_uid) AS interactingUserCount,
+        COUNT(*) FILTER (WHERE sender_uid IS NULL) AS unresolvedInteractingEventCount,
+        COUNT(*) FILTER (WHERE event_kind = 'GIFT' AND sender_uid IS NULL) AS unresolvedGiftEventCount,
+        COUNT(*) FILTER (WHERE is_paid_event AND sender_uid IS NULL) AS unresolvedPaidEventCount,
+        COUNT(*) FILTER (WHERE is_paid_event) AS paidEventCount,
+        COALESCE(SUM(COALESCE(paid_amount_milli_yuan, 0)) FILTER (WHERE is_paid_event), 0) AS paidAmountMilliYuan,
+        MIN(occurred_at) AS firstEventAt, MAX(occurred_at) AS lastEventAt
+      FROM facts
+    `).get(sessionId)
+    if (!row) throw new Error("Missing live session fact statistics.")
+    return row as Record<string, SQLOutputValue> & StoredBilibiliLiveSessionFactStatistics
+  }
+
+  *iterateBilibiliLiveSessionExportEvents(
+    sessionId: string,
+    category: "danmaku" | "gifts"
+  ): Iterable<StoredBilibiliLiveSessionEvent> {
+    const kinds = category === "danmaku" ? "'DANMAKU'" : "'GIFT', 'SUPER_CHAT', 'GUARD_BUY'"
+    for (const row of this.database.prepare(`${bilibiliLiveSessionEventSelect()}
+      WHERE live_session_id = ? AND event_kind IN (${kinds}) ORDER BY occurred_at ASC, rowid ASC
+    `).iterate(sessionId)) {
+      const event = row as Record<string, SQLOutputValue> & Omit<StoredBilibiliLiveSessionEvent, "paid"> & { paid: number }
+      yield { ...event, paid: Boolean(event.paid) }
+    }
+  }
+
+  *iterateBilibiliLiveSessionExportUsers(sessionId: string): Iterable<StoredBilibiliLiveSessionExportUser> {
+    const rows = this.database.prepare(`
+      WITH normalized_events AS (
+        SELECT event.*, event.rowid AS sourceRowId,
+          CASE WHEN sender_uid IS NOT NULL AND CAST(sender_uid AS INTEGER) > 0
+            THEN 'uid:' || sender_uid ELSE 'event:' || event_id END AS actorKey,
+          CASE WHEN sender_uid IS NOT NULL AND CAST(sender_uid AS INTEGER) > 0
+            THEN 'VERIFIED_UID' ELSE 'UNRESOLVED_EVENT' END AS identityQuality
+        FROM bilibili_live_session_event event
+        WHERE live_session_id = ? AND event_kind IN ('DANMAKU', 'GIFT', 'SUPER_CHAT', 'GUARD_BUY')
+      ), aggregated_users AS (
+        SELECT actorKey, identityQuality,
+          MAX(sender_uid) FILTER (WHERE identityQuality = 'VERIFIED_UID') AS userUid,
+          COUNT(*) FILTER (WHERE event_kind = 'DANMAKU') AS danmakuCount,
+          COUNT(*) FILTER (WHERE event_kind = 'GIFT') AS giftEventCount,
+          COALESCE(SUM(COALESCE(gift_count, 1)) FILTER (WHERE event_kind = 'GIFT'), 0) AS giftCount,
+          COALESCE(SUM(COALESCE(gift_count, 1)) FILTER (WHERE event_kind = 'GIFT' AND paid = 0), 0) AS freeGiftCount,
+          COUNT(*) FILTER (WHERE event_kind IN ('GIFT', 'SUPER_CHAT', 'GUARD_BUY')
+            AND (paid = 1 OR COALESCE(paid_amount_milli_yuan, 0) > 0)) AS paidEventCount,
+          COALESCE(SUM(COALESCE(paid_amount_milli_yuan, 0))
+            FILTER (WHERE event_kind IN ('GIFT', 'SUPER_CHAT', 'GUARD_BUY')), 0) AS paidAmountMilliYuan,
+          MIN(occurred_at) AS firstSeenAt, MAX(occurred_at) AS lastSeenAt
+        FROM normalized_events GROUP BY actorKey, identityQuality
+      ), latest_names AS (
+        SELECT actorKey, sender_name AS displayName,
+          ROW_NUMBER() OVER (PARTITION BY actorKey ORDER BY occurred_at DESC, sourceRowId DESC) AS nameRank
+        FROM normalized_events WHERE NULLIF(TRIM(sender_name, ' '), '') IS NOT NULL
+      )
+      SELECT aggregated.*, latest.displayName
+      FROM aggregated_users aggregated
+      LEFT JOIN latest_names latest ON latest.actorKey = aggregated.actorKey AND latest.nameRank = 1
+      ORDER BY paidAmountMilliYuan DESC, giftCount DESC, danmakuCount DESC, aggregated.actorKey ASC
+    `)
+    for (const row of rows.iterate(sessionId)) {
+      yield row as Record<string, SQLOutputValue> & StoredBilibiliLiveSessionExportUser
+    }
+  }
+
+  queryBilibiliLiveSessionEvents(input: {
+    sessionId: string
+    kind?: string | undefined
+    userUid?: string | undefined
+    paid?: boolean | undefined
+    keyword?: string | undefined
+    offset: number
+    limit: number
+  }): { items: StoredBilibiliLiveSessionEvent[]; total: number } {
+    const predicates = [
+      "live_session_id = ?",
+      "event_kind IN ('DANMAKU', 'GIFT', 'SUPER_CHAT', 'GUARD_BUY')"
+    ]
+    const parameters: Array<string | number> = [input.sessionId]
+    if (input.kind) {
+      predicates.push("event_kind = ?")
+      parameters.push(input.kind)
+    }
+    if (input.userUid) {
+      predicates.push("sender_uid = ?")
+      parameters.push(input.userUid)
+    }
+    if (input.paid !== undefined) {
+      predicates.push("paid = ?")
+      parameters.push(input.paid ? 1 : 0)
+    }
+    const keyword = input.keyword?.trim().toLocaleLowerCase()
+    if (keyword) {
+      predicates.push(`(
+        bilibili_live_lower(sender_name) LIKE ? ESCAPE '\\'
+        OR bilibili_live_lower(message_text) LIKE ? ESCAPE '\\'
+        OR bilibili_live_lower(gift_name) LIKE ? ESCAPE '\\'
+      )`)
+      const pattern = `%${keyword}%`
+      parameters.push(pattern, pattern, pattern)
+    }
+    const where = `WHERE ${predicates.join(" AND ")}`
+    const count = this.database.prepare(`
+      SELECT COUNT(*) AS total FROM bilibili_live_session_event ${where}
+    `).get(...parameters)
+    const rows = this.database.prepare(`${bilibiliLiveSessionEventSelect()} ${where}
+      ORDER BY occurred_at DESC, rowid DESC LIMIT ? OFFSET ?
+    `).all(...parameters, Math.min(100, Math.max(1, input.limit)), Math.max(0, input.offset)) as unknown as Array<
+      Omit<StoredBilibiliLiveSessionEvent, "paid"> & { paid: number }
+    >
+    return {
+      items: rows.map((row) => ({ ...row, paid: Boolean(row.paid) })),
+      total: Number(count?.total ?? 0)
+    }
+  }
+
   findPriorBilibiliLivePaidUserUids(monitorId: string, beforeStartedAt: string): string[] {
     const rows = this.database.prepare(`
       SELECT DISTINCT event.sender_uid AS senderUid
@@ -3603,7 +4070,7 @@ export class ControlDatabase {
              period_scope AS periodScope,
              page_no AS pageNo,
              page_size AS pageSize,
-             total_count AS totalCount,
+             CAST(total_count AS TEXT) AS totalCount,
              count_text AS countText,
              value_text AS valueText,
              remind_msg AS remindMsg,
@@ -3659,7 +4126,7 @@ export class ControlDatabase {
       toLiveStatus: current.liveStatus,
       titleBefore: previous.title,
       titleAfter: current.title,
-      onlineCount: current.onlineCount,
+      onlineCount: current.onlineCount === null ? null : followerCounterInput(current.onlineCount),
       occurredAt
     }
   }
@@ -4040,6 +4507,85 @@ function toStoredFollowerSnapshot(row: Record<string, SQLOutputValue>): StoredBi
   }
 }
 
+function followerSqlNullableSmallInteger(value: SQLOutputValue | undefined): number | null {
+  return value === null ? null : followerSqlSmallInteger(value)
+}
+
+function toStoredLiveEvent(row: Record<string, SQLOutputValue>): StoredBilibiliLiveStatusEvent {
+  return {
+    eventId: followerSqlText(row.eventId),
+    monitorId: followerSqlText(row.monitorId),
+    uid: followerSqlText(row.uid),
+    roomId: followerSqlText(row.roomId),
+    eventType: followerSqlText(row.eventType),
+    fromLiveStatus: followerSqlNullableSmallInteger(row.fromLiveStatus),
+    toLiveStatus: followerSqlNullableSmallInteger(row.toLiveStatus),
+    titleBefore: followerSqlNullableText(row.titleBefore),
+    titleAfter: followerSqlNullableText(row.titleAfter),
+    onlineCount: followerSqlNullableCounter(row.onlineCount),
+    occurredAt: followerSqlText(row.occurredAt),
+  }
+}
+
+function toStoredLiveSnapshot(row: Record<string, SQLOutputValue>): StoredBilibiliLiveRoomSnapshot {
+  return {
+    snapshotId: followerSqlText(row.snapshotId),
+    monitorId: followerSqlText(row.monitorId),
+    uid: followerSqlText(row.uid),
+    roomId: followerSqlText(row.roomId),
+    liveStatus: followerSqlSmallInteger(row.liveStatus),
+    title: followerSqlNullableText(row.title),
+    areaId: followerSqlNullableText(row.areaId),
+    areaName: followerSqlNullableText(row.areaName),
+    parentAreaId: followerSqlNullableText(row.parentAreaId),
+    parentAreaName: followerSqlNullableText(row.parentAreaName),
+    onlineCount: followerSqlNullableCounter(row.onlineCount),
+    attentionCount: followerSqlNullableCounter(row.attentionCount),
+    liveTime: followerSqlNullableText(row.liveTime),
+    sourceEndpoint: followerSqlText(row.sourceEndpoint),
+    capturedAt: followerSqlText(row.capturedAt),
+    capturedBucket: followerSqlText(row.capturedBucket),
+    evidenceObjectId: followerSqlText(row.evidenceObjectId),
+    createdAt: followerSqlText(row.createdAt),
+  }
+}
+
+function toStoredLiveMonitor(row: Record<string, SQLOutputValue>): StoredBilibiliLiveRoomMonitor {
+  return {
+    monitorId: followerSqlText(row.monitorId),
+    uid: followerSqlText(row.uid),
+    roomId: followerSqlText(row.roomId),
+    shortId: followerSqlNullableText(row.shortId),
+    uname: followerSqlText(row.uname),
+    faceUrl: followerSqlNullableText(row.faceUrl),
+    title: followerSqlNullableText(row.title),
+    coverUrl: followerSqlNullableText(row.coverUrl),
+    keyframeUrl: followerSqlNullableText(row.keyframeUrl),
+    areaId: followerSqlNullableText(row.areaId),
+    areaName: followerSqlNullableText(row.areaName),
+    parentAreaId: followerSqlNullableText(row.parentAreaId),
+    parentAreaName: followerSqlNullableText(row.parentAreaName),
+    liveStatus: followerSqlSmallInteger(row.liveStatus),
+    liveTime: followerSqlNullableText(row.liveTime),
+    onlineCount: followerSqlNullableCounter(row.onlineCount),
+    attentionCount: followerSqlNullableCounter(row.attentionCount),
+    monitorStatus: followerSqlText(row.monitorStatus),
+    intervalSeconds: followerSqlSmallInteger(row.intervalSeconds),
+    nextCollectAt: followerSqlNullableText(row.nextCollectAt),
+    lastSnapshotAt: followerSqlNullableText(row.lastSnapshotAt),
+    lastSuccessAt: followerSqlNullableText(row.lastSuccessAt),
+    lastErrorAt: followerSqlNullableText(row.lastErrorAt),
+    lastErrorType: followerSqlNullableText(row.lastErrorType),
+    lastErrorMessage: followerSqlNullableText(row.lastErrorMessage),
+    backoffUntil: followerSqlNullableText(row.backoffUntil),
+    sourceEndpoint: followerSqlNullableText(row.sourceEndpoint),
+    currentEvidenceObjectId: followerSqlNullableText(row.currentEvidenceObjectId),
+    version: followerSqlSmallInteger(row.version),
+    createdAt: followerSqlText(row.createdAt),
+    updatedAt: followerSqlText(row.updatedAt),
+  }
+}
+
 function bilibiliLiveRoomSelect(): string {
   return `
     SELECT monitor_id AS monitorId,
@@ -4212,6 +4758,17 @@ function parseJsonArray(value: unknown): string[] {
   }
 }
 
+function parseJsonNullableStringArray(value: unknown): Array<string | null> {
+  try {
+    const parsed = JSON.parse(String(value ?? "[]")) as unknown
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string | null => item === null || typeof item === "string")
+      : []
+  } catch {
+    return []
+  }
+}
+
 function parseJsonObject(value: unknown): Record<string, unknown> {
   try {
     const parsed = JSON.parse(String(value ?? "{}")) as unknown
@@ -4250,7 +4807,7 @@ function toStoredBilibiliSubjectBinding(
     bilibiliLiveRoomMonitorId: nullableString(row.bilibiliLiveRoomMonitorId),
     mid: nullableString(row.mid),
     roomId: nullableString(row.roomId),
-    enabledCapabilities: parseJsonArray(row.enabledCapabilitiesJson),
+    enabledCapabilities: parseJsonNullableStringArray(row.enabledCapabilitiesJson),
     danmuEnabled: Boolean(row.danmuEnabled),
     createdAt: String(row.createdAt),
     updatedAt: String(row.updatedAt)
@@ -4292,7 +4849,7 @@ function toStoredRankSnapshot(row: Record<string, unknown>): StoredBilibiliLiveR
     periodScope: row.periodScope === null ? null : String(row.periodScope),
     pageNo: Number(row.pageNo),
     pageSize: Number(row.pageSize),
-    totalCount: row.totalCount === null ? null : Number(row.totalCount),
+    totalCount: row.totalCount === null ? null : String(row.totalCount),
     countText: row.countText === null ? null : String(row.countText),
     valueText: row.valueText === null ? null : String(row.valueText),
     remindMsg: row.remindMsg === null ? null : String(row.remindMsg),

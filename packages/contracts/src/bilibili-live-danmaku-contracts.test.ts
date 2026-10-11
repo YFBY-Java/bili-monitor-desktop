@@ -4,11 +4,16 @@ import {
   BilibiliLiveDanmakuMetricBucketSchema,
   BilibiliLiveDanmakuRecentSchema,
   BilibiliLiveDanmakuStatusSchema,
+  QueryBilibiliLiveDanmakuRecentInputSchema,
   StartBilibiliLiveDanmakuInputSchema
 } from "./bilibili-live-danmaku"
 
 describe("Bilibili live danmaku contracts", () => {
   it("keeps the original start protocol selection and transport status projection", () => {
+    for (const protocolVersion of [-2, 4, -2147483648, 2147483647]) {
+      expect(StartBilibiliLiveDanmakuInputSchema.parse({ roomMonitorId: "018f0f39-7b5e-7cc1-962d-9a208b3d0900", protocolVersion }))
+        .toMatchObject({ protocolVersion })
+    }
     expect(StartBilibiliLiveDanmakuInputSchema.parse({
       roomMonitorId: "018f0f39-7b5e-7cc1-962d-9a208b3d0900",
       protocolVersion: -1
@@ -35,6 +40,15 @@ describe("Bilibili live danmaku contracts", () => {
   })
 
   it("keeps positive sender UID only and the original recent message shape", () => {
+    const roomMonitorId = "018f0f39-7b5e-7cc1-962d-9a208b3d0900"
+    expect(QueryBilibiliLiveDanmakuRecentInputSchema.parse({ roomMonitorId })).toEqual({ roomMonitorId, limit: 30 })
+    expect(QueryBilibiliLiveDanmakuRecentInputSchema.parse({ roomMonitorId, limit: 0 })).toEqual({ roomMonitorId, limit: 1 })
+    expect(QueryBilibiliLiveDanmakuRecentInputSchema.parse({ roomMonitorId, limit: 201 })).toEqual({ roomMonitorId, limit: 200 })
+    expect(QueryBilibiliLiveDanmakuRecentInputSchema.parse({ roomMonitorId, limit: -2_147_483_648 }).limit).toBe(1)
+    expect(QueryBilibiliLiveDanmakuRecentInputSchema.parse({ roomMonitorId, limit: 2_147_483_647 }).limit).toBe(200)
+    expect(QueryBilibiliLiveDanmakuRecentInputSchema.safeParse({ roomMonitorId, limit: -2_147_483_649 }).success).toBe(false)
+    expect(QueryBilibiliLiveDanmakuRecentInputSchema.safeParse({ roomMonitorId, limit: 2_147_483_648 }).success).toBe(false)
+    expect(QueryBilibiliLiveDanmakuRecentInputSchema.safeParse({ roomMonitorId, limit: 1.5 }).success).toBe(false)
     expect(BilibiliLiveDanmakuRecentSchema.parse({
       messageText: "hello danmaku",
       senderUid: "1001",

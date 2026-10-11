@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises"
+import { writeFileSync } from "node:fs"
+import { randomBytes } from "node:crypto"
 import { resolve } from "node:path"
 
 import {
@@ -11,28 +12,26 @@ import {
   type PreparedBilibiliLiveSessionExport
 } from "@bmd/contracts"
 import type { ControlDatabase, StoredBilibiliLiveSessionEvent } from "@bmd/storage"
-import ExcelJS from "exceljs"
-import { strToU8, zipSync } from "fflate"
-
 import { bilibiliLiveExportDate, bilibiliLiveExportFileName } from "./bilibili-live-export-name"
+import { writeSnapshotCsv, writeSnapshotZip } from "./bilibili-live-session-csv-zip"
 import type { BilibiliLiveSessionService } from "./bilibili-live-session-service"
+import { cleanupExportSnapshotWorkspace, createExportSnapshotWorkspace } from "./export-snapshot-workspace"
+import {
+  cleanupExportPreparedWorkspace, createExportPreparedWorkspace, resolvePreparedExportMainContext,
+  validatePreparedExportCredentialKey, type PreparedExportMainContext
+} from "./export-prepared-workspace"
+import {
+  writeSnapshotRows,
+  writeSnapshotXlsx,
+  type ExportColumns,
+  type ExportRow,
+  type XlsxSnapshotSheet
+} from "./bilibili-live-session-xlsx"
 
 const SCHEMA_VERSION = "2" as const
 const CAPTURE_SCOPE = "received_while_websocket_online_since_deployment"
 
-interface ColumnSet {
-  headers: readonly string[]
-  comments: readonly string[]
-}
-
-interface ExportSnapshot {
-  summary: BilibiliLiveSessionSummary
-  danmaku: StoredBilibiliLiveSessionEvent[]
-  gifts: StoredBilibiliLiveSessionEvent[]
-  users: BilibiliLiveSessionUser[]
-}
-
-const SUMMARY: ColumnSet = {
+const SUMMARY: ExportColumns = {
   headers: [
     "id", "monitor_id", "uid", "room_id", "state", "started_at", "ended_at",
     "start_source", "end_source", "coverage_status", "transport_session_count",
@@ -52,7 +51,7 @@ const SUMMARY: ColumnSet = {
   ]
 }
 
-const DANMAKU: ColumnSet = {
+const DANMAKU: ExportColumns = {
   headers: [
     "occurred_at", "received_at", "sender_uid", "sender_name", "medal_name", "message_text",
     "command", "protocol_version", "source_event_id"
@@ -63,7 +62,7 @@ const DANMAKU: ColumnSet = {
   ]
 }
 
-const GIFTS: ColumnSet = {
+const GIFTS: ExportColumns = {
   headers: [
     "occurred_at", "received_at", "event_kind", "sender_uid", "sender_name", "medal_name",
     "message_text", "gift_id", "gift_name", "gift_count", "coin_type",
@@ -78,7 +77,7 @@ const GIFTS: ColumnSet = {
   ]
 }
 
-const USERS: ColumnSet = {
+const USERS: ExportColumns = {
   headers: [
     "actor_key", "identity_quality", "user_uid", "display_name", "danmaku_count",
     "gift_event_count", "gift_count", "free_gift_count", "paid_event_count",
@@ -92,94 +91,210 @@ const USERS: ColumnSet = {
 }
 
 export class BilibiliLiveSessionExportService {
+  private readonly credentialKey: Uint8Array
+  private readonly mainContext: PreparedExportMainContext
+
   constructor(private readonly options: {
     database: ControlDatabase
     sessions: BilibiliLiveSessionService
     exportDirectory: string
     now: () => Date
     idFactory: () => string
-  }) {}
-
-  async prepare(input: ExportBilibiliLiveSessionInput): Promise<PreparedBilibiliLiveSessionExport> {
-    const parsed = ExportBilibiliLiveSessionInputSchema.parse(input)
-    const snapshot = this.options.database.runInTransaction(() => this.snapshot(parsed.sessionId))
-    const extension = parsed.category === "xlsx" ? "xlsx" : parsed.category === "all" ? "zip" : "csv"
-    const date = bilibiliLiveExportDate(this.options.now())
-    const number = this.options.database.allocateBilibiliLiveExportNumber(snapshot.summary.uid, date)
-    const suggestedFileName = bilibiliLiveExportFileName({
-      uname: this.options.database.findBilibiliLiveRoomById(snapshot.summary.monitorId)?.uname,
-      uid: snapshot.summary.uid, date, number, category: parsed.category
-    })
-    await mkdir(this.options.exportDirectory, { recursive: true })
-    const temporaryPath = resolve(
-      this.options.exportDirectory,
-      `${this.options.idFactory()}-${parsed.category}.${extension}`
-    )
-    const bytes = await this.encode(parsed.category, snapshot)
-    await writeFile(temporaryPath, bytes)
-    return PreparedBilibiliLiveSessionExportSchema.parse({
-      sessionId: parsed.sessionId,
-      category: parsed.category,
-      temporaryPath,
-      suggestedFileName,
-      mediaType: mediaType(parsed.category),
-      schemaVersion: SCHEMA_VERSION,
-      coverageStatus: snapshot.summary.coverageStatus
-    })
+    credentialKey?: Uint8Array
+    mainContext?: PreparedExportMainContext
+  }) {
+    this.credentialKey = options.credentialKey ?? randomBytes(32)
+    validatePreparedExportCredentialKey(this.credentialKey)
+    this.mainContext = resolvePreparedExportMainContext(options.mainContext)
   }
 
-  private snapshot(sessionId: string): ExportSnapshot {
-    const summary = this.options.sessions.get(sessionId)
-    const facts = this.options.database.findAllBilibiliLiveSessionEvents(sessionId)
-      .filter((event) => ["DANMAKU", "GIFT", "SUPER_CHAT", "GUARD_BUY"].includes(event.eventKind))
-    return {
-      summary,
-      danmaku: facts.filter((event) => event.eventKind === "DANMAKU"),
-      gifts: facts.filter((event) => ["GIFT", "SUPER_CHAT", "GUARD_BUY"].includes(event.eventKind)),
-      users: aggregateUsers(facts)
+  async prepare(
+    input: ExportBilibiliLiveSessionInput,
+    reportProgress?: () => void,
+    signal?: AbortSignal
+  ): Promise<PreparedBilibiliLiveSessionExport> {
+    signal?.throwIfAborted()
+    const parsed = ExportBilibiliLiveSessionInputSchema.parse(input)
+    // Allocate the original daily number exactly once, before any filesystem IO.
+    const metadata = this.metadata(this.options.sessions.get(parsed.sessionId), parsed.category,
+      resolve(this.options.exportDirectory, parsed.category === "all" ? "output.zip" : parsed.category === "xlsx" ? "output.xlsx" : "output.csv"))
+    signal?.throwIfAborted()
+    const owned = await createExportPreparedWorkspace(this.options.exportDirectory, parsed.category, this.credentialKey, this.mainContext)
+    const prepared = { ...metadata, temporaryPath: owned.outputPath }
+    try {
+      signal?.throwIfAborted()
+      if (parsed.category === "xlsx") return await this.prepareXlsx(parsed.sessionId, prepared, reportProgress, signal)
+      return await this.prepareCsvZip(parsed.sessionId, parsed.category, prepared, reportProgress, signal)
+    } catch (error) {
+      // Writers drain and close their descriptors before rejecting. Main owns success.
+      await cleanupExportPreparedWorkspace(owned, this.credentialKey)
+      throw error
     }
   }
 
-  private async encode(
+  private async prepareCsvZip(
+    sessionId: string,
+    category: Exclude<BilibiliLiveSessionExportCategory, "xlsx">,
+    prepared: PreparedBilibiliLiveSessionExport,
+    reportProgress?: () => void,
+    signal?: AbortSignal
+  ): Promise<PreparedBilibiliLiveSessionExport> {
+    const temporaryPath = prepared.temporaryPath
+    signal?.throwIfAborted()
+    if (category !== "all") {
+      const summary = this.options.database.runInTransaction(() => {
+        const summary = this.options.sessions.get(sessionId)
+        this.writeCsv(category, sessionId, temporaryPath, reportProgress, signal)
+        return summary
+      })
+      return PreparedBilibiliLiveSessionExportSchema.parse({ ...prepared, coverageStatus: summary.coverageStatus })
+    }
+    const ownedWorkspace = await createExportSnapshotWorkspace(this.options.exportDirectory, "zip")
+    const workspace = ownedWorkspace.path
+    try {
+      signal?.throwIfAborted()
+      const snapshot = this.options.database.runInTransaction(() => {
+        const summary = this.options.sessions.get(sessionId)
+        const manifestPath = resolve(workspace, "manifest.json")
+        writeFileSync(manifestPath, JSON.stringify(this.manifest(summary)), { encoding: "utf8", flag: "wx" })
+        const summaryPath = resolve(workspace, "summary.csv")
+        writeSnapshotCsv(summaryPath, SUMMARY, reportRows([summary], reportProgress, signal), summaryRow)
+        const entries = [
+          { name: "manifest.json", path: manifestPath },
+          { name: "summary.csv", path: summaryPath }
+        ]
+        for (const item of ["danmaku", "gifts", "users"] as const) {
+          const path = resolve(workspace, `${item}.csv`)
+          this.writeCsv(item, sessionId, path, reportProgress, signal)
+          entries.push({ name: `${item}.csv`, path })
+        }
+        return { summary, entries }
+      })
+      const result = PreparedBilibiliLiveSessionExportSchema.parse({
+        ...prepared, coverageStatus: snapshot.summary.coverageStatus
+      })
+      await writeSnapshotZip(temporaryPath, snapshot.entries, signal)
+      return result
+    } finally {
+      await cleanupExportSnapshotWorkspace(ownedWorkspace)
+    }
+  }
+
+  private writeCsv(
+    category: Exclude<BilibiliLiveSessionExportCategory, "xlsx" | "all">,
+    sessionId: string,
+    path: string,
+    reportProgress?: () => void,
+    signal?: AbortSignal
+  ): void {
+    const database = this.options.database
+    if (category === "danmaku") {
+      writeSnapshotCsv(path, DANMAKU, reportRows(database.iterateBilibiliLiveSessionExportEvents(sessionId, "danmaku"), reportProgress, signal), danmakuRow)
+    } else if (category === "gifts") {
+      writeSnapshotCsv(path, GIFTS, reportRows(database.iterateBilibiliLiveSessionExportEvents(sessionId, "gifts"), reportProgress, signal), giftRow)
+    } else {
+      writeSnapshotCsv(path, USERS, reportRows(database.iterateBilibiliLiveSessionExportUsers(sessionId), reportProgress, signal), userRow)
+    }
+  }
+
+  private metadata(
+    summary: BilibiliLiveSessionSummary,
     category: BilibiliLiveSessionExportCategory,
-    snapshot: ExportSnapshot
-  ): Promise<Uint8Array> {
-    if (category === "danmaku") return csvBytes(DANMAKU, danmakuRows(snapshot.danmaku))
-    if (category === "gifts") return csvBytes(GIFTS, giftRows(snapshot.gifts))
-    if (category === "users") return csvBytes(USERS, userRows(snapshot.users))
-    if (category === "xlsx") return this.xlsx(snapshot)
-    const manifest = {
+    temporaryPath: string
+  ): PreparedBilibiliLiveSessionExport {
+    const date = bilibiliLiveExportDate(this.options.now())
+    const number = this.options.database.allocateBilibiliLiveExportNumber(summary.uid, date)
+    const suggestedFileName = bilibiliLiveExportFileName({
+      uname: this.options.database.findBilibiliLiveRoomById(summary.monitorId)?.uname,
+      uid: summary.uid, date, number, category
+    })
+    return PreparedBilibiliLiveSessionExportSchema.parse({
+      sessionId: summary.id,
+      category,
+      temporaryPath,
+      suggestedFileName,
+      mediaType: mediaType(category),
+      schemaVersion: SCHEMA_VERSION,
+      coverageStatus: summary.coverageStatus
+    })
+  }
+
+  private async prepareXlsx(
+    sessionId: string,
+    prepared: PreparedBilibiliLiveSessionExport,
+    reportProgress?: () => void,
+    signal?: AbortSignal
+  ): Promise<PreparedBilibiliLiveSessionExport> {
+    const temporaryPath = prepared.temporaryPath
+    signal?.throwIfAborted()
+    const ownedWorkspace = await createExportSnapshotWorkspace(this.options.exportDirectory, "xlsx")
+    const workspace = ownedWorkspace.path
+    try {
+      signal?.throwIfAborted()
+      // Finish the synchronous SQLite snapshot before yielding to ongoing collection.
+      const snapshot = this.options.database.runInTransaction(() => {
+        const summary = this.options.sessions.get(sessionId)
+        const sheets = [
+          snapshotSheet(workspace, "summary", "场次摘要", SUMMARY, reportRows([summary], reportProgress, signal), summaryRow),
+          snapshotSheet(workspace, "danmaku", "弹幕", DANMAKU,
+            reportRows(this.options.database.iterateBilibiliLiveSessionExportEvents(sessionId, "danmaku"), reportProgress, signal), danmakuRow),
+          snapshotSheet(workspace, "gifts", "礼物", GIFTS,
+            reportRows(this.options.database.iterateBilibiliLiveSessionExportEvents(sessionId, "gifts"), reportProgress, signal), giftRow),
+          snapshotSheet(workspace, "users", "用户", USERS,
+            reportRows(this.options.database.iterateBilibiliLiveSessionExportUsers(sessionId), reportProgress, signal), userRow)
+        ]
+        return { summary, sheets }
+      })
+      const result = PreparedBilibiliLiveSessionExportSchema.parse({
+        ...prepared, coverageStatus: snapshot.summary.coverageStatus
+      })
+      await writeSnapshotXlsx(temporaryPath, snapshot.sheets, signal)
+      return result
+    } finally {
+      await cleanupExportSnapshotWorkspace(ownedWorkspace)
+    }
+  }
+
+  private manifest(summary: BilibiliLiveSessionSummary) {
+    return {
       schema_version: SCHEMA_VERSION,
       amount_unit: "milli_yuan",
       capture_scope: CAPTURE_SCOPE,
-      coverage_status: snapshot.summary.coverageStatus,
-      transport_session_count: snapshot.summary.transportSessionCount,
-      capture_started_at: snapshot.summary.captureStartedAt,
-      capture_ended_at: snapshot.summary.captureEndedAt,
-      session_id: snapshot.summary.id,
+      coverage_status: summary.coverageStatus,
+      transport_session_count: summary.transportSessionCount,
+      capture_started_at: summary.captureStartedAt,
+      capture_ended_at: summary.captureEndedAt,
+      session_id: summary.id,
       generated_at: this.options.now().toISOString(),
       files: ["summary.csv", "danmaku.csv", "gifts.csv", "users.csv"]
     }
-    return zipSync({
-      "manifest.json": strToU8(JSON.stringify(manifest)),
-      "summary.csv": csvBytes(SUMMARY, [summaryRow(snapshot.summary)]),
-      "danmaku.csv": csvBytes(DANMAKU, danmakuRows(snapshot.danmaku)),
-      "gifts.csv": csvBytes(GIFTS, giftRows(snapshot.gifts)),
-      "users.csv": csvBytes(USERS, userRows(snapshot.users))
-    }, { level: 6 })
-  }
-
-  private async xlsx(snapshot: ExportSnapshot): Promise<Uint8Array> {
-    const workbook = new ExcelJS.Workbook()
-    addSheet(workbook, "场次摘要", SUMMARY, [summaryRow(snapshot.summary)])
-    addSheet(workbook, "弹幕", DANMAKU, danmakuRows(snapshot.danmaku))
-    addSheet(workbook, "礼物", GIFTS, giftRows(snapshot.gifts))
-    addSheet(workbook, "用户", USERS, userRows(snapshot.users))
-    return new Uint8Array(await workbook.xlsx.writeBuffer())
   }
 }
 
-function summaryRow(summary: BilibiliLiveSessionSummary): unknown[] {
+function* reportRows<T>(values: Iterable<T>, reportProgress?: () => void, signal?: AbortSignal): Iterable<T> {
+  for (const value of values) {
+    signal?.throwIfAborted()
+    reportProgress?.()
+    signal?.throwIfAborted()
+    yield value
+  }
+  reportProgress?.()
+  signal?.throwIfAborted()
+}
+
+function snapshotSheet<T>(
+  workspace: string,
+  fileName: string,
+  name: string,
+  columns: ExportColumns,
+  values: Iterable<T>,
+  toRow: (value: T) => ExportRow
+): XlsxSnapshotSheet {
+  const path = resolve(workspace, `${fileName}.ndjson`)
+  return { name, columns, path, rowCount: writeSnapshotRows(path, values, toRow) }
+}
+
+function summaryRow(summary: BilibiliLiveSessionSummary): ExportRow {
   return [
     summary.id, summary.monitorId, summary.uid, summary.roomId, summary.state, summary.startedAt,
     summary.endedAt, summary.startSource, summary.endSource, summary.coverageStatus,
@@ -192,140 +307,34 @@ function summaryRow(summary: BilibiliLiveSessionSummary): unknown[] {
   ]
 }
 
-function danmakuRows(events: StoredBilibiliLiveSessionEvent[]): unknown[][] {
-  return events.map((event) => [
+function danmakuRow(event: StoredBilibiliLiveSessionEvent): ExportRow {
+  return [
     event.occurredAt, event.receivedAt, event.senderUid, event.senderName, event.medalName,
     event.messageText, event.command, event.protocolVersion, event.sourceEventId
-  ])
+  ]
 }
 
-function giftRows(events: StoredBilibiliLiveSessionEvent[]): unknown[][] {
-  return events.map((event) => [
+function giftRow(event: StoredBilibiliLiveSessionEvent): ExportRow {
+  return [
     event.occurredAt, event.receivedAt, event.eventKind, event.senderUid, event.senderName,
     event.medalName, event.messageText, event.giftId, event.giftName, event.giftCount,
     event.coinType,
     !event.paid || event.coinType?.toLocaleLowerCase() === "silver" ? null : event.unitPriceMilliYuan,
     event.paidAmountMilliYuan, event.paid, event.guardLevel, event.amountSource, event.command,
     event.protocolVersion, event.sourceEventId, event.eventKey, event.transportSessionId
-  ])
+  ]
 }
 
-function userRows(users: BilibiliLiveSessionUser[]): unknown[][] {
-  return users.map((user) => [
+function userRow(user: BilibiliLiveSessionUser): ExportRow {
+  return [
     user.actorKey, user.identityQuality, user.userUid, user.displayName, user.danmakuCount,
     user.giftEventCount, user.giftCount, user.freeGiftCount, user.paidEventCount,
     user.paidAmountMilliYuan, user.firstSeenAt, user.lastSeenAt
-  ])
-}
-
-function aggregateUsers(events: StoredBilibiliLiveSessionEvent[]): BilibiliLiveSessionUser[] {
-  const grouped = new Map<string, StoredBilibiliLiveSessionEvent[]>()
-  for (const event of events) {
-    const actorKey = event.senderUid ? `uid:${event.senderUid}` : `event:${event.eventId}`
-    const values = grouped.get(actorKey) ?? []
-    values.push(event)
-    grouped.set(actorKey, values)
-  }
-  return [...grouped.entries()].map(([actorKey, values]) => {
-    const paidEvents = values.filter((event) =>
-      ["GIFT", "SUPER_CHAT", "GUARD_BUY"].includes(event.eventKind)
-      && (event.paid || (event.paidAmountMilliYuan ?? 0) > 0)
-    )
-    return {
-      actorKey,
-      identityQuality: actorKey.startsWith("uid:") ? "VERIFIED_UID" as const : "UNRESOLVED_EVENT" as const,
-      userUid: actorKey.startsWith("uid:") ? actorKey.slice(4) : null,
-      displayName: [...values].reverse().find((event) => event.senderName?.trim())?.senderName ?? null,
-      danmakuCount: values.filter((event) => event.eventKind === "DANMAKU").length,
-      giftEventCount: values.filter((event) => event.eventKind === "GIFT").length,
-      giftCount: sum(values.filter((event) => event.eventKind === "GIFT"), giftQuantity),
-      freeGiftCount: sum(
-        values.filter((event) => event.eventKind === "GIFT" && !event.paid),
-        giftQuantity
-      ),
-      paidEventCount: paidEvents.length,
-      paidAmountMilliYuan: sum(paidEvents, (event) => event.paidAmountMilliYuan ?? 0),
-      firstSeenAt: values[0]?.occurredAt ?? values[0]?.receivedAt ?? new Date(0).toISOString(),
-      lastSeenAt: values.at(-1)?.occurredAt ?? values.at(-1)?.receivedAt ?? new Date(0).toISOString()
-    }
-  }).sort((left, right) =>
-    right.paidAmountMilliYuan - left.paidAmountMilliYuan
-    || right.giftCount - left.giftCount
-    || right.danmakuCount - left.danmakuCount
-    || left.actorKey.localeCompare(right.actorKey)
-  )
-}
-
-function csvBytes(columns: ColumnSet, rows: unknown[][]): Uint8Array {
-  const lines = [columns.headers, columns.comments, ...rows]
-    .map((row) => row.map(csvField).join(","))
-  return Buffer.from(`\uFEFF${lines.join("\r\n")}\r\n`, "utf8")
-}
-
-function csvField(value: unknown): string {
-  if (value === null || value === undefined) return ""
-  let text = String(value)
-  if (typeof value === "string" && isFormula(text)) text = `'${text}`
-  if (!/[",\r\n]/.test(text)) return text
-  return `"${text.replaceAll('"', '""')}"`
-}
-
-function isFormula(value: string): boolean {
-  if (!value) return false
-  let index = 0
-  let controlWhitespace = false
-  while (index < value.length && /\s/u.test(value[index] ?? "")) {
-    if ((value.codePointAt(index) ?? 32) < 32) controlWhitespace = true
-    index += 1
-  }
-  if (controlWhitespace) return true
-  return ["=", "+", "-", "@"].includes(value[index] ?? "")
-}
-
-function addSheet(
-  workbook: ExcelJS.Workbook,
-  name: string,
-  columns: ColumnSet,
-  rows: unknown[][]
-): void {
-  const sheet = workbook.addWorksheet(name, { views: [{ state: "frozen", ySplit: 2 }] })
-  const header = sheet.addRow([...columns.headers])
-  const comments = sheet.addRow([...columns.comments])
-  header.font = { bold: true, color: { argb: "FFFFFFFF" } }
-  header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } }
-  comments.font = { color: { argb: "FF1F4E78" } }
-  comments.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } }
-  comments.height = 32
-  comments.alignment = { wrapText: true }
-  for (const row of rows) sheet.addRow(row)
-  for (let index = 0; index < columns.headers.length; index += 1) {
-    const field = columns.headers[index] ?? ""
-    const comment = columns.comments[index] ?? ""
-    sheet.getColumn(index + 1).width = columnWidth(field, comment)
-  }
-  const lastColumn = sheet.getColumn(columns.headers.length).letter
-  sheet.autoFilter = `A1:${lastColumn}${Math.max(1, sheet.rowCount)}`
-}
-
-function columnWidth(header: string, comment: string): number {
-  const base = header.endsWith("_at")
-    ? 30
-    : header.endsWith("_id") || header.endsWith("_uid") || header === "event_key"
-      ? 24
-      : header === "message_text" ? 56 : header.includes("name") ? 24 : 18
-  return Math.max(base, Math.min(36, comment.length * 2))
+  ]
 }
 
 function mediaType(category: BilibiliLiveSessionExportCategory): string {
   if (category === "xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
   if (category === "all") return "application/zip"
   return "text/csv;charset=UTF-8"
-}
-
-function giftQuantity(event: StoredBilibiliLiveSessionEvent): number {
-  return event.giftCount ?? 1
-}
-
-function sum<T>(items: T[], select: (item: T) => number): number {
-  return items.reduce((total, item) => total + select(item), 0)
 }

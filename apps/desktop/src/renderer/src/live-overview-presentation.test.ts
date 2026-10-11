@@ -1,4 +1,4 @@
-import type { BilibiliLiveRoom, BilibiliLiveStatusEvent } from "@bmd/contracts"
+import type { BilibiliLiveRoomV2, BilibiliLiveStatusEventV2 } from "@bmd/contracts"
 import { renderToStaticMarkup } from "react-dom/server"
 import { createElement } from "react"
 import { describe, expect, it } from "vitest"
@@ -7,10 +7,10 @@ import { formatLiveDateTime } from "./live-monitor-presentation"
 import { liveEventName, liveRelativeTime } from "./live-overview-presentation"
 
 const now = Date.parse("2026-09-13T04:00:00Z")
-const event: BilibiliLiveStatusEvent = { id: "018f0f39-7b5e-7cc1-962d-000000000000", monitorId: "018f0f39-7b5e-7cc1-962d-000000000001",
+const event: BilibiliLiveStatusEventV2 = { id: "018f0f39-7b5e-7cc1-962d-000000000000", monitorId: "018f0f39-7b5e-7cc1-962d-000000000001",
   uid: "20", roomId: "120", eventType: "LIVE_STARTED", occurredAt: "2026-09-13T03:00:00Z" }
-const room: BilibiliLiveRoom = { id: event.monitorId, uid: "20", roomId: "120", uname: "当前主播", liveStatus: 1,
-  monitorStatus: "ACTIVE", intervalSeconds: 300, onlineCount: 12345, version: 1, recentTrend: [] }
+const room: BilibiliLiveRoomV2 = { id: event.monitorId, uid: "20", roomId: "120", uname: "当前主播", liveStatus: 1,
+  monitorStatus: "ACTIVE", intervalSeconds: 300, onlineCount: "12345", version: 1, recentTrend: [] }
 
 describe("original live overview presentation", () => {
   it("uses exact minute/hour/day boundaries, including future and invalid timestamps", () => {
@@ -36,7 +36,7 @@ describe("original live overview presentation", () => {
 
   it("falls back to live-room facts and the first event when summary is absent", () => {
     const html = renderToStaticMarkup(createElement(LiveOverviewSummary, { summary: undefined,
-      rooms: [room, { ...room, id: event.id, liveStatus: 0, onlineCount: 999999 }], events: [event], now, available: true, pending: false }))
+      rooms: [room, { ...room, id: event.id, liveStatus: 0, onlineCount: "999999" }], events: [event], now, available: true, pending: false }))
     expect(html).toContain("1.2万")
     expect(html).toContain("1 小时前")
     expect(html).not.toContain("999,999")

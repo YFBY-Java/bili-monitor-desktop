@@ -4,9 +4,27 @@
   "type": "object", "additionalProperties": false,
   "required": ["connectionId", "roomId"],
   "properties": {
+    "cacheConfiguration": {
+      "type":"object","additionalProperties":false,
+      "properties": {
+        "wbiCacheSeconds":{"type":"integer","minimum":-2147483648,"maximum":2147483647,"default":43200},
+        "buvidCacheSeconds":{"type":"integer","minimum":-2147483648,"maximum":2147483647,"default":43200}
+      }
+    },
+    "connectionConfiguration": {
+      "type":"object","additionalProperties":false,
+      "properties": {
+        "heartbeatSeconds":{"type":"integer","minimum":-2147483648,"maximum":2147483647,"default":30},
+        "connectTimeoutMs":{"type":"integer","minimum":-2147483648,"maximum":2147483647,"default":8000},
+        "useLoginCredential":{"type":"boolean","default":true},
+        "webLocation":{"type":"string","default":"444.8"},
+        "clientVersion":{"type":"string","default":"1.14.3"}
+      }
+    },
     "connectionId": {"type":"string","minLength":1},
     "roomId": {"type":"string","pattern":"^[1-9][0-9]*$","not":{"pattern":"\\n"}},
     "protocolVersion": {"type":"integer","minimum":0,"maximum":3},
+    "preferredProtocolVersion": {"type":"integer","minimum":-2147483648,"maximum":2147483647},
     "credential": {
       "type":"object","additionalProperties":false,"required":["cookieHeader","authUid"],
       "properties": {

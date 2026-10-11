@@ -144,7 +144,7 @@ describe("actual Core auth-to-danmaku business linkage", () => {
     vi.useFakeTimers()
     try {
       runtime = await LocalCoreRuntime.start({ dataDirectory: directory, version: "test", credentialKey: randomBytes(32), schedulerEnabled: true, schedulerDelayMs: 60_000, authSource: auth, liveDanmakuSource: source })
-      await vi.advanceTimersByTimeAsync(5000)
+      await vi.advanceTimersByTimeAsync(0)
       await gate.started
       await runtime.stop()
       gate.release()

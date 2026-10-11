@@ -41,6 +41,10 @@ export function createBrowserPreviewBridge(): DesktopBridge {
       exportCredential: async () => { throw readOnlyError() },
       revoke: async () => { throw readOnlyError() }
     },
+    platformCollection: {
+      listAdapters: async () => [],
+      runOnce: async () => { throw readOnlyError() }
+    },
     platformAccounts: {
       list: async () => ({ items: [], total: 0, snapshotAt: timestamp }),
       create: async () => { throw readOnlyError() }
@@ -59,6 +63,8 @@ export function createBrowserPreviewBridge(): DesktopBridge {
       bind: async () => { throw readOnlyError() },
       workbench: async () => { throw readOnlyError() },
       trends: async () => { throw readOnlyError() },
+      workbenchV3: async () => { throw new Error("preview unavailable") },
+      trendsV3: async () => { throw new Error("preview unavailable") },
       workbenchV2: async () => { throw readOnlyError() },
       trendsV2: async () => { throw readOnlyError() },
       updateLayout: async () => { throw readOnlyError() }
@@ -90,6 +96,32 @@ export function createBrowserPreviewBridge(): DesktopBridge {
       refresh: async () => { throw readOnlyError() },
       credential: async () => { throw readOnlyError() },
       revoke: async () => { throw readOnlyError() }
+    },
+    bilibiliLiveRankV2: {
+      summary: async () => { throw readOnlyError() },
+      latest: async () => { throw readOnlyError() },
+      refresh: async () => { throw readOnlyError() }
+    },
+    bilibiliLiveV2: {
+      list: async () => ({ items: [], total: 0, snapshotAt: timestamp }),
+      add: async () => { throw readOnlyError() },
+      updateStatus: async () => { throw readOnlyError() },
+      updateSettings: async () => { throw readOnlyError() },
+      refresh: async () => { throw readOnlyError() },
+      remove: async () => { throw readOnlyError() },
+      summary: async () => ({
+        totalRooms: 0,
+        activeRooms: 0,
+        liveRooms: 0,
+        roundRooms: 0,
+        offlineRooms: 0,
+        errorRooms: 0,
+        totalOnlineCount: "0",
+        todayLiveStarts: 0
+      }),
+      trend: async () => { throw readOnlyError() },
+      trends: async () => [],
+      events: async () => [],
     },
     bilibiliLive: {
       list: async () => ({ items: [], total: 0, snapshotAt: timestamp }),

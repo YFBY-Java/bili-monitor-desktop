@@ -9,7 +9,7 @@ vi.mock("electron", () => ({ utilityProcess: { fork: adapter.fork } }))
 describe("desktop Core liveness watchdog", () => {
   let controller: LocalCoreController
   afterEach(async () => { await controller?.stop(); vi.useRealTimers() })
-  async function setup() {
+  async function setup(deferShutdown = false) {
     vi.useFakeTimers()
     const requests: RuntimeEnvelope[] = []
     const child = Object.assign(new EventEmitter(), { pid: 123 as number | undefined, stderr: new EventEmitter(),
@@ -19,7 +19,10 @@ describe("desktop Core liveness watchdog", () => {
         if (request.type === "core.bootstrap") respond(request, { coreStatus: { state: "ready", version: "test",
           dataDirectory: "D:/fixture", databaseReady: true, schemaVersion: 13, startedAt: new Date().toISOString() },
           workers: [], sequence: 0 }, "core.bootstrap.result")
-        if (request.type === "core.shutdown") { respond(request, { accepted: true }, "core.shutdown.result"); child.kill() }
+        if (request.type === "core.shutdown") {
+          respond(request, { accepted: true }, "core.shutdown.result")
+          if (!deferShutdown) child.kill()
+        }
       } })
     function respond(request: RuntimeEnvelope, payload: unknown, type = "core.request-alive", overrides: object = {}) {
       child.emit("message", { ...createRuntimeEnvelope({ ...request, type, payload }), ...overrides })
@@ -31,6 +34,47 @@ describe("desktop Core liveness watchdog", () => {
     return { child, requests, respond }
   }
   const id = "11111111-1111-4111-8111-111111111111"
+  it("keeps a 240-second export alive and drains it before stopping Core", async () => {
+    const f = await setup(true)
+    let settled = false
+    const pending = controller.prepareBilibiliLiveSessionExport({ sessionId: id, category: "all" })
+      .then(value => { settled = true; return value }, (error: unknown) => { settled = true; return error })
+    const request = f.requests.at(-1)!
+    // Main has sent this request, but a synchronous Core snapshot has not yet
+    // accepted it. Only the active export can send correlated heartbeats.
+    const queuedHttp = controller.refreshBilibiliLiveRoom({ roomMonitorId: id })
+      .catch((error: unknown) => error)
+    const queuedRequest = f.requests.at(-1)!
+    let stopping: Promise<void> | undefined
+    try {
+      expect(request.keepAlive).toBe(true)
+      for (let count = 0; count < 4; count++) {
+        await vi.advanceTimersByTimeAsync(60_000)
+        f.respond(request, { requestType: request.type })
+        if (count === 0) stopping = controller.stop()
+        expect(settled).toBe(false)
+        expect(f.child.kill).not.toHaveBeenCalled()
+      }
+      f.respond(request, { sessionId: id, category: "all", temporaryPath: "D:/fixture/export.zip",
+        suggestedFileName: "export.zip", mediaType: "application/zip", schemaVersion: "2",
+        coverageStatus: "RECEIVED_WHILE_ONLINE" }, request.type + ".result")
+      expect(await pending).toMatchObject({ category: "all", temporaryPath: "D:/fixture/export.zip" })
+      f.respond(queuedRequest, { code: "SYNTHETIC_QUEUED_HTTP_STOP", message: "fixture", retryable: false }, "core.error")
+      expect(await queuedHttp).toMatchObject({ code: "SYNTHETIC_QUEUED_HTTP_STOP" })
+      f.child.pid = undefined
+      f.child.emit("exit", 0)
+      await stopping
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      f.respond(request, { code: "SYNTHETIC_STOP", message: "fixture", retryable: false }, "core.error")
+      f.respond(queuedRequest, { code: "SYNTHETIC_STOP", message: "fixture", retryable: false }, "core.error")
+      f.child.pid = undefined
+      f.child.emit("exit", 0)
+      await pending
+      await queuedHttp
+      await stopping
+    }
+  })
   it.each(["add", "refresh", "add.v2", "refresh.v2"])("keeps a follower %s pending across multiple 90-second windows", async action => {
     const f = await setup()
     let settled = false

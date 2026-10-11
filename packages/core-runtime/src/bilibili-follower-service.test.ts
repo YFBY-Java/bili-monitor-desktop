@@ -34,7 +34,9 @@ describe("BilibiliFollowerMonitorService", () => {
       "018f0f39-7b5e-7cc1-962d-9a208b3d0301",
       "018f0f39-7b5e-7cc1-962d-9a208b3d0302",
       "018f0f39-7b5e-7cc1-962d-9a208b3d0303",
-      "018f0f39-7b5e-7cc1-962d-9a208b3d0304"
+      "018f0f39-7b5e-7cc1-962d-9a208b3d0304",
+      "018f0f39-7b5e-7cc1-962d-9a208b3d0305",
+      "018f0f39-7b5e-7cc1-962d-9a208b3d0306"
     ]
       const calls: string[] = []
       const service = new Service({

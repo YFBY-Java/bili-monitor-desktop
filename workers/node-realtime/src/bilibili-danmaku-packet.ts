@@ -15,7 +15,7 @@ export interface BilibiliDanmakuAuthPacketInput {
   uid?: string | undefined
   token: string
   buvid?: string
-  clientVersion?: string
+  clientVersion?: string | null
   protocolVersion: number
 }
 
@@ -38,7 +38,8 @@ export function buildBilibiliDanmakuAuthPacket(
     type: 2,
     key: input.token,
     buvid: input.buvid ?? "",
-    clientver: input.clientVersion?.trim() || "1.14.3"
+    clientver: input.clientVersion == null || /^[\u0009-\u000d\u001c-\u0020\u1680\u2000-\u2006\u2008-\u200a\u2028\u2029\u205f\u3000]*$/u.test(input.clientVersion)
+      ? "1.14.3" : input.clientVersion
   })))
 }
 

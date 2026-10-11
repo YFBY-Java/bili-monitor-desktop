@@ -2,8 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import type {
   BilibiliSubject,
-  BilibiliSubjectTrendV2,
-  BilibiliSubjectWorkbenchV2
+  BilibiliSubjectTrendV3,
+  BilibiliSubjectWorkbenchV3
 } from "@bmd/contracts"
 
 import { BilibiliSubjectListView, BilibiliSubjectWorkbenchView } from "./BilibiliSubjectWorkspace"
@@ -52,7 +52,7 @@ const subject: BilibiliSubject = {
   }
 }
 
-const workbench: BilibiliSubjectWorkbenchV2 = {
+const workbench: BilibiliSubjectWorkbenchV3 = {
   subject,
   bilibiliBinding: subject.bilibiliBinding,
   bilibiliUser: {
@@ -71,8 +71,8 @@ const workbench: BilibiliSubjectWorkbenchV2 = {
     uname: "碧诗",
     title: "直播标题",
     liveStatus: 1,
-    onlineCount: 200,
-    onlinePeak24h: 300,
+    onlineCount: "200",
+    onlinePeak24h: "300",
     monitorStatus: "ACTIVE",
     lastSuccessAt: timestamp
   },
@@ -80,8 +80,8 @@ const workbench: BilibiliSubjectWorkbenchV2 = {
     followerCount: "1000",
     followerDelta24h: "8",
     liveStatus: 1,
-    onlineCount: 200,
-    onlinePeak24h: 300,
+    onlineCount: "200",
+    onlinePeak24h: "300",
     danmuPerMinute: 6,
     danmuLast5Minutes: 22,
     healthScore: 100,
@@ -113,12 +113,12 @@ const workbench: BilibiliSubjectWorkbenchV2 = {
   }]
 }
 
-const trend: BilibiliSubjectTrendV2 = {
+const trend: BilibiliSubjectTrendV3 = {
   subjectId,
   metrics: ["follower", "live_online"],
   range: "24h",
   bucket: "5m",
-  points: [{ bucketAt: timestamp, followerCount: "1000", liveOnlineCount: 200 }]
+  points: [{ bucketAt: timestamp, followerCount: "1000", liveOnlineCount: "200" }]
 }
 
 describe("BilibiliSubjectWorkspace", () => {
@@ -139,7 +139,7 @@ describe("BilibiliSubjectWorkspace", () => {
     expect(html).not.toContain("Agent")
   })
 
-  it("renders real aggregated workbench metrics, danmaku, health events and layout actions", () => {
+  it("renders original workbench metrics, health events and the static module placeholder", () => {
     const html = renderToStaticMarkup(
       <BilibiliSubjectWorkbenchView
         workbench={workbench}
@@ -150,14 +150,17 @@ describe("BilibiliSubjectWorkspace", () => {
         onRefresh={() => undefined}
         onToggleStatus={() => undefined}
         onOpenBinding={() => undefined}
-        onResetLayout={() => undefined}
       />
     )
     expect(html).toContain("总粉丝数")
     expect(html).toContain("直播间热度")
     expect(html).toContain("弹幕速率")
     expect(html).toContain("粉丝数采集成功")
-    expect(html).toContain("恢复默认布局")
+    expect(html).toContain("待添加模块")
+    expect(html).toContain("Widget Slot")
+    expect(html).toContain("后续可接可编排布局，把更多用户维度放到这里。")
+    expect(html).not.toContain("恢复默认布局")
+    expect(html).not.toContain("组件布局")
     expect(html).toContain("房间观众")
     expect(html).toContain("大航海")
     expect(html).toContain("停止弹幕监控")

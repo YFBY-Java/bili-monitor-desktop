@@ -1,0 +1,366 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bmd:bilibili-live-rank-worker:v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "taskId",
+    "attempt",
+    "leaseId",
+    "roomId",
+    "ruid",
+    "family",
+    "type",
+    "page",
+    "pageSize"
+  ],
+  "properties": {
+    "webLocation": { "type": "string" },
+    "wbiKeys": {
+      "$ref": "#/$defs/WbiKeys"
+    },
+    "wbiCacheSeconds": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 43200
+    },
+    "taskId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "leaseId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "roomId": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
+    "ruid": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
+    "family": {
+      "enum": [
+        "AUDIENCE",
+        "GUARD"
+      ]
+    },
+    "type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "rankSwitch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "periodScope": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "guardTyp": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4
+    },
+    "page": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "pageSize": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "endpoint": {
+      "enum": [
+        "xlive/general-interface/v1/rank/queryContributionRank",
+        "xlive/general-interface/v1/rank/getOnlineGoldRank",
+        "xlive/app-room/v2/guardTab/topListNew"
+      ]
+    },
+    "forceRefreshWbi": {
+      "type": "boolean",
+      "default": false
+    },
+    "httpConfiguration": {
+      "$ref": "#/$defs/HttpConfiguration"
+    }
+  },
+  "$defs": {
+    "RawPayloadStorageStatus": {
+      "enum": [
+        "ACCEPTED",
+        "INVALID_JSON",
+        "NUL",
+        "INVALID_UNICODE",
+        "NUMBER_OUT_OF_RANGE"
+      ]
+    },
+    "ObjectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "objectId",
+        "relativePath",
+        "sha256",
+        "sizeBytes",
+        "mediaType"
+      ],
+      "properties": {
+        "objectId": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "relativePath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "RankEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entryKind"
+      ],
+      "properties": {
+        "userUid": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "rankNo": {
+          "minimum": -2147483648,
+          "maximum": 2147483647,
+          "type": "integer"
+        },
+        "entryKind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "faceUrl": {
+          "type": "string"
+        },
+        "score": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "guardLevel": {
+          "minimum": -2147483648,
+          "maximum": 2147483647,
+          "type": "integer"
+        },
+        "wealthLevel": {
+          "minimum": -2147483648,
+          "maximum": 2147483647,
+          "type": "integer"
+        },
+        "medalName": {
+          "type": "string"
+        },
+        "medalLevel": {
+          "minimum": -2147483648,
+          "maximum": 2147483647,
+          "type": "integer"
+        },
+        "guardExpiredText": {
+          "type": "string"
+        },
+        "accompanyDays": {
+          "minimum": -2147483648,
+          "maximum": 2147483647,
+          "type": "integer"
+        },
+        "medalRuid": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "medalIsLight": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "rawEntryJson": {
+          "type": "string"
+        },
+        "rawEntryStorageStatus": {
+          "$ref": "#/$defs/RawPayloadStorageStatus"
+        }
+      }
+    },
+    "FetchedSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rankFamily",
+        "rankType",
+        "pageNo",
+        "pageSize",
+        "sourceEndpoint",
+        "signedRequired",
+        "capturedAt",
+        "entries",
+        "evidenceObject",
+        "statusCode",
+        "durationMs"
+      ],
+      "properties": {
+        "rawPayloadStorageStatus": {
+          "$ref": "#/$defs/RawPayloadStorageStatus"
+        },
+        "rankFamily": {
+          "enum": [
+            "AUDIENCE",
+            "GUARD"
+          ]
+        },
+        "rankType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "rankSwitch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "periodScope": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "pageNo": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "pageSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "totalCount": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "countText": {
+          "type": "string"
+        },
+        "valueText": {
+          "type": "string"
+        },
+        "remindMsg": {
+          "type": "string"
+        },
+        "sourceEndpoint": {
+          "enum": [
+            "xlive/general-interface/v1/rank/queryContributionRank",
+            "xlive/general-interface/v1/rank/getOnlineGoldRank",
+            "xlive/app-room/v2/guardTab/topListNew"
+          ]
+        },
+        "signedRequired": {
+          "type": "boolean"
+        },
+        "capturedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/RankEntry"
+          }
+        },
+        "evidenceObject": {
+          "$ref": "#/$defs/ObjectRef"
+        },
+        "statusCode": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "WbiKeys": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "imgKey",
+        "subKey"
+      ],
+      "properties": {
+        "imgKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subKey": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "HttpConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "connectTimeoutMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647,
+          "default": 5000
+        },
+        "readTimeoutMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647,
+          "default": 10000
+        },
+        "userAgent": {
+          "type": "string",
+          "not": {
+            "pattern": "[^\\t\\x20-\\x7e]"
+          },
+          "default": "SocialDataMonitor/0.1 (+low-frequency public Bilibili live monitor)"
+        },
+        "referer": {
+          "type": "string",
+          "not": {
+            "pattern": "[^\\t\\x20-\\x7e]"
+          },
+          "default": "https://live.bilibili.com/"
+        }
+      }
+    },
+    "JavaLongString": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "string",
+      "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|9223372036854775807|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6])|-(?:[1-9][0-9]{0,17}|9223372036854775808|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7]))(?![\\s\\S])"
+    }
+  }
+}

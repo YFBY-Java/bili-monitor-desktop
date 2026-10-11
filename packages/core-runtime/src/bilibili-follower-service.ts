@@ -22,6 +22,7 @@ import {
   type AddBilibiliFollowerMonitorInput,
   type AddBilibiliFollowerMonitorInputV2,
   type BilibiliFollowerFetchRequest,
+  type BilibiliFollowerFetchRequestV2,
   type BilibiliFollowerFetchedSnapshot,
   type BilibiliFollowerFetchedSnapshotV2,
   type BilibiliFollowerCollectResult,
@@ -47,7 +48,8 @@ import { LocalRequestRateLimiter } from "./local-request-rate-limiter"
 export interface BilibiliFollowerSource {
   /** Optional read-only profile capability; must not persist evidence or monitoring state. */
   fetchProfile?: (request: BilibiliFollowerFetchRequest) => Promise<BilibiliFollowerProfile>
-  fetchCard: (request: BilibiliFollowerFetchRequest) => Promise<BilibiliFollowerFetchedSnapshot | BilibiliFollowerFetchedSnapshotV2>
+  /** Explicit platform purpose uses its signed request; monitoring stays positive-only. */
+  fetchCard: (request: BilibiliFollowerFetchRequestV2, purpose?: "platform-account") => Promise<BilibiliFollowerFetchedSnapshot | BilibiliFollowerFetchedSnapshotV2>
   fetchRelationStat: (request: BilibiliFollowerFetchRequest) => Promise<BilibiliFollowerFetchedSnapshot | BilibiliFollowerFetchedSnapshotV2>
   stop?: () => Promise<void>
 }
@@ -70,6 +72,11 @@ export interface BilibiliFollowerMonitorServiceOptions {
   maxIntervalSeconds?: number
   shortIntervalWarningSeconds?: number
   failureBackoffSeconds?: number
+}
+
+export interface PreparedBilibiliFollowerMonitor {
+  mid: string
+  commit: () => BilibiliFollowerMonitorV2
 }
 
 // Only errors crossing the Source boundary are platform collection failures.
@@ -136,6 +143,11 @@ export class BilibiliFollowerMonitorService {
   }
 
   async addUserV2(input: AddBilibiliFollowerMonitorInputV2): Promise<BilibiliFollowerMonitorV2> {
+    return (await this.prepareAddUserV2(input)).commit()
+  }
+
+  /** Fetch outside SQLite; the caller can commit this together with a subject. */
+  async prepareAddUserV2(input: AddBilibiliFollowerMonitorInputV2): Promise<PreparedBilibiliFollowerMonitor> {
     this.ensureRunning()
     const parsed = AddBilibiliFollowerMonitorInputV2Schema.parse(input)
     const intervalSeconds = this.resolveInterval(parsed.intervalSeconds)
@@ -150,6 +162,18 @@ export class BilibiliFollowerMonitorService {
       throw this.applicationError(error)
     }
     this.ensureRunning()
+    return {
+      mid: snapshot.mid,
+      commit: () => this.addFetchedUser(snapshot, intervalSeconds, proposedMonitorId)
+    }
+  }
+
+  private addFetchedUser(
+    snapshot: BilibiliFollowerFetchedSnapshotV2,
+    intervalSeconds: number,
+    proposedMonitorId: string
+  ): BilibiliFollowerMonitorV2 {
+    this.ensureRunning()
     // Another add may have completed while the remote card was being fetched.
     const existing = this.options.database.findBilibiliFollowerMonitorByMid(snapshot.mid)
     const monitorId = existing?.monitorId ?? proposedMonitorId
@@ -159,7 +183,7 @@ export class BilibiliFollowerMonitorService {
       new Date(snapshot.fetchedAt).getTime() + intervalSeconds * 1_000
     ).toISOString()
 
-    this.options.database.upsertBilibiliFollowerMonitorSnapshot({
+    this.options.database.upsertBilibiliFollowerMonitorSnapshotInOriginalOrder({
       monitor: {
         monitorId,
         mid: snapshot.mid,
@@ -175,7 +199,8 @@ export class BilibiliFollowerMonitorService {
       },
       snapshot: {
         snapshotId,
-        capturedBucket: this.capturedBucket(snapshot.fetchedAt)
+        capturedBucket: this.capturedBucket(snapshot.fetchedAt),
+        ...(snapshot.rawPayloadStorageStatus !== undefined ? { rawPayloadStorageStatus: snapshot.rawPayloadStorageStatus } : {})
       },
       artifact: {
         ...snapshot.evidenceObject,
@@ -188,7 +213,10 @@ export class BilibiliFollowerMonitorService {
         ...(snapshot.followingCount !== undefined ? { followingCount: snapshot.followingCount } : {}),
         sourceEndpoint: snapshot.sourceEndpoint
       })
-    })
+    }, this.outbox(this.options.idFactory(), "bilibili.follower.monitor-refreshed.v2", snapshot.fetchedAt, {
+      monitorId, mid: snapshot.mid, followerCount: snapshot.followerCount,
+      sourceEndpoint: snapshot.sourceEndpoint
+    }))
     return this.requireUserV2(monitorId)
   }
 
@@ -403,7 +431,7 @@ export class BilibiliFollowerMonitorService {
     const nextCollectAt = new Date(
       new Date(snapshot.fetchedAt).getTime() + user.intervalSeconds * 1_000
     ).toISOString()
-    this.options.database.upsertBilibiliFollowerMonitorSnapshot({
+    this.options.database.upsertBilibiliFollowerMonitorSnapshotInOriginalOrder({
       mode: "collect",
       monitor: {
         monitorId: user.monitorId,
@@ -420,7 +448,8 @@ export class BilibiliFollowerMonitorService {
       },
       snapshot: {
         snapshotId,
-        capturedBucket: this.capturedBucket(snapshot.fetchedAt)
+        capturedBucket: this.capturedBucket(snapshot.fetchedAt),
+        ...(snapshot.rawPayloadStorageStatus !== undefined ? { rawPayloadStorageStatus: snapshot.rawPayloadStorageStatus } : {})
       },
       artifact: {
         ...snapshot.evidenceObject,
@@ -434,7 +463,10 @@ export class BilibiliFollowerMonitorService {
         ...(snapshot.followingCount !== undefined ? { followingCount: snapshot.followingCount } : {}),
         sourceEndpoint: snapshot.sourceEndpoint
       })
-    })
+    }, this.outbox(this.options.idFactory(), "bilibili.follower.monitor-refreshed.v2", snapshot.fetchedAt, {
+      monitorId: user.monitorId, mid: user.mid, followerCount: snapshot.followerCount,
+      sourceEndpoint: snapshot.sourceEndpoint
+    }))
   }
 
   private async fetchForExistingUser(
@@ -499,20 +531,29 @@ export class BilibiliFollowerMonitorService {
       } catch (error) {
         this.ensureRunning()
         const details = this.sourceError(error)
+        // Original InvalidMediaTypeException escapes all fetch-error handlers:
+        // no API failure log, fallback, backoff or monitor/history mutation.
+        if (details.code === "BILIBILI_RESPONSE_CONVERSION_ERROR") {
+          throw new CoreApplicationError("INTERNAL_ERROR", details.message, false)
+        }
         lastError = new FollowerFetchFailure(details.code, details.message, details.retryable,
           typeof error === "object" && error !== null && "endpoint" in error && typeof error.endpoint === "string"
             ? error.endpoint : endpoint)
+        const biliCode = this.errorNumber(error, "biliCode")
         this.options.database.insertBilibiliApiCall({
           callId: this.options.idFactory(),
           taskId,
           attempt,
-          endpointKey: endpoint,
+          endpointKey: lastError.endpoint,
           mid,
           statusCode: this.errorNumber(error, "statusCode"),
           durationMs: Math.max(0, Math.floor(performance.now() - startedAt)),
           errorType: details.code,
           retryable: details.retryable,
           evidenceObjectId: null,
+          requestMeta: { mid },
+          responseMeta: { success: false, message: details.message,
+            ...(biliCode === null ? {} : { biliCode }) },
           createdAt: this.options.now().toISOString()
         })
         // Original RetryPolicy uses the error category, not the API's raw retryable flag.
@@ -528,6 +569,7 @@ export class BilibiliFollowerMonitorService {
         callId: this.options.idFactory(), taskId, attempt, endpointKey: endpoint, mid,
         statusCode: parsed.statusCode, durationMs: Math.max(0, Math.floor(performance.now() - startedAt)),
         errorType: null, retryable: false, evidenceObjectId: parsed.evidenceObject.objectId,
+        requestMeta: { mid }, responseMeta: { success: true, sourceEndpoint: parsed.sourceEndpoint },
         createdAt: parsed.fetchedAt
       }, { ...parsed.evidenceObject, createdAt: parsed.fetchedAt })
       return parsed

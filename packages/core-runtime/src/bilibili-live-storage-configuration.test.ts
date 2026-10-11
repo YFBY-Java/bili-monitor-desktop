@@ -131,8 +131,8 @@ describe("original live storage switch at the real Core composition boundary", (
   it.each(["file", "environment"])("disables all live operations through %s without hiding failures as empty data", async mode => {
     const f = await setup({ storageEnabled: mode === "environment" }, { enabled: mode === "environment" })
     if (mode === "environment") {
-      vi.stubEnv("SOCIAL_MONITOR_BILIBILI_LIVE_STORAGE_ENABLED", " FALSE ")
-      vi.stubEnv("APP_SUBJECTMONITOR_ENABLED", " false ")
+      vi.stubEnv("SOCIAL_MONITOR_BILIBILI_LIVE_STORAGE_ENABLED", "FALSE")
+      vi.stubEnv("APP_SUBJECTMONITOR_ENABLED", "false")
     }
     const before = await readFile(f.livePath, "utf8")
     const core = await f.start()

@@ -10,6 +10,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    StrictStr,
     TypeAdapter,
     ValidationError,
     model_validator,
@@ -17,6 +18,8 @@ from pydantic import (
 from pydantic.alias_generators import to_camel
 
 from .bilibili_follower import BilibiliCrawlerError
+from .bilibili_follower_long import canonical_long_string
+from .postgres_jsonb_input import RawPayloadStorageStatus
 
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 
@@ -92,21 +95,24 @@ class LiveModel(BaseModel):
         return value
 
 
-class LiveSnapshot(LiveModel):
+class LiveSnapshotFields(LiveModel):
     uid: PositiveId
     room_id: PositiveId
     short_id: AuxiliaryId | None = None
     uname: str | None = Field(default=None, min_length=1, max_length=160)
-    face_url: UrlString | None = None
+    face_url: str | None = None
     title: str | None = None
-    cover_url: UrlString | None = None
-    keyframe_url: UrlString | None = None
+    cover_url: str | None = None
+    keyframe_url: str | None = None
     area_id: AuxiliaryId | None = None
     area_name: str | None = Field(default=None, max_length=120)
     parent_area_id: AuxiliaryId | None = None
     parent_area_name: str | None = Field(default=None, max_length=120)
     live_status: Annotated[Literal[0, 1, 2], BeforeValidator(json_integer)]
     live_time: IsoDateTime | None = None
+
+
+class LiveSnapshot(LiveSnapshotFields):
     online_count: SignedInteger | None = None
     attention_count: SignedInteger | None = None
 
@@ -125,6 +131,7 @@ class LiveMetadata(LiveModel):
     evidence_object: LiveObjectRef
     status_code: PositiveInteger
     duration_ms: NonnegativeInteger
+    raw_payload_storage_status: RawPayloadStorageStatus | None = None
 
 
 class LiveFetchedSnapshot(LiveSnapshot, LiveMetadata):
@@ -140,7 +147,79 @@ class LiveFetchedStatusBatch(LiveMetadata):
     snapshots: list[LiveSnapshot]
 
 
-def validate_live_result(endpoint: str, value: object) -> dict[str, Any]:
+JavaLongString = Annotated[StrictStr, BeforeValidator(canonical_long_string)]
+
+
+class LiveSnapshotV2(LiveSnapshotFields):
+    online_count: JavaLongString | None = None
+    attention_count: JavaLongString | None = None
+
+
+class LiveFetchedSnapshotV2(LiveSnapshotV2, LiveMetadata):
+    pass
+
+
+class LiveFetchedOptionalSnapshotV2(LiveMetadata):
+    snapshot: LiveSnapshotV2 | None = None
+
+
+class LiveFetchedStatusBatchV2(LiveMetadata):
+    source_endpoint: Literal["room/v1/Room/get_status_info_by_uids"]
+    snapshots: list[LiveSnapshotV2]
+
+
+def reject_unsafe_legacy_counters(endpoint: str, value: object) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if (
+                key in ("onlineCount", "attentionCount")
+                and isinstance(item, int)
+                and not isinstance(item, bool)
+            ):
+                if -(1 << 63) <= item < (1 << 63) and abs(item) > MAX_SAFE_INTEGER:
+                    raise BilibiliCrawlerError(
+                        "LONG64_LEGACY_PRECISION_UNSUPPORTED",
+                        "Live counter cannot be represented by the legacy safe-number contract.",
+                        retryable=False,
+                        endpoint=endpoint,
+                        status_code=200,
+                    )
+            else:
+                reject_unsafe_legacy_counters(endpoint, item)
+    elif isinstance(value, list):
+        for item in value:
+            reject_unsafe_legacy_counters(endpoint, item)
+
+
+def validate_live_snapshot_data(
+    endpoint: str, value: dict[str, object], exact: bool = False
+) -> None:
+    if not exact:
+        reject_unsafe_legacy_counters(endpoint, value)
+    try:
+        if endpoint == "room/v1/Room/get_status_info_by_uids":
+            TypeAdapter(list[LiveSnapshotV2] if exact else list[LiveSnapshot]).validate_python(
+                value.get("snapshots")
+            )
+        elif endpoint == "room/v1/Room/getRoomInfoOld":
+            if "snapshot" in value:
+                (LiveSnapshotV2 if exact else LiveSnapshot).model_validate(value["snapshot"])
+        else:
+            (LiveSnapshotV2 if exact else LiveSnapshot).model_validate(value)
+    except (ValidationError, ValueError) as error:
+        # Validation errors contain input values; never forward them or the raw platform body.
+        raise BilibiliCrawlerError(
+            "BILIBILI_PARSE_ERROR",
+            "Bilibili live response does not match the shared Worker contract.",
+            retryable=False,
+            endpoint=endpoint,
+            status_code=200,
+        ) from error
+
+
+def validate_live_result(endpoint: str, value: object, exact: bool = False) -> dict[str, Any]:
+    if not exact:
+        reject_unsafe_legacy_counters(endpoint, value)
     model: type[LiveMetadata] = (
         LiveFetchedStatusBatch
         if endpoint == "room/v1/Room/get_status_info_by_uids"
@@ -150,6 +229,16 @@ def validate_live_result(endpoint: str, value: object) -> dict[str, Any]:
             else LiveFetchedSnapshot
         )
     )
+    if exact:
+        model = (
+            LiveFetchedStatusBatchV2
+            if endpoint == "room/v1/Room/get_status_info_by_uids"
+            else (
+                LiveFetchedOptionalSnapshotV2
+                if endpoint == "room/v1/Room/getRoomInfoOld"
+                else LiveFetchedSnapshotV2
+            )
+        )
     try:
         result = model.model_validate(value)
         if result.source_endpoint != endpoint:

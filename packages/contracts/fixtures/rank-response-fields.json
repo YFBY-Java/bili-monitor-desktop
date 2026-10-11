@@ -1,0 +1,50 @@
+{
+  "audiencePresent": {
+    "body": { "code": 0, "data": {
+      "count": 7, "count_text": "原主榜人数", "onlineNum": 99, "onlineNumText": "错误备用人数",
+      "config": { "value_text": "主榜贡献", "title": " 主榜提醒 " },
+      "item": [
+        { "uid": 61, "rank": 1, "name": "empty first", "score": 120,
+          "medal_info": {}, "medalInfo": { "medal_name": "不得回退", "medal_level": 10 },
+          "uinfo": { "guard": {}, "medal": { "medal_name": "第三候选" } },
+          "guard": { "level": 3, "expired_str": "不得回退" } },
+        { "uid": 62, "rank": 2, "name": "scalar first", "medal_info": false,
+          "medalInfo": { "medal_name": "不得回退" }, "uinfo": { "guard": 0 },
+          "guard": { "level": 3, "expired_str": "不得回退" } },
+        { "uid": 63, "rank": 3, "name": "null fallback", "medal_info": null,
+          "medalInfo": { "medal_name": "允许回退", "medal_level": 5 },
+          "uinfo": { "guard": null }, "guard": { "level": 2, "expired_str": " 回退到期 " } },
+        { "uid": 64, "rank": 4, "name": "third fallback", "uinfo": { "medal": { "name": "第三候选", "level": 6 } } }
+      ],
+      "OnlineRankItem": [{ "uid": 999, "name": "不得混入" }]
+    } },
+    "expected": { "totalCount": 7, "countText": "原主榜人数", "valueText": "主榜贡献", "remindMsg": " 主榜提醒 ",
+      "entries": [
+        { "userUid": "61", "rankNo": 1, "entryKind": "LIST", "displayName": "empty first", "score": 120 },
+        { "userUid": "62", "rankNo": 2, "entryKind": "LIST", "displayName": "scalar first" },
+        { "userUid": "63", "rankNo": 3, "entryKind": "LIST", "displayName": "null fallback", "guardLevel": 2,
+          "medalName": "允许回退", "medalLevel": 5, "guardExpiredText": " 回退到期 " },
+        { "userUid": "64", "rankNo": 4, "entryKind": "LIST", "displayName": "third fallback", "medalName": "第三候选", "medalLevel": 6 }
+      ] }
+  },
+  "audienceMissing": {
+    "body": { "code": 0, "data": { "count": null, "onlineNum": 99, "onlineNumText": "不得回退",
+      "item": { "uid": 998 }, "OnlineRankItem": [{ "uid": 999, "name": "不得混入" }], "config": {} } },
+    "expected": { "entries": [] }
+  },
+  "fallback": {
+    "body": { "code": 0, "data": { "count": 99, "count_text": "错误主榜人数", "onlineNum": 12, "onlineNumText": "原备用人数",
+      "config": { "value_text": "不得采用", "title": "不得采用" },
+      "item": [{ "uid": 999, "name": "不得混入" }],
+      "OnlineRankItem": [{ "uid": 71, "rank": 1, "name": "原备用观众", "score": 80 }] } },
+    "expected": { "totalCount": 12, "countText": "原备用人数", "valueText": "贡献值", "remindMsg": "在线贡献榜备用接口",
+      "entries": [{ "userUid": "71", "rankNo": 1, "entryKind": "LIST", "displayName": "原备用观众", "score": 80 }] }
+  },
+  "guard": {
+    "body": { "code": 0, "data": { "info": { "num": 1.75 }, "remind_msg": " 原航海提醒 ",
+      "top3": { "uinfo": { "uid": 999 } }, "extop": false,
+      "list": [{ "rank": 1, "uinfo": { "uid": 81, "base": { "name": "原航海观众" } } }] } },
+    "expected": { "totalCount": 1, "countText": "1", "remindMsg": " 原航海提醒 ",
+      "entries": [{ "userUid": "81", "rankNo": 1, "entryKind": "LIST", "displayName": "原航海观众" }] }
+  }
+}

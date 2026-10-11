@@ -80,6 +80,12 @@ describe("BilibiliLiveMonitorService", () => {
       expect(service.listRooms()).toMatchObject({ total: 1, items: [{ roomId: "330033" }] })
       expect(database.listBilibiliApiCalls("00000000-0000-4000-8000-000000000001"))
         .toHaveLength(3)
+      expect(database.listBilibiliApiCalls("00000000-0000-4000-8000-000000000001"))
+        .toMatchObject([
+          { requestMeta: { roomId: "33" }, responseMeta: { success: true } },
+          { requestMeta: { roomId: "330033" }, responseMeta: { success: true } },
+          { requestMeta: { uids: ["22"] }, responseMeta: { success: true } }
+        ])
     } finally {
       await service.stop()
       database.close()

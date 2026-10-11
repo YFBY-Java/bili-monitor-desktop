@@ -4,12 +4,14 @@ import react from "@vitejs/plugin-react"
 import { chromium, type Browser, type Page } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { browserFixtureCacheDirectory } from "./__fixtures__/browser-fixture-cache"
 
 describe("original Bilibili auth actions in the Connected renderer", () => {
   let server: ViteDevServer, browser: Browser, page: Page, url: string
   let errors: string[]
   beforeAll(async () => {
     server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)), plugins: [react()],
+      cacheDir: browserFixtureCacheDirectory,
       server: { host: "127.0.0.1", port: 0 }, logLevel: "error" })
     await server.listen()
     const address = server.httpServer!.address()

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
-import { access, mkdtemp, rm } from "node:fs/promises"
+import { access, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { resolve } from "node:path"
+import { basename, dirname, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { ControlDatabase } from "@bmd/storage"
 import { describe, expect, it } from "vitest"
@@ -9,20 +9,44 @@ import { BilibiliFollowerMonitorService } from "./bilibili-follower-service"
 import { BilibiliFollowerWorkerSource } from "./bilibili-follower-worker-source"
 import { NdjsonPythonWorkerTransport } from "./ndjson-python-worker-transport"
 
-async function fixture() {
+function reverseOrderedUuidFactory() {
+  let sequence = 0
+  return () => `00000000-0000-4000-8000-${(0xffffffffffff - sequence++).toString(16).padStart(12, "0")}`
+}
+
+async function fixture(idFactory: () => string = randomUUID) {
   const directory = await mkdtemp(resolve(tmpdir(), "bmd-follower-profile-text-"))
   let database = await ControlDatabase.open(directory)
   const source = new BilibiliFollowerWorkerSource(new NdjsonPythonWorkerTransport({
     pythonExecutable: process.env.BMD_PYTHON_EXE!, role: "crawler", dataDirectory: directory,
     pythonPath: resolve(process.cwd(), "../../workers/python/tests/fixtures/follower_profile_text") }))
-  const service = new BilibiliFollowerMonitorService({ database, source, idFactory: randomUUID,
+  const service = new BilibiliFollowerMonitorService({ database, source, idFactory,
     now: () => new Date("2026-10-05T00:00:00Z"), requestMinIntervalMs: 0 })
   const apiCalls = () => {
     const reader = new DatabaseSync(resolve(directory, "control.db"), { readOnly: true })
     try { return reader.prepare("SELECT endpoint_key AS endpoint, error_type AS errorType FROM bilibili_api_call ORDER BY rowid").all() }
     finally { reader.close() }
   }
-  return { directory, database, source, service, apiCalls,
+  const detailedApiCalls = () => {
+    const reader = new DatabaseSync(resolve(directory, "control.db"), { readOnly: true })
+    try {
+      return reader.prepare("SELECT task_id AS taskId FROM bilibili_api_call GROUP BY task_id ORDER BY MIN(rowid)").all()
+        .flatMap(row => database.listBilibiliApiCalls(String(row.taskId)))
+    } finally { reader.close() }
+  }
+  const storedRows = (tables: string[]) => {
+    const reader = new DatabaseSync(resolve(directory, "control.db"), { readOnly: true })
+    try {
+      return Object.fromEntries(tables.map(table => {
+        const statement = reader.prepare(`SELECT rowid, * FROM ${table} ORDER BY rowid`)
+        statement.setReadBigInts(true)
+        return [table, statement.all()]
+      }))
+    } finally { reader.close() }
+  }
+  const businessRows = () => storedRows(["bilibili_follower_monitor", "bilibili_follower_snapshot", "outbox"])
+  const artifactRows = () => storedRows(["object_artifact"]).object_artifact!
+  return { directory, database, source, service, apiCalls, detailedApiCalls, businessRows, artifactRows,
     reopenProjection: async () => {
       await service.stop()
       database.close()
@@ -30,10 +54,87 @@ async function fixture() {
       return new BilibiliFollowerMonitorService({ database, source, idFactory: randomUUID,
         now: () => new Date("2026-10-05T00:00:00Z"), requestMinIntervalMs: 0 })
     },
-    close: async () => { await service.stop(); database.close(); await rm(directory, { recursive: true, force: true }) } }
+    close: async () => {
+      try { await service.stop() }
+      finally {
+        database.close()
+        const target = resolve(directory)
+        if (!/^D:\\/i.test(target) || dirname(target) !== resolve(tmpdir())
+          || !basename(target).startsWith("bmd-follower-profile-text-")) {
+          throw new Error("Unexpected follower profile text fixture cleanup path.")
+        }
+        await rm(target, { recursive: true, force: true })
+      }
+    } }
 }
 
 describe("original follower profile through actual Python, NDJSON, Core and SQLite", () => {
+  it("rejects actual card NUL at local storage while retaining the successful API log and raw CAS", async () => {
+    const f = await fixture(reverseOrderedUuidFactory())
+    try {
+      const user = await f.service.addUser({ mid: "15" })
+      const before = f.businessRows()
+      const callsBefore = f.detailedApiCalls()
+      const artifactsBefore = f.artifactRows()
+      const seedBytes = await Promise.all(artifactsBefore.map(row => readFile(resolve(f.directory, String(row.relative_path)))))
+      await expect(f.service.refreshNow(user.id)).rejects.toThrowError(new Error("Follower storage text contains NUL."))
+      expect(f.businessRows()).toEqual(before)
+      expect(f.apiCalls()).toEqual([{ endpoint: "x/web-interface/card", errorType: null },
+        { endpoint: "x/web-interface/card", errorType: null }])
+      const calls = f.detailedApiCalls()
+      expect(calls).toHaveLength(callsBefore.length + 1)
+      expect(calls.slice(0, callsBefore.length)).toEqual(callsBefore)
+      expect(calls[1]).toMatchObject({ attempt: 1, statusCode: 200, errorType: null, retryable: false,
+        responseMeta: { success: true, sourceEndpoint: "x/web-interface/card" } })
+      const artifacts = f.artifactRows()
+      expect(artifacts).toHaveLength(artifactsBefore.length + 1)
+      expect(artifacts.slice(0, artifactsBefore.length)).toEqual(artifactsBefore)
+      expect(calls[1]?.evidenceObjectId).toBe(artifacts[1]?.object_id)
+      const rawBytes = await readFile(resolve(f.directory, String(artifacts[1]?.relative_path)))
+      expect(rawBytes.toString("utf8")).toContain("private\\u0000nickname")
+      expect(await Promise.all(artifactsBefore.map(row => readFile(resolve(f.directory, String(row.relative_path))))))
+        .toEqual(seedBytes)
+      const restarted = await f.reopenProjection()
+      try {
+        expect(f.businessRows()).toEqual(before)
+        expect(f.detailedApiCalls()).toEqual(calls)
+        expect(f.artifactRows()).toEqual(artifacts)
+        expect(await readFile(resolve(f.directory, String(artifacts[1]?.relative_path)))).toEqual(rawBytes)
+      } finally { await restarted.stop() }
+    } finally { await f.close() }
+  })
+
+  it("retains JDK20 numeric profile and error text across a failed refresh and SQLite reopen", async () => {
+    const f = await fixture(reverseOrderedUuidFactory())
+    try {
+      const user = await f.service.addUser({ mid: "14" })
+      const profile = { nickname: "1.0E7", avatarUrl: "-0.0", currentFollowerCount: 21 }
+      expect(user).toMatchObject(profile)
+      expect(f.database.findBilibiliFollowerMonitorById(user.id)).toMatchObject({
+        ...profile, currentFollowerCount: 21n })
+      const before = f.service.trend(user.id)
+      expect(before.user).toMatchObject(profile)
+      await expect(f.service.refreshNow(user.id)).rejects.toMatchObject({
+        code: "BILIBILI_AUTH_EXPIRED", message: "BILIBILI_AUTH_EXPIRED: 1.0E-4", retryable: false })
+      const failedProfile = { ...profile, lastErrorType: "BILIBILI_AUTH_EXPIRED", lastErrorMessage: "1.0E-4" }
+      expect(f.service.listUsers().items[0]).toMatchObject(failedProfile)
+      expect(f.service.trend(user.id).points).toEqual(before.points)
+      expect(f.apiCalls()).toEqual([{ endpoint: "x/web-interface/card", errorType: null },
+        { endpoint: "x/web-interface/card", errorType: "BILIBILI_AUTH_EXPIRED" }])
+      const calls = f.detailedApiCalls()
+      expect(calls).toHaveLength(2)
+      expect(calls[1]).toMatchObject({ attempt: 1, statusCode: 200, retryable: false,
+        responseMeta: { success: false, biliCode: -101, message: "1.0E-4" } })
+      const restarted = await f.reopenProjection()
+      try {
+        expect(restarted.listUsers().items[0]).toMatchObject(failedProfile)
+        expect(restarted.trend(user.id).user).toMatchObject(failedProfile)
+        expect(restarted.trend(user.id).points).toEqual(before.points)
+        expect(f.detailedApiCalls()).toEqual(calls)
+      } finally { await restarted.stop() }
+    } finally { await f.close() }
+  })
+
   it.each([
     ["2", "  合成昵称\t ", "//example.invalid/synthetic.jpg"],
     ["3", "\u00a0", "//example.invalid/synthetic.jpg"],

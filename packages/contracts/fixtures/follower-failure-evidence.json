@@ -1,0 +1,24 @@
+{
+  "request": {
+    "mid": "50",
+    "taskId": "evidence-task",
+    "attempt": 1,
+    "leaseId": "evidence-lease",
+    "captureFailureEvidence": true
+  },
+  "error": {
+    "code": "BILIBILI_RISK_CONTROL",
+    "message": "  合成风控  ",
+    "retryable": false,
+    "endpoint": "x/web-interface/card",
+    "statusCode": 200,
+    "biliCode": -352,
+    "evidenceObject": {
+      "objectId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "relativePath": "cas/sha256/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sizeBytes": 20,
+      "mediaType": "application/json"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import { BilibiliDanmakuWorkerStartSchema, type BilibiliDanmakuWorkerStart } from "@bmd/contracts"
+import { BilibiliDanmakuWorkerStartSchema, type BilibiliDanmakuWorkerStart, type BilibiliDanmakuCredential } from "@bmd/contracts"
 import { startBilibiliDanmakuConnection, type BilibiliDanmakuConnectionEvent,
   type RunningBilibiliDanmakuConnection } from "./bilibili-danmaku-connection"
 import { ensureNotCancelled } from "./bilibili-http"
@@ -6,6 +6,7 @@ import { ensureNotCancelled } from "./bilibili-http"
 interface Session {
   controller: AbortController
   connection?: RunningBilibiliDanmakuConnection
+  terminal?: boolean
 }
 
 export class RealtimeSessionManager {
@@ -14,13 +15,12 @@ export class RealtimeSessionManager {
 
   constructor(private readonly connect = startBilibiliDanmakuConnection) {}
 
-  async start(raw: BilibiliDanmakuWorkerStart, onEvent: (event: BilibiliDanmakuConnectionEvent) => void) {
+  async start(raw: BilibiliDanmakuWorkerStart, onEvent: (event: BilibiliDanmakuConnectionEvent) => void,
+    credentialProvider?: (signal: AbortSignal) => Promise<BilibiliDanmakuCredential | undefined>) {
     if (this.stopped) throw Object.assign(new Error("Realtime Worker stopped."), { code: "REALTIME_WORKER_STOPPED" })
     const input = BilibiliDanmakuWorkerStartSchema.parse(raw)
+    // Local Core owns the configured domain capacity; transport sessions have no separate ceiling.
     const previous = this.sessions.get(input.connectionId)
-    if (!previous && this.sessions.size >= 100) {
-      throw Object.assign(new Error("Realtime Worker connection limit reached."), { code: "REALTIME_WORKER_BUSY" })
-    }
     previous?.controller.abort()
     const current: Session = { controller: new AbortController() }
     this.sessions.set(input.connectionId, current)
@@ -29,17 +29,27 @@ export class RealtimeSessionManager {
       ensureNotCancelled(current.controller.signal)
       const connection = await this.connect({ roomId: input.roomId, signal: current.controller.signal,
         ...(input.protocolVersion === undefined ? {} : { protocolVersion: input.protocolVersion }),
+        ...(input.preferredProtocolVersion === undefined ? {} : { preferredProtocolVersion: input.preferredProtocolVersion }),
+        ...(input.connectionConfiguration ? { connectionConfiguration: input.connectionConfiguration } : {}),
+        ...(input.cacheConfiguration ? { cacheConfiguration: input.cacheConfiguration } : {}),
         ...(input.credential ? { credential: input.credential } : {}),
         ...(input.httpConfiguration ? { httpConfiguration: input.httpConfiguration } : {}) }, event => {
         if (this.sessions.get(input.connectionId) !== current || current.controller.signal.aborted) return
-        if (event.type === "closed") this.sessions.delete(input.connectionId)
+        if (event.type === "closed" || event.type === "error") {
+          current.terminal = true
+          this.sessions.delete(input.connectionId)
+          if (current.connection) void current.connection.stop().catch(() => {
+            console.error("Realtime terminal connection cleanup failed.")
+          })
+        }
         onEvent(event)
-      })
-      if (current.controller.signal.aborted || this.sessions.get(input.connectionId) !== current) {
+      }, credentialProvider ? { credentialProvider: () => credentialProvider(current.controller.signal) } : undefined)
+      if (current.controller.signal.aborted || (!current.terminal && this.sessions.get(input.connectionId) !== current)) {
         await connection.stop()
         current.controller.abort()
         ensureNotCancelled(current.controller.signal)
       }
+      if (current.terminal) { await connection.stop(); return connection }
       current.connection = connection
       return connection
     } finally {

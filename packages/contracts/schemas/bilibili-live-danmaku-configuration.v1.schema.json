@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "bucketSeconds": {"type":"integer","minimum":-2147483648,"maximum":2147483647,"default":60},
+    "listenProbeSeconds": {"type":"integer","minimum":-2147483648,"maximum":2147483647,"default":20},
+    "wbiCacheSeconds": {"type":"integer","minimum":-2147483648,"maximum":2147483647,"default":43200},
+    "buvidCacheSeconds": {"type":"integer","minimum":-2147483648,"maximum":2147483647,"default":43200},
+    "heartbeatSeconds": {"type":"integer","minimum":-2147483648,"maximum":2147483647,"default":30},
+    "connectTimeoutMs": {"type":"integer","minimum":-2147483648,"maximum":2147483647,"default":8000},
+    "useLoginCredential": {"type":"boolean","default":true},
+    "webLocation": {"type":"string","default":"444.8"},
+    "clientVersion": {"type":"string","default":"1.14.3"},
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "autoStartEnabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "schedulerDelayMs": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 5000
+    },
+    "maxConnections": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 10
+    },
+    "protocolVersion": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 3
+    },
+    "recentMessageLimitPerRoom": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "default": 200
+    }
+  }
+}

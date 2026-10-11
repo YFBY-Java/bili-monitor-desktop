@@ -1,0 +1,17 @@
+{
+  "enabled": true,
+  "autoStartEnabled": true,
+  "schedulerDelayMs": 5000,
+  "maxConnections": 10,
+  "protocolVersion": 3,
+  "recentMessageLimitPerRoom": 200,
+  "heartbeatSeconds": 30,
+  "connectTimeoutMs": 8000,
+  "useLoginCredential": true,
+  "webLocation": "444.8",
+  "clientVersion": "1.14.3",
+  "wbiCacheSeconds": 43200,
+  "buvidCacheSeconds": 43200,
+  "bucketSeconds": 60,
+  "listenProbeSeconds": 20
+}

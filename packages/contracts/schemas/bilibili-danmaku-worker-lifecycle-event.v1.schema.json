@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "type": "object", "additionalProperties": false, "required": ["type", "attempt", "receivedAt", "connectHost", "protocolVersion", "authMode"], "properties": {
+      "type": { "const": "connecting" }, "attempt": { "type": "integer", "minimum": 1 }, "receivedAt": { "type": "string", "format": "date-time" },
+      "connectHost": { "type": "string", "format": "uri" }, "protocolVersion": { "type": "integer", "minimum": 0, "maximum": 3 }, "authMode": { "enum": ["ANONYMOUS", "LOGIN"] }, "authUid": { "type": "string", "pattern": "^[1-9][0-9]*$" }
+    } },
+    { "type": "object", "additionalProperties": false, "required": ["type", "attempt", "receivedAt", "code", "message"], "properties": {
+      "type": { "const": "attempt-failed" }, "attempt": { "type": "integer", "minimum": 1 }, "receivedAt": { "type": "string", "format": "date-time" }, "code": { "type": "string", "minLength": 1 }, "message": { "type": "string" }
+    } },
+    { "type": "object", "additionalProperties": false, "required": ["type", "attempt", "receivedAt"], "properties": {
+      "type": { "enum": ["connected", "heartbeat-sent"] }, "attempt": { "type": "integer", "minimum": 1 }, "receivedAt": { "type": "string", "format": "date-time" }
+    } }
+  ]
+}

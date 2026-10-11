@@ -1,0 +1,8 @@
+[
+  { "name": "defaults", "input": {}, "valid": true },
+  { "name": "configured", "input": { "enabled": true, "pageSize": 7, "guardPageSize": 9, "maxPages": 2, "requestMinIntervalMs": 0, "webLocation": "155.7" }, "valid": true },
+  { "name": "consumer clamps signed integers", "input": { "pageSize": -1, "guardPageSize": 2147483647, "maxPages": 0, "requestMinIntervalMs": -1, "webLocation": "" }, "valid": true },
+  { "name": "fraction rejected", "input": { "pageSize": 1.5 }, "valid": false },
+  { "name": "overflow rejected", "input": { "maxPages": 2147483648 }, "valid": false },
+  { "name": "unknown field rejected", "input": { "secret": "synthetic" }, "valid": false }
+]

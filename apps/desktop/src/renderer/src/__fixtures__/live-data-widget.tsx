@@ -1,6 +1,7 @@
 import type { BilibiliLiveDanmakuRecent, BilibiliLiveDanmakuStatus, BilibiliLiveRankRefreshInput,
-  BilibiliLiveRankSnapshot, BilibiliLiveRankSummary, BilibiliLiveRoom, BilibiliSubjectWorkbenchV2,
+  BilibiliLiveRankSnapshot, BilibiliLiveRankSummary, BilibiliLiveRoomV2, BilibiliSubjectWorkbenchV3,
   QueryBilibiliLiveDanmakuRecentInput, StartBilibiliLiveDanmakuInput } from "@bmd/contracts"
+import { BilibiliLiveRankSummaryV2Schema } from "@bmd/contracts"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useState } from "react"
 import { createRoot } from "react-dom/client"
@@ -11,7 +12,7 @@ import { createBrowserPreviewBridge } from "../browser-preview-bridge"
 import "../styles.css"
 
 const timestamp = "2026-09-13T04:00:00.000Z"
-const rooms: BilibiliLiveRoom[] = [0, 1].map(index => ({
+const rooms: BilibiliLiveRoomV2[] = [0, 1].map(index => ({
   id: `018f0f39-7b5e-4cc1-862d-00000000000${index}`, uid: String(22 + index), roomId: String(33 + index),
   uname: `合成房间${index + 1}`, monitorStatus: "ACTIVE", liveStatus: 0, intervalSeconds: 300, version: 1,
   recentTrend: []
@@ -20,7 +21,7 @@ const client = new QueryClient({ defaultOptions: { queries: { retry: false, stal
 let release = () => {}
 const fixture = {
   roomId: rooms[0]!.id, enabled: true, bound: true, empty: false, status: "CONNECTED" as BilibiliLiveDanmakuStatus["status"],
-  requestError: "", rankError: "", partial: false, hold: false, holdRead: false, revision: 0, noRanks: false,
+  requestError: "", rankError: "", partial: false, hold: false, holdRead: false, revision: 0, noRanks: false, preciseRanks: false,
   rankRequests: [] as BilibiliLiveRankRefreshInput[], starts: [] as StartBilibiliLiveDanmakuInput[], stops: [] as string[],
   recentRequests: [] as QueryBilibiliLiveDanmakuRecentInput[],
   release: () => release(), reload: () => client.invalidateQueries(),
@@ -71,7 +72,7 @@ function summary(roomMonitorId: string): BilibiliLiveRankSummary {
   return { roomMonitorId, roomId: "33", ruid: "22", audienceCount: 12345, guardCount: 2,
     guardCountText: "2 位", updatedAt: timestamp, snapshots: fixture.noRanks ? [] : snapshots }
 }
-function workbench(): BilibiliSubjectWorkbenchV2 {
+function workbench(): BilibiliSubjectWorkbenchV3 {
   const room = rooms.find(item => item.id === fixture.roomId)!
   return {
     subject: { id: "018f0f39-7b5e-4cc1-862d-000000000300", displayName: "合成工作台", tags: [],
@@ -85,28 +86,41 @@ function workbench(): BilibiliSubjectWorkbenchV2 {
 }
 const bridge = createBrowserPreviewBridge()
 bridge.bilibiliSubjects = { ...bridge.bilibiliSubjects,
-  list: async () => [workbench().subject], workbenchV2: async () => workbench(),
-  trendsV2: async ({ subjectId }) => ({ subjectId, metrics: ["follower"], range: "24h", bucket: "5m", points: [] }) }
-bridge.bilibiliLive = { ...bridge.bilibiliLive,
+  list: async () => [workbench().subject], workbenchV3: async () => workbench(),
+  trendsV3: async ({ subjectId }) => ({ subjectId, metrics: ["follower"], range: "24h", bucket: "5m", points: [] }) }
+bridge.bilibiliLiveV2 = { ...bridge.bilibiliLiveV2,
   list: async input => {
     const items = input?.limit === undefined ? rooms : rooms.slice(0, input.limit)
     return { items, total: items.length, snapshotAt: timestamp }
   },
   summary: async () => ({ totalRooms: 2, activeRooms: 2, roundRooms: 0, offlineRooms: 2, liveRooms: 0, errorRooms: 0,
-    totalOnlineCount: 0, todayLiveStarts: 0 }), events: async () => [],
-  rankSummary: async ({ roomMonitorId }) => {
-    const result = summary(roomMonitorId)
+    totalOnlineCount: "0", todayLiveStarts: 0 }), events: async () => []
+}
+function exactSummary(roomMonitorId: string) {
+  const value = summary(roomMonitorId)
+  return BilibiliLiveRankSummaryV2Schema.parse({ ...value, audienceCount: String(value.audienceCount), guardCount: String(value.guardCount),
+    snapshots: value.snapshots.map(snapshot => ({ ...snapshot,
+      ...(snapshot.totalCount === undefined ? {} : { totalCount: String(snapshot.totalCount) }),
+      entries: fixture.preciseRanks && snapshot.rankFamily === "AUDIENCE" ? snapshot.entries.slice(0, 2).map((entry, index) => ({
+        ...entry, score: String(9007199254740992n + BigInt(index))
+      })) : snapshot.entries.map(entry => ({ ...entry, ...(entry.score === undefined ? {} : { score: String(entry.score) }) })) })) })
+}
+bridge.bilibiliLiveRankV2 = { ...bridge.bilibiliLiveRankV2,
+  summary: async ({ roomMonitorId }) => {
+    const result = exactSummary(roomMonitorId)
     if (fixture.holdRead) await waitForRelease()
     if (fixture.rankError) throw new Error(fixture.rankError)
     return result
   },
-  rankRefresh: async input => {
+  refresh: async input => {
     fixture.rankRequests.push(input)
     if (fixture.hold) await waitForRelease()
     if (fixture.rankError) throw new Error(fixture.rankError)
-    return { roomMonitorId: input.roomMonitorId, summary: summary(input.roomMonitorId),
+    return { roomMonitorId: input.roomMonitorId, summary: exactSummary(input.roomMonitorId),
       successCount: 1, errors: fixture.partial ? ["合成榜单请求失败"] : [] }
-  },
+  }
+}
+bridge.bilibiliLive = { ...bridge.bilibiliLive,
   danmakuStatus: async ({ roomMonitorId }) => {
     if (fixture.requestError) throw new Error(fixture.requestError)
     return { liveRoomMonitorId: roomMonitorId, running: fixture.status === "CONNECTED", status: fixture.status,

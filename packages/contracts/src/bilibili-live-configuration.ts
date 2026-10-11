@@ -6,11 +6,11 @@ export const BILIBILI_LIVE_CONFIG_ERROR_MESSAGE =
 
 // Original property types are signed Java int. Batch normalization belongs to the consumer.
 const ConfigurationIntegerSchema = z.number().int().min(-2_147_483_648).max(2_147_483_647)
-export const BilibiliLiveCollectionConfigurationSchema = z.object({
+export const BilibiliLiveCollectionConfigurationInputSchema = z.object({
   ...BilibiliLiveHttpConfigurationSchema.shape,
   enabled: z.boolean().default(true),
   storageEnabled: z.boolean().default(true),
-  schedulerDelayMs: ConfigurationIntegerSchema.min(1).default(1000),
+  schedulerDelayMs: ConfigurationIntegerSchema.default(1000),
   dueBatchSize: ConfigurationIntegerSchema.default(20),
   statusBatchSize: ConfigurationIntegerSchema.default(30),
   defaultIntervalSeconds: ConfigurationIntegerSchema.default(300),
@@ -22,5 +22,9 @@ export const BilibiliLiveCollectionConfigurationSchema = z.object({
   maxAttempts: ConfigurationIntegerSchema.default(3),
   retryBackoffMs: ConfigurationIntegerSchema.default(1500)
 }).strict()
+export const BilibiliLiveCollectionConfigurationSchema = BilibiliLiveCollectionConfigurationInputSchema.refine(
+  value => !value.enabled || !value.storageEnabled || value.schedulerDelayMs > 0,
+  { path: ["schedulerDelayMs"], message: "Active live scheduler requires a positive delay" }
+)
 
 export type BilibiliLiveCollectionConfiguration = z.infer<typeof BilibiliLiveCollectionConfigurationSchema>

@@ -1,0 +1,15 @@
+{
+  "guard": {
+    "body": {"code":0,"data":{"info":{"num":1},"list":[{"rank":1,"uinfo":{"uid":101,"base":{"name":"归档航海观众"},"medal":{"ruid":"+9,007,199,254,740,993","is_light":4294967297}},"unknown":{"s":"樱花😀","numbers":[10000000.0,9223372036854775808],"flag":false}}]}},
+    "facts": [{"medalRuid":"9007199254740993","medalIsLight":1,"rawEntryJson":"{\"rank\":1,\"uinfo\":{\"uid\":101,\"base\":{\"name\":\"归档航海观众\"},\"medal\":{\"ruid\":\"+9,007,199,254,740,993\",\"is_light\":4294967297}},\"unknown\":{\"s\":\"樱花😀\",\"numbers\":[1.0E7,9223372036854775808],\"flag\":false}}","rawEntryStorageStatus":"ACCEPTED"}]
+  },
+  "audience": {
+    "body": {"code":0,"data":{"count":1,"item":[{"uid":102,"rank":1,"name":"归档贡献观众","medal_info":{"ruid":-9223372036854775808,"is_light":2147483648},"medalInfo":{"ruid":999,"is_light":0},"meta":[0.0001,true,null,{"keep":"原始字段"}]},true,null,["scalar","保留"]]}},
+    "facts": [
+      {"medalRuid":"-9223372036854775808","medalIsLight":-2147483648,"rawEntryJson":"{\"uid\":102,\"rank\":1,\"name\":\"归档贡献观众\",\"medal_info\":{\"ruid\":-9223372036854775808,\"is_light\":2147483648},\"medalInfo\":{\"ruid\":999,\"is_light\":0},\"meta\":[1.0E-4,true,null,{\"keep\":\"原始字段\"}]}","rawEntryStorageStatus":"ACCEPTED"},
+      {"rawEntryJson":"true","rawEntryStorageStatus":"ACCEPTED"},
+      {"rawEntryJson":"null","rawEntryStorageStatus":"ACCEPTED"},
+      {"rawEntryJson":"[\"scalar\",\"保留\"]","rawEntryStorageStatus":"ACCEPTED"}
+    ]
+  }
+}

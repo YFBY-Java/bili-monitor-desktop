@@ -1,0 +1,16 @@
+[
+  { "name": "positive zero", "token": "0.0", "text": "0.0" },
+  { "name": "negative zero", "token": "-0.0", "text": "-0.0" },
+  { "name": "floating integer", "token": "1.0", "text": "1.0" },
+  { "name": "lower fixed boundary", "token": "0.001", "text": "0.001" },
+  { "name": "lower scientific boundary", "token": "0.0001", "text": "1.0E-4" },
+  { "name": "upper fixed boundary", "token": "9999999.0", "text": "9999999.0" },
+  { "name": "upper scientific boundary", "token": "1e7", "text": "1.0E7" },
+  { "name": "large power", "token": "1e23", "text": "1.0E23" },
+  { "name": "minimum subnormal", "token": "5e-324", "text": "4.9E-324" },
+  { "name": "second subnormal", "token": "1e-323", "text": "9.9E-324" },
+  { "name": "exact even tie", "token": "2.9802322387695312e-8", "text": "2.9802322387695312E-8" },
+  { "name": "asymmetric roundtrip", "token": "5.960464477539063e-8", "text": "5.960464477539063E-8" },
+  { "name": "legal overflow", "token": "1e309", "text": "Infinity" },
+  { "name": "negative underflow", "token": "-1e-400", "text": "-0.0" }
+]

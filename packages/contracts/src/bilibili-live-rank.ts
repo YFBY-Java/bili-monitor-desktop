@@ -1,10 +1,16 @@
 import { z } from "zod"
 
-import { ObjectRefSchema } from "./bilibili-follower"
+import { BilibiliRawPayloadStorageStatusSchema, ObjectRefSchema } from "./bilibili-follower"
+import { BilibiliWbiKeysSchema } from "./bilibili-danmaku-worker"
 import { BilibiliLiveNumericIdSchema } from "./bilibili-live"
 import { BilibiliLiveHttpConfigurationSchema } from "./bilibili-live-http"
 
 export const BilibiliLiveRankFamilySchema = z.enum(["AUDIENCE", "GUARD"])
+// Persisted VARCHAR(64) counts Unicode characters, not JavaScript UTF16 units.
+const BilibiliLiveRankCountTextSchema = z.string().max(128).refine(
+  value => Array.from(value).length <= 64,
+  { message: "Rank count/value text exceeds 64 characters." }
+)
 export const BilibiliLiveRankEndpointSchema = z.enum([
   "xlive/general-interface/v1/rank/queryContributionRank",
   "xlive/general-interface/v1/rank/getOnlineGoldRank",
@@ -16,7 +22,8 @@ export const BilibiliLiveRankEntrySchema = z.object({
   rankNo: z.number().int().positive().optional(),
   entryKind: z.string().trim().min(1).max(32),
   displayName: z.string().max(512).optional(),
-  faceUrl: z.url().optional(),
+  // Platform avatar text is normalized by the Renderer; relative forms must not reject a whole rank page.
+  faceUrl: z.string().optional(),
   score: z.number().int().nonnegative().optional(),
   guardLevel: z.number().int().nonnegative().optional(),
   wealthLevel: z.number().int().nonnegative().optional(),
@@ -38,8 +45,8 @@ export const BilibiliLiveRankSnapshotSchema = z.object({
   pageNo: z.number().int().min(1).max(5),
   pageSize: z.number().int().min(1).max(100),
   totalCount: z.number().int().nonnegative().optional(),
-  countText: z.string().max(64).optional(),
-  valueText: z.string().max(64).optional(),
+  countText: BilibiliLiveRankCountTextSchema.optional(),
+  valueText: BilibiliLiveRankCountTextSchema.optional(),
   remindMsg: z.string().max(512).optional(),
   sourceEndpoint: BilibiliLiveRankEndpointSchema,
   signedRequired: z.boolean(),
@@ -52,9 +59,9 @@ export const BilibiliLiveRankSummarySchema = z.object({
   roomId: BilibiliLiveNumericIdSchema,
   ruid: BilibiliLiveNumericIdSchema,
   audienceCount: z.number().int().nonnegative().optional(),
-  audienceCountText: z.string().max(64).optional(),
+  audienceCountText: BilibiliLiveRankCountTextSchema.optional(),
   guardCount: z.number().int().nonnegative().optional(),
-  guardCountText: z.string().max(64).optional(),
+  guardCountText: BilibiliLiveRankCountTextSchema.optional(),
   updatedAt: z.iso.datetime().optional(),
   snapshots: z.array(BilibiliLiveRankSnapshotSchema)
 }).strict()
@@ -71,7 +78,8 @@ export const BilibiliLiveRankRefreshInputSchema = z.object({
   roomMonitorId: z.uuid(),
   families: z.array(BilibiliLiveRankFamilySchema).default([]),
   types: z.array(z.string().trim().min(1).max(64)).default([]),
-  maxPages: z.number().int().min(1).max(5).default(1),
+  // Preserve omission through Main/Preload so Core can apply the configured default.
+  maxPages: z.number().int().min(1).max(5).optional(),
   force: z.boolean().default(false)
 }).strict()
 
@@ -84,6 +92,9 @@ export const BilibiliLiveRankRefreshResultSchema = z.object({
 
 export const BilibiliLiveRankWorkerRequestSchema = z.object({
   httpConfiguration: BilibiliLiveHttpConfigurationSchema.optional(),
+  wbiKeys: BilibiliWbiKeysSchema.optional(),
+  wbiCacheSeconds: z.number().int().min(-2_147_483_648).max(2_147_483_647).default(43200).optional(),
+  webLocation: z.string().optional(),
   taskId: z.string().min(1),
   attempt: z.number().int().positive(),
   leaseId: z.string().min(1),
@@ -100,7 +111,15 @@ export const BilibiliLiveRankWorkerRequestSchema = z.object({
   forceRefreshWbi: z.boolean().default(false)
 }).strict()
 
+// The original parser keeps full text; truncation and VARCHAR rejection occur at SQL.
+const BilibiliLiveRankFetchedEntrySchema = BilibiliLiveRankEntrySchema.extend({
+  displayName: z.string().optional(),
+  medalName: z.string().optional(),
+  guardExpiredText: z.string().optional()
+})
+
 export const BilibiliLiveRankFetchedSnapshotSchema = z.object({
+  rawPayloadStorageStatus: BilibiliRawPayloadStorageStatusSchema.optional(),
   rankFamily: BilibiliLiveRankFamilySchema,
   rankType: z.string().trim().min(1).max(64),
   rankSwitch: z.string().trim().min(1).max(64).optional(),
@@ -108,13 +127,13 @@ export const BilibiliLiveRankFetchedSnapshotSchema = z.object({
   pageNo: z.number().int().min(1).max(5),
   pageSize: z.number().int().min(1).max(100),
   totalCount: z.number().int().nonnegative().optional(),
-  countText: z.string().max(64).optional(),
-  valueText: z.string().max(64).optional(),
-  remindMsg: z.string().max(512).optional(),
+  countText: z.string().optional(),
+  valueText: z.string().optional(),
+  remindMsg: z.string().optional(),
   sourceEndpoint: BilibiliLiveRankEndpointSchema,
   signedRequired: z.boolean(),
   capturedAt: z.iso.datetime(),
-  entries: z.array(BilibiliLiveRankEntrySchema).max(200),
+  entries: z.array(BilibiliLiveRankFetchedEntrySchema).max(200),
   evidenceObject: ObjectRefSchema,
   statusCode: z.number().int().positive(),
   durationMs: z.number().int().nonnegative()

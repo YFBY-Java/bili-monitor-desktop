@@ -1,9 +1,11 @@
 import {
   BilibiliFollowerFetchRequestV2Schema,
+  BilibiliPlatformAccountFetchRequestV1Schema,
   BilibiliFollowerFetchedSnapshotV2Schema,
   BilibiliFollowerProfileV2Schema,
   type BilibiliFollowerProfileV2,
   type BilibiliFollowerFetchRequest,
+  type BilibiliFollowerFetchRequestV2,
   type BilibiliFollowerFetchedSnapshotV2,
   type BilibiliFollowerHttpConfiguration
 } from "@bmd/contracts"
@@ -21,8 +23,8 @@ export class BilibiliFollowerWorkerSource implements BilibiliFollowerSource {
     private readonly httpConfiguration?: BilibiliFollowerHttpConfiguration
   ) {}
 
-  fetchCard(request: BilibiliFollowerFetchRequest): Promise<BilibiliFollowerFetchedSnapshotV2> {
-    return this.fetch("bilibili.follower.fetch-card.v2", request)
+  fetchCard(request: BilibiliFollowerFetchRequestV2, purpose?: "platform-account"): Promise<BilibiliFollowerFetchedSnapshotV2> {
+    return this.fetch(purpose === "platform-account" ? "bilibili.platform.fetch-account.v1" : "bilibili.follower.fetch-card.v2", request)
   }
 
   fetchRelationStat(request: BilibiliFollowerFetchRequest): Promise<BilibiliFollowerFetchedSnapshotV2> {
@@ -43,9 +45,11 @@ export class BilibiliFollowerWorkerSource implements BilibiliFollowerSource {
 
   private async fetch(
     type: string,
-    request: BilibiliFollowerFetchRequest
+    request: BilibiliFollowerFetchRequestV2
   ): Promise<BilibiliFollowerFetchedSnapshotV2> {
-    const payload = BilibiliFollowerFetchRequestV2Schema.parse({ ...request,
+    const schema = type === "bilibili.platform.fetch-account.v1"
+      ? BilibiliPlatformAccountFetchRequestV1Schema : BilibiliFollowerFetchRequestV2Schema
+    const payload = schema.parse({ ...request,
       ...(this.httpConfiguration ? { httpConfiguration: this.httpConfiguration } : {}) })
     return BilibiliFollowerFetchedSnapshotV2Schema.parse(
       await this.transport.request(type, payload)

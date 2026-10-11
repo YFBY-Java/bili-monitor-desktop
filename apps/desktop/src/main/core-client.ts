@@ -1,3 +1,16 @@
+import {
+  BilibiliLiveRankSummaryV2Schema,
+  BilibiliLiveRankSnapshotV2Schema,
+  BilibiliLiveRankRefreshResultV2Schema,
+  BilibiliLiveRoomListV2Schema,
+  BilibiliLiveRoomV2Schema,
+  BilibiliLiveCollectResultV2Schema,
+  BilibiliLiveSummaryV2Schema,
+  BilibiliLiveRoomTrendListV2Schema,
+  BilibiliLiveRoomTrendV2Schema,
+  BilibiliLiveStatusEventListV2Schema,
+  BilibiliSubjectTrendV3Schema,
+  BilibiliSubjectWorkbenchV3Schema } from "@bmd/contracts"
 import { randomUUID } from "node:crypto"
 
 import {
@@ -32,6 +45,9 @@ import {
   ListSubjectsInputSchema,
   PlatformAccountListSchema,
   PlatformAccountSchema,
+  PlatformAdapterListSchema,
+  PlatformCollectionExecutionSchema,
+  RunPlatformCollectionInputSchema,
   QueryBilibiliFollowerTrendInputSchema,
   QueryBilibiliFollowerTrendsInputSchema,
   RevokeBilibiliAuthResultSchema,
@@ -110,7 +126,7 @@ import {
   DouyinValidationResultSchema,
   RevokeDouyinCredentialResultSchema,
   createRuntimeEnvelope,
-  HTTP_CORE_REQUESTS,
+  CORE_KEEP_ALIVE_REQUESTS,
   RequestKeepAliveSchema,
   type BootstrapResponse,
   type RuntimeError,
@@ -126,6 +142,7 @@ interface LocalCoreControllerOptions {
   browserWorkerEntry?: string
   dataDirectory: string
   credentialKeyBase64?: string
+  mainInstanceId?: string
   douyinOAuth: DouyinOAuthRuntimeConfiguration
   version?: string
   startupTimeoutMs?: number
@@ -148,6 +165,7 @@ class CoreRequestError extends Error {
 }
 
 const LONG_RUNNING_CORE_REQUESTS = new Set([
+  "platform.collection.run-once",
   "bilibili-followers.add",
   "bilibili-followers.refresh",
   "bilibili-followers.add.v2",
@@ -158,8 +176,11 @@ const LONG_RUNNING_CORE_REQUESTS = new Set([
   "bilibili-auth.refresh",
   "bilibili-auth.credential",
   "bilibili-live.rooms.add",
+  "bilibili-live.rooms.add.v2",
+  "bilibili-live.rooms.refresh.v2",
   "bilibili-live.rooms.refresh",
   "bilibili-live.ranks.refresh",
+  "bilibili-live.ranks.refresh.v2",
   "bilibili-live.danmaku.start",
   "bilibili-live.session.export",
   "bilibili-subjects.create",
@@ -176,14 +197,19 @@ export function resolveCoreRequestTimeout(type: string, defaultTimeoutMs: number
 }
 
 export class LocalCoreController {
+  private readonly mainInstanceId: string
   private readonly startupTimeoutMs: number
   private readonly requestTimeoutMs: number
   private readonly pending = new Map<string, PendingRequest>()
+  private readonly activeExports = new Set<Promise<unknown>>()
+  private stopping = false
+  private stopPromise: Promise<void> | undefined
   private child?: UtilityProcess
   private lastBootstrap?: BootstrapResponse
   private stderrTail = ""
 
   constructor(private readonly options: LocalCoreControllerOptions) {
+    this.mainInstanceId = options.mainInstanceId ?? randomUUID()
     this.startupTimeoutMs = options.startupTimeoutMs ?? 8_000
     this.requestTimeoutMs = options.requestTimeoutMs ?? 5_000
   }
@@ -197,13 +223,18 @@ export class LocalCoreController {
   }
 
   async start(): Promise<BootstrapResponse> {
+    if (this.stopPromise) await this.stopPromise
     if (this.isRunning()) return this.bootstrap()
     await this.forceStop()
+    this.stopping = false
+    this.stopPromise = undefined
     this.stderrTail = ""
 
     const childEnvironment = { ...process.env }
     for (const key of [
       "BMD_CREDENTIAL_KEY_BASE64",
+      "BMD_MAIN_INSTANCE_ID",
+      "BMD_MAIN_PID",
       "BMD_DOUYIN_OAUTH_MODE",
       "BMD_DOUYIN_OAUTH_CLIENT_KEY",
       "BMD_DOUYIN_OAUTH_CLIENT_SECRET",
@@ -222,6 +253,8 @@ export class LocalCoreController {
         ...childEnvironment,
         BMD_DATA_DIR: this.options.dataDirectory,
         BMD_CORE_VERSION: this.options.version ?? "0.2.0",
+        BMD_MAIN_INSTANCE_ID: this.mainInstanceId,
+        BMD_MAIN_PID: String(process.pid),
         ...(this.options.credentialKeyBase64
           ? { BMD_CREDENTIAL_KEY_BASE64: this.options.credentialKeyBase64 }
           : {}),
@@ -268,6 +301,19 @@ export class LocalCoreController {
       ListPlatformAccountsInputSchema.parse(input ?? {})
     )
     return PlatformAccountListSchema.parse(envelope.payload)
+  }
+
+  async listPlatformAdapters() {
+    const envelope = await this.request("platform.adapters.list", {})
+    return PlatformAdapterListSchema.parse(envelope.payload)
+  }
+
+  async runPlatformCollection(input: unknown) {
+    const envelope = await this.request(
+      "platform.collection.run-once",
+      RunPlatformCollectionInputSchema.parse(input)
+    )
+    return PlatformCollectionExecutionSchema.parse(envelope.payload)
   }
 
   async createPlatformAccount(input: unknown) {
@@ -366,6 +412,16 @@ export class LocalCoreController {
       UpdateBilibiliSubjectLayoutInputSchema.parse(input)
     )
     return BilibiliSubjectWidgetLayoutSchema.array().parse(envelope.payload)
+  }
+
+  async getBilibiliSubjectWorkbenchV3(input: unknown) {
+    const envelope = await this.request("bilibili-subjects.workbench.v3", BilibiliSubjectIdInputSchema.parse(input))
+    return BilibiliSubjectWorkbenchV3Schema.parse(envelope.payload)
+  }
+
+  async queryBilibiliSubjectTrendsV3(input: unknown) {
+    const envelope = await this.request("bilibili-subjects.trends.v3", QueryBilibiliSubjectTrendsInputSchema.parse(input))
+    return BilibiliSubjectTrendV3Schema.parse(envelope.payload)
   }
 
   async getBilibiliSubjectWorkbenchV2(input: unknown) {
@@ -515,6 +571,75 @@ export class LocalCoreController {
     return RevokeBilibiliAuthResultSchema.parse(envelope.payload)
   }
 
+  async listBilibiliLiveRoomsV2(input: unknown) {
+    const envelope = await this.request(
+      "bilibili-live.rooms.list.v2",
+      ListBilibiliLiveRoomsInputSchema.parse(input ?? {})
+    )
+    return BilibiliLiveRoomListV2Schema.parse(envelope.payload)
+  }
+
+  async addBilibiliLiveRoomV2(input: unknown) {
+    const envelope = await this.request(
+      "bilibili-live.rooms.add.v2",
+      AddBilibiliLiveRoomInputSchema.parse(input)
+    )
+    return BilibiliLiveRoomV2Schema.parse(envelope.payload)
+  }
+
+  async updateBilibiliLiveRoomStatusV2(input: unknown) {
+    const envelope = await this.request(
+      "bilibili-live.rooms.update-status.v2",
+      UpdateBilibiliLiveRoomStatusInputSchema.parse(input)
+    )
+    return BilibiliLiveRoomV2Schema.parse(envelope.payload)
+  }
+
+  async updateBilibiliLiveRoomSettingsV2(input: unknown) {
+    const envelope = await this.request(
+      "bilibili-live.rooms.update-settings.v2",
+      UpdateBilibiliLiveRoomSettingsInputSchema.parse(input)
+    )
+    return BilibiliLiveRoomV2Schema.parse(envelope.payload)
+  }
+
+  async refreshBilibiliLiveRoomV2(input: unknown) {
+    const envelope = await this.request(
+      "bilibili-live.rooms.refresh.v2",
+      BilibiliLiveRoomIdInputSchema.parse(input)
+    )
+    return BilibiliLiveCollectResultV2Schema.parse(envelope.payload)
+  }
+
+  async getBilibiliLiveSummaryV2() {
+    const envelope = await this.request("bilibili-live.summary.v2", {})
+    return BilibiliLiveSummaryV2Schema.parse(envelope.payload)
+  }
+
+  async queryBilibiliLiveTrendV2(input: unknown) {
+    const envelope = await this.request(
+      "bilibili-live.trend.v2",
+      QueryBilibiliLiveTrendInputSchema.parse(input)
+    )
+    return BilibiliLiveRoomTrendV2Schema.parse(envelope.payload)
+  }
+
+  async queryBilibiliLiveTrendsV2(input: unknown) {
+    const envelope = await this.request(
+      "bilibili-live.trends.v2",
+      QueryBilibiliLiveTrendsInputSchema.parse(input)
+    )
+    return BilibiliLiveRoomTrendListV2Schema.parse(envelope.payload)
+  }
+
+  async listBilibiliLiveEventsV2(input: unknown) {
+    const envelope = await this.request(
+      "bilibili-live.events.v2",
+      QueryBilibiliLiveEventsInputSchema.parse(input ?? {})
+    )
+    return BilibiliLiveStatusEventListV2Schema.parse(envelope.payload)
+  }
+
   async listBilibiliLiveRooms(input: unknown) {
     const envelope = await this.request(
       "bilibili-live.rooms.list",
@@ -598,6 +723,21 @@ export class LocalCoreController {
       BilibiliLiveRoomIdInputSchema.parse(input)
     )
     return BilibiliLiveRankSummarySchema.parse(envelope.payload)
+  }
+
+  async getBilibiliLiveRankSummaryV2(input: unknown) {
+    const envelope = await this.request("bilibili-live.ranks.summary.v2", BilibiliLiveRoomIdInputSchema.parse(input))
+    return BilibiliLiveRankSummaryV2Schema.parse(envelope.payload)
+  }
+
+  async getLatestBilibiliLiveRankV2(input: unknown) {
+    const envelope = await this.request("bilibili-live.ranks.latest.v2", BilibiliLiveRankLatestInputSchema.parse(input))
+    return BilibiliLiveRankSnapshotV2Schema.parse(envelope.payload)
+  }
+
+  async refreshBilibiliLiveRanksV2(input: unknown) {
+    const envelope = await this.request("bilibili-live.ranks.refresh.v2", BilibiliLiveRankRefreshInputSchema.parse(input))
+    return BilibiliLiveRankRefreshResultV2Schema.parse(envelope.payload)
   }
 
   async getLatestBilibiliLiveRank(input: unknown) {
@@ -697,11 +837,16 @@ export class LocalCoreController {
   }
 
   async prepareBilibiliLiveSessionExport(input: unknown) {
-    const envelope = await this.request(
+    const operation = this.request(
       "bilibili-live.session.export",
       ExportBilibiliLiveSessionInputSchema.parse(input)
-    )
-    return PreparedBilibiliLiveSessionExportSchema.parse(envelope.payload)
+    ).then(envelope => PreparedBilibiliLiveSessionExportSchema.parse(envelope.payload))
+    this.activeExports.add(operation)
+    try {
+      return await operation
+    } finally {
+      this.activeExports.delete(operation)
+    }
   }
 
   async getDouyinAuthStatus() {
@@ -773,7 +918,14 @@ export class LocalCoreController {
     return this.lastBootstrap
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise
+    this.stopping = true
+    this.stopPromise = this.finishStop()
+    return this.stopPromise
+  }
+
+  private async finishStop(): Promise<void> {
     const child = this.child
     if (!child) return
     try {
@@ -781,11 +933,15 @@ export class LocalCoreController {
     } catch {
       // forceStop remains the final lifecycle guard when the child is already gone.
     }
+    // Core shutdown keeps SQLite open until these preparations finish. Their normal
+    // 90-second liveness watchdog still terminates an unresponsive utility process.
+    await Promise.allSettled(this.activeExports)
     await this.waitForExit(child, 1_500)
     await this.forceStop()
   }
 
   private request<T>(type: string, payload: T): Promise<RuntimeEnvelope> {
+    if (this.stopping && type !== "core.shutdown") throw new Error("The local Core utility process is stopping.")
     const child = this.child
     if (!child?.pid) throw new Error("The local Core utility process is not running.")
 
@@ -796,7 +952,7 @@ export class LocalCoreController {
       timestamp: new Date().toISOString(),
       correlationId: id,
       traceId: randomUUID(),
-      ...(HTTP_CORE_REQUESTS.some(request => request === type) ? { keepAlive: true } : {}),
+      ...(CORE_KEEP_ALIVE_REQUESTS.some(request => request === type) ? { keepAlive: true } : {}),
       payload
     })
 
@@ -822,7 +978,15 @@ export class LocalCoreController {
     if (envelope.type === "core.request-alive") {
       const payload = RequestKeepAliveSchema.safeParse(envelope.payload)
       if (pending.envelope.keepAlive && payload.success && payload.data.requestType === pending.envelope.type) {
-        pending.timeout.refresh()
+        if (this.activeExports.size > 0) {
+          // A synchronous export can leave newly sent long requests in Core's
+          // message queue. Its validated liveness also covers that shared queue.
+          for (const request of this.pending.values()) {
+            if (request.envelope.keepAlive) request.timeout.refresh()
+          }
+        } else {
+          pending.timeout.refresh()
+        }
       }
       return
     }

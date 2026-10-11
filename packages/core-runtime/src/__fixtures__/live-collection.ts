@@ -7,6 +7,7 @@ import { ControlDatabase, type StoredBilibiliLiveRoomMonitor } from "@bmd/storag
 import { BilibiliLiveMonitorService, type BilibiliLiveMonitorServiceOptions, type BilibiliLiveSource } from "../bilibili-live-service"
 import { BilibiliLiveSessionService, type BilibiliLiveRestObservation } from "../bilibili-live-session-service"
 import { BilibiliLiveWorkerSource } from "../bilibili-live-worker-source"
+import { exactLiveFromLegacy } from "../live-long64-projection"
 
 type SnapshotFields = Omit<BilibiliLiveSnapshotData, "uid" | "roomId">
 export const liveStatusEndpoint = "room/v1/Room/get_status_info_by_uids"
@@ -57,13 +58,15 @@ export async function liveCollectionFixture(options: { maxAttempts?: number; ret
     fetchRoomInfoOld: async request => ({ ...(state.oldRoomMissing ? {} : { snapshot: snapshot(request.uid) }), ...metadata("room/v1/Room/getRoomInfoOld") })
   }
   const transportedSource = new BilibiliLiveWorkerSource({ request: async (type, payload) => {
+    const exact = type.endsWith(".v2")
+    if (exact) type = type.slice(0, -3)
     const value = JSON.parse(JSON.stringify(payload))
     const result = type === "bilibili.live.fetch-status-by-uids" ? await source.fetchStatusByUids(value)
       : type === "bilibili.live.fetch-room-info" ? await source.fetchRoomInfo(value)
         : type === "bilibili.live.fetch-room-init" ? await source.fetchRoomInit(value)
           : type === "bilibili.live.fetch-room-info-old" ? await source.fetchRoomInfoOld(value)
             : (() => { throw new Error("Unexpected synthetic collection method") })()
-    return JSON.parse(JSON.stringify(result))
+    return JSON.parse(JSON.stringify(exact ? exactLiveFromLegacy(result) : result))
   } })
   const sessions = new BilibiliLiveSessionService({ database, idFactory: randomUUID, now: () => new Date(state.now) })
   const settings: BilibiliLiveMonitorServiceOptions = {

@@ -36,6 +36,17 @@ describe("Bilibili follower v2 exact wire contracts", () => {
       .toBe(fixture.valid)
   })
   it("validates the same HTTP golden cases with the portable Draft 2020-12 validator", () => {
+    const failureEvidence: { request: unknown; error: unknown } = JSON.parse(
+      readFileSync(new URL("../fixtures/follower-failure-evidence.json", import.meta.url), "utf8"))
+    expect.soft(contracts.BilibiliFollowerFetchRequestV2Schema.safeParse(failureEvidence.request).success).toBe(true)
+    expect(contracts.BilibiliFollowerFetchFailureV2Schema.parse(failureEvidence.error)).toEqual(failureEvidence.error)
+    const platformCases: { workerRequests: Array<{ mid: string; valid: boolean }> } = JSON.parse(
+      readFileSync(new URL("../fixtures/platform-account-inputs.json", import.meta.url), "utf8"))
+    for (const item of platformCases.workerRequests) {
+      expect(contracts.BilibiliPlatformAccountFetchRequestV1Schema.safeParse({ ...fetchRequest, mid: item.mid }).success).toBe(item.valid)
+    }
+    expect(contracts.BilibiliFollowerFetchRequestV2Schema.safeParse({ ...fetchRequest, mid: "0" }).success).toBe(false)
+    expect(contracts.BilibiliFollowerFetchRequestV2Schema.safeParse({ ...fetchRequest, mid: "-1" }).success).toBe(false)
     const schema: unknown = JSON.parse(readFileSync(new URL("../schemas/bilibili-follower.v2.schema.json", import.meta.url), "utf8"))
     const decisions: unknown = JSON.parse(execFileSync(process.env.BMD_PYTHON_EXE ?? "python", ["-c", [
       "import json, sys",
@@ -44,13 +55,16 @@ describe("Bilibili follower v2 exact wire contracts", () => {
       "schema = {**value['schema'], '$ref': '#/$defs/BilibiliFollowerFetchRequestV2'}",
       "Draft202012Validator.check_schema(schema)",
       "validator = Draft202012Validator(schema)",
-      "print(json.dumps([validator.is_valid(request) for request in value['requests']]))"
+      "platform_validator = Draft202012Validator({**value['schema'], '$ref': '#/$defs/BilibiliPlatformAccountFetchRequestV1'})",
+      "print(json.dumps({'follower': [validator.is_valid(request) for request in value['requests']], 'platform': [platform_validator.is_valid(request) for request in value['platformRequests']]}))"
     ].join("\n")], {
-      input: JSON.stringify({ schema, requests: httpCases.map(fixture => ({ ...fetchRequest, ...fixture.input })) }),
+      input: JSON.stringify({ schema, requests: [...httpCases.map(fixture => ({ ...fetchRequest, ...fixture.input })),
+        failureEvidence.request], platformRequests: platformCases.workerRequests.map(item => ({ ...fetchRequest, mid: item.mid })) }),
       encoding: "utf8",
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" }
     }))
-    expect(decisions).toEqual(httpCases.map(fixture => fixture.valid))
+    expect(decisions).toEqual({ follower: [...httpCases.map(fixture => fixture.valid), true],
+      platform: platformCases.workerRequests.map(item => item.valid) })
   })
   it.each(["0", "-1", "-9223372036854775808", "9223372036854775807"])("allows signed response MID %s without changing profile text", mid => {
     expect(contracts).toHaveProperty("BilibiliFollowerProfileV2Schema")
@@ -67,6 +81,14 @@ describe("Bilibili follower v2 exact wire contracts", () => {
     ] as const) {
       expect(contracts).toHaveProperty(name)
       expect(contracts[name].parse(value)).toEqual(value)
+    }
+    const rawCases = JSON.parse(readFileSync(new URL("../fixtures/follower-raw-payload-storage.json", import.meta.url), "utf8")) as Array<{ status: string }>
+    for (const { status } of rawCases) {
+      const value = { ...snapshot, rawPayloadStorageStatus: status }
+      expect(contracts.BilibiliFollowerFetchedSnapshotV2Schema.parse(value)).toEqual(value)
+    }
+    for (const status of [null, "UNKNOWN", 1]) {
+      expect(contracts.BilibiliFollowerFetchedSnapshotV2Schema.safeParse({ ...snapshot, rawPayloadStorageStatus: status }).success).toBe(false)
     }
   })
   it("allows signed snapshot response MID but requires positive monitor, collect and request MID", () => {

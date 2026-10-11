@@ -1,4 +1,4 @@
-import type { BilibiliFollowerMonitorV2, BilibiliSubjectTrendV2, BilibiliSubjectWorkbenchV2 } from "@bmd/contracts"
+import type { BilibiliFollowerMonitorV2, BilibiliSubjectTrendV3, BilibiliSubjectWorkbenchV3 } from "@bmd/contracts"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import * as presentation from "./follower-monitor-presentation"
@@ -76,20 +76,28 @@ describe("exact Long64 renderer presentation", () => {
     expect(wrapBoundary).toContain("区间净变化 +18,446,744,073,709,551,615")
   })
   it("renders Subject follower strings as a real series while retaining numeric live geometry", () => {
-    const workbench: BilibiliSubjectWorkbenchV2 = {
+    const workbench: BilibiliSubjectWorkbenchV3 = {
       subject: { id, displayName: "Long64用户", tags: [], monitorStatus: "ACTIVE", createdAt: timestamp, updatedAt: timestamp },
-      summary: { followerCount: "9223372036854775807", followerDelta24h: "-9223372036854775808", onlineCount: 200,
+      summary: { followerCount: "9223372036854775807", followerDelta24h: "-9223372036854775808", onlineCount: "200",
         healthScore: 100, enabledModuleCount: 2, totalModuleCount: 4 },
       danmu: { enabled: false, status: "disabled", recentMessages: [] }, layout: [], recentEvents: []
     }
-    const trend: BilibiliSubjectTrendV2 = { subjectId: id, metrics: ["follower", "live_online"], range: "24h", bucket: "5m",
-      points: [{ bucketAt: timestamp, followerCount: "9223372036854775806", liveOnlineCount: 200 },
-        { bucketAt: next, followerCount: "9223372036854775807", liveOnlineCount: 100 }] }
+    const trend: BilibiliSubjectTrendV3 = { subjectId: id, metrics: ["follower", "live_online"], range: "24h", bucket: "5m",
+      points: [{ bucketAt: timestamp, followerCount: "9223372036854775806", liveOnlineCount: "200" },
+        { bucketAt: next, followerCount: "9223372036854775807", liveOnlineCount: "100" }] }
     const html = renderToStaticMarkup(<BilibiliSubjectWorkbenchView workbench={workbench} trend={trend} loading={false} error={null}
-      onBack={() => {}} onRefresh={() => {}} onToggleStatus={() => {}} onOpenBinding={() => {}} onResetLayout={() => {}} />)
+      onBack={() => {}} onRefresh={() => {}} onToggleStatus={() => {}} onOpenBinding={() => {}} />)
     expect(html).toContain("9,223,372,036,854,775,807")
-    expect(html).toContain("24h -9,223,372,036,854,775,808")
-    expect(html).toContain('points="18,202 702,18" class="subject-line follower"')
-    expect(html).toContain('points="18,18 702,202" class="subject-line live"')
+    expect(html).toContain("今日 -9,223,372,036,854,775,808")
+    // The original widget uses padded independent axes and smooth lines, not
+    // min/max-to-edge polylines. Adjacent Long values must still be distinct.
+    expect(html).toMatch(/<path class="subject-line follower" d="M[^\"]+ C/)
+    expect(html).toMatch(/<path class="subject-line live" d="M[^\"]+ C/)
+    const followerPoints = [...html.matchAll(/<circle class="subject-trend-point follower"[^>]*cy="([^"]+)"[^>]*data-value="([^"]+)"/g)]
+    expect(followerPoints.map(point => point[2])).toEqual(["9223372036854775806", "9223372036854775807"])
+    expect(Number(followerPoints[0]?.[1])).toBeGreaterThan(Number(followerPoints[1]?.[1]))
+    const heatPoints = [...html.matchAll(/<circle class="subject-trend-point live"[^>]*cy="([^"]+)"[^>]*data-value="([^"]+)"/g)]
+    expect(heatPoints.map(point => point[2])).toEqual(["200", "100"])
+    expect(Number(heatPoints[0]?.[1])).toBeLessThan(Number(heatPoints[1]?.[1]))
   })
 })

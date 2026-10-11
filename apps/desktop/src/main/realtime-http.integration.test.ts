@@ -6,8 +6,19 @@ import { resolve } from "node:path"
 import { createInterface } from "node:readline"
 import { fileURLToPath } from "node:url"
 import { LocalCoreRuntime } from "@bmd/core-runtime"
+import { RealtimeCredentialRequestSchema, RealtimeCredentialResponseSchema } from "@bmd/contracts"
 import { build } from "vite"
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
+
+function acknowledgeCredentialRequest(child: ChildProcessWithoutNullStreams, message: unknown): void {
+  const request = RealtimeCredentialRequestSchema.safeParse(message)
+  if (request.success) {
+    // Match the real Core transport's response when no account is logged in.
+    child.stdin.write(JSON.stringify(RealtimeCredentialResponseSchema.parse({
+      id: request.data.id, type: "credential-response", credential: null
+    })) + "\n")
+  }
+}
 
 describe("actual realtime Worker HTTP configuration and cancellation", () => {
   let buildDirectory: string, directory: string, core: LocalCoreRuntime | undefined
@@ -65,7 +76,11 @@ describe("actual realtime Worker HTTP configuration and cancellation", () => {
     children.push(child)
     const messages: Array<{ id: string; ok?: boolean; type?: string; error?: { code: string } }> = []
     const lines = createInterface({ input: child.stdout })
-    lines.on("line", line => messages.push(JSON.parse(line)))
+    lines.on("line", line => {
+      const message = JSON.parse(line)
+      acknowledgeCredentialRequest(child, message)
+      messages.push(message)
+    })
     child.stdin.write(JSON.stringify({ id: "starting", type: "start", ...(keepAlive === undefined ? {} : { keepAlive }), payload: { connectionId: "one", roomId: "33",
       httpConfiguration: { connectTimeoutMs: 0, readTimeoutMs: 0, userAgent: "Fixture wait" } } }) + "\n")
     await vi.waitFor(async () => expect(await readFile(resolve(directory, "fixture-http.jsonl"), "utf8")).toContain("Fixture wait"))
@@ -83,7 +98,9 @@ describe("actual realtime Worker HTTP configuration and cancellation", () => {
     const child = spawn(process.execPath, [resolve(buildDirectory, "worker.mjs")], {
       cwd: directory, env: { ...process.env, BMD_DATA_DIR: directory }, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] })
     children.push(child)
-    child.stdout.resume(); child.stderr.resume()
+    const lines = createInterface({ input: child.stdout })
+    lines.on("line", line => acknowledgeCredentialRequest(child, JSON.parse(line)))
+    child.stderr.resume()
     child.stdin.write(JSON.stringify({ id: "starting", type: "start", keepAlive: true,
       payload: { connectionId: "one", roomId: "33", httpConfiguration: {
         connectTimeoutMs: 0, readTimeoutMs: 0, userAgent: "Fixture wait" } } }) + "\n")

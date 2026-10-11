@@ -5,6 +5,9 @@
   "additionalProperties": false,
   "required": ["taskId", "attempt", "leaseId", "roomId", "ruid", "family", "type", "page", "pageSize"],
   "properties": {
+    "webLocation": { "type": "string" },
+    "wbiKeys": {"$ref": "#/$defs/WbiKeys"},
+    "wbiCacheSeconds": {"type":"integer","minimum":-2147483648,"maximum":2147483647,"default":43200},
     "taskId": {"type": "string", "minLength": 1},
     "attempt": {"type": "integer", "minimum": 1},
     "leaseId": {"type": "string", "minLength": 1},
@@ -22,6 +25,69 @@
     "httpConfiguration": {"$ref": "#/$defs/HttpConfiguration"}
   },
   "$defs": {
+    "RawPayloadStorageStatus": {
+      "enum": ["ACCEPTED", "INVALID_JSON", "NUL", "INVALID_UNICODE", "NUMBER_OUT_OF_RANGE"]
+    },
+    "ObjectRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["objectId", "relativePath", "sha256", "sizeBytes", "mediaType"],
+      "properties": {
+        "objectId": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "relativePath": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "sizeBytes": {"type": "integer", "minimum": 0},
+        "mediaType": {"type": "string", "minLength": 1}
+      }
+    },
+    "RankEntry": {
+      "type": "object", "additionalProperties": false, "required": ["entryKind"],
+      "properties": {
+        "userUid": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+        "rankNo": {"type": "integer", "minimum": 1},
+        "entryKind": {"type": "string", "minLength": 1, "maxLength": 32},
+        "displayName": {"type": "string"},
+        "faceUrl": {"type": "string"},
+        "score": {"type": "integer", "minimum": 0},
+        "guardLevel": {"type": "integer", "minimum": 0},
+        "wealthLevel": {"type": "integer", "minimum": 0},
+        "medalName": {"type": "string"},
+        "medalLevel": {"type": "integer", "minimum": 0},
+        "guardExpiredText": {"type": "string"},
+        "accompanyDays": {"type": "integer", "minimum": 0}
+      }
+    },
+    "FetchedSnapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rankFamily", "rankType", "pageNo", "pageSize", "sourceEndpoint", "signedRequired", "capturedAt", "entries", "evidenceObject", "statusCode", "durationMs"],
+      "properties": {
+        "rawPayloadStorageStatus": {"$ref": "#/$defs/RawPayloadStorageStatus"},
+        "rankFamily": {"enum": ["AUDIENCE", "GUARD"]},
+        "rankType": {"type": "string", "minLength": 1, "maxLength": 64},
+        "rankSwitch": {"type": "string", "minLength": 1, "maxLength": 64},
+        "periodScope": {"type": "string", "minLength": 1, "maxLength": 32},
+        "pageNo": {"type": "integer", "minimum": 1, "maximum": 5},
+        "pageSize": {"type": "integer", "minimum": 1, "maximum": 100},
+        "totalCount": {"type": "integer", "minimum": 0},
+        "countText": {"type": "string"},
+        "valueText": {"type": "string"},
+        "remindMsg": {"type": "string"},
+        "sourceEndpoint": {"enum": ["xlive/general-interface/v1/rank/queryContributionRank", "xlive/general-interface/v1/rank/getOnlineGoldRank", "xlive/app-room/v2/guardTab/topListNew"]},
+        "signedRequired": {"type": "boolean"},
+        "capturedAt": {"type": "string", "format": "date-time"},
+        "entries": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/RankEntry"}},
+        "evidenceObject": {"$ref": "#/$defs/ObjectRef"},
+        "statusCode": {"type": "integer", "minimum": 1},
+        "durationMs": {"type": "integer", "minimum": 0}
+      }
+    },
+    "WbiKeys": {
+      "type": "object", "additionalProperties": false,
+      "required": ["imgKey", "subKey"],
+      "properties": {
+        "imgKey": {"type": "string", "minLength": 1},
+        "subKey": {"type": "string", "minLength": 1}
+      }
+    },
     "HttpConfiguration": {
       "type": "object", "additionalProperties": false,
       "properties": {

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { z } from "zod"
+import { QueryBilibiliLiveDanmakuMetricsInputSchema } from "./bilibili-live-danmaku"
 import { ListBilibiliLiveRoomsInputSchema, QueryBilibiliLiveTrendInputSchema,
   QueryBilibiliLiveTrendsInputSchema, QueryBilibiliLiveEventsInputSchema } from "./bilibili-live"
 
@@ -8,7 +9,8 @@ const schemas = {
   ListBilibiliLiveRoomsInput: ListBilibiliLiveRoomsInputSchema,
   QueryBilibiliLiveTrendInput: QueryBilibiliLiveTrendInputSchema,
   QueryBilibiliLiveTrendsInput: QueryBilibiliLiveTrendsInputSchema,
-  QueryBilibiliLiveEventsInput: QueryBilibiliLiveEventsInputSchema
+  QueryBilibiliLiveEventsInput: QueryBilibiliLiveEventsInputSchema,
+  QueryBilibiliLiveDanmakuMetricsInput: QueryBilibiliLiveDanmakuMetricsInputSchema
 }
 const fixtures: Array<{ name: string; schema: keyof typeof schemas; input: unknown; valid: boolean; output?: unknown }> =
   JSON.parse(readFileSync(new URL("../fixtures/live-query-inputs.json", import.meta.url), "utf8"))
@@ -33,5 +35,8 @@ describe("original live query input normalization", () => {
     expect(document.$defs.OffsetDateTime?.pattern).toBe(
       z.toJSONSchema(z.iso.datetime({ offset: true })).pattern?.replaceAll("\\d", "[0-9]"))
     expect(document.$defs.LiveHistoryLimit).toMatchObject({ minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER })
+    expect(document.$defs.QueryBilibiliLiveDanmakuMetricsInput).toMatchObject({
+      required: ["roomMonitorId"], properties: { range: { type: ["string", "null"], default: "1h" } }
+    })
   })
 })

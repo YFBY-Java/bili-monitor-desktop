@@ -135,3 +135,75 @@ def test_actual_rank_and_wbi_http_configuration(monkeypatch, tmp_path, endpoint,
 def test_explicit_null_configuration_is_not_legacy_omission():
     with pytest.raises(ValidationError):
         rank.BilibiliLiveRankRequest.model_validate({**rank_request(), "httpConfiguration": None})
+
+
+def test_rank_wbi_cache_uses_success_time_floor_and_force_refresh(monkeypatch, tmp_path):
+    monkeypatch.setattr(rank, "_cached_wbi_keys", None)
+    now = [1000.0]
+    nav_calls = []
+    nav_failure = [False]
+    monkeypatch.setattr(rank.time, "time", lambda: now[0])
+
+    def respond(request):
+        if request.url.path.endswith("/nav"):
+            nav_calls.append(request)
+            now[0] += 10
+            if nav_failure[0]:
+                return httpx.Response(
+                    200, json={"code": "-352", "message": "ignored original nav message"}
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "code": "-101",
+                    "data": {
+                        "wbi_img": {
+                            "img_url": "https://i0.hdslb.com/" + "a" * 32 + ".png",
+                            "sub_url": "https://i0.hdslb.com/" + "b" * 32 + ".png",
+                        }
+                    },
+                },
+            )
+        return httpx.Response(200, json={"code": 0, "data": {"item": []}})
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(**kwargs, transport=httpx.MockTransport(respond)),
+    )
+    payload = {**rank_request(), "wbiCacheSeconds": -8}
+    asyncio.run(rank.fetch_live_rank(payload, tmp_path))
+    assert rank._cached_wbi_keys[2] == 1310
+    now[0] = 1309
+    asyncio.run(rank.fetch_live_rank(payload, tmp_path))
+    assert len(nav_calls) == 1
+    now[0] = 1310
+    asyncio.run(rank.fetch_live_rank(payload, tmp_path))
+    assert len(nav_calls) == 2
+    assert rank._cached_wbi_keys[2] == 1620
+    asyncio.run(rank.fetch_live_rank({**payload, "forceRefreshWbi": True}, tmp_path))
+    assert len(nav_calls) == 3
+    assert rank._cached_wbi_keys[2] == 1630
+    assert rank.BilibiliLiveRankRequest.model_validate(rank_request()).wbi_cache_seconds == 43200
+    supplied_keys = {"imgKey": "c" * 32, "subKey": "d" * 32}
+    supplied_payload = {**payload, "wbiKeys": supplied_keys, "forceRefreshWbi": True}
+    schema = json.loads(
+        (CONTRACTS / "schemas/bilibili-live-rank-worker.v1.schema.json").read_text("utf-8")
+    )
+    Draft202012Validator(schema).validate(supplied_payload)
+    asyncio.run(rank.fetch_live_rank(supplied_payload, tmp_path))
+    assert len(nav_calls) == 3
+    assert rank._cached_wbi_keys == ("a" * 32, "b" * 32, 1630)
+    nav_failure[0] = True
+    with pytest.raises(rank.BilibiliCrawlerError) as failed:
+        asyncio.run(rank.fetch_live_rank({**payload, "forceRefreshWbi": True}, tmp_path))
+    assert failed.value.code == "BILIBILI_UNKNOWN_ERROR"
+    assert failed.value.retryable is True
+    assert failed.value.endpoint == rank.WBI_NAV_ENDPOINT
+    assert failed.value.status_code == 200
+    assert failed.value.bili_code == -352
+    assert str(failed.value) == "Bilibili nav API returned code -352"
+    assert rank._cached_wbi_keys == ("a" * 32, "b" * 32, 1630)
+    asyncio.run(rank.fetch_live_rank(payload, tmp_path))
+    assert len(nav_calls) == 4

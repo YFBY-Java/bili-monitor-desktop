@@ -1,6 +1,8 @@
 [
   { "name": "defaults", "input": {}, "valid": true },
   { "name": "disabled", "input": { "enabled": false }, "valid": true },
+  { "name": "disabled scheduler accepts zero delay", "input": { "enabled": false, "schedulerDelayMs": 0 }, "valid": true },
+  { "name": "disabled storage accepts signed delay", "input": { "storageEnabled": false, "schedulerDelayMs": -2147483648 }, "valid": true },
   { "name": "configured batches", "input": { "enabled": true, "schedulerDelayMs": 250, "dueBatchSize": 75, "statusBatchSize": 64 }, "valid": true },
   { "name": "zero batch consumed as one", "input": { "dueBatchSize": 0, "statusBatchSize": 0 }, "valid": true },
   { "name": "negative batch consumed as one", "input": { "dueBatchSize": -2147483648, "statusBatchSize": -1 }, "valid": true },

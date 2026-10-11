@@ -4,6 +4,7 @@ import { z } from "zod"
 import { BilibiliLiveSnapshotDataSchema, BilibiliLiveRoomSchema, BilibiliLiveFetchedSnapshotSchema,
   BilibiliLiveFetchedOptionalSnapshotSchema, BilibiliLiveFetchedStatusBatchSchema } from "./bilibili-live"
 import { BilibiliLiveRoomRequestSchema, BilibiliLiveUidRequestSchema, BilibiliLiveStatusByUidsRequestSchema } from "./bilibili-live"
+import { BilibiliSubjectLiveRoomSchema } from "./bilibili-subject"
 
 const fixtures: Array<{ name: string; method: string; result?: unknown; error?: unknown }> = JSON.parse(
   readFileSync(new URL("../fixtures/live-worker-responses.json", import.meta.url), "utf8"))
@@ -36,6 +37,10 @@ describe("original live Worker output fields shared with Python", () => {
     const room = BilibiliLiveRoomSchema.parse({ ...snapshot[0], id: "81814b69-d0e0-49c2-a6cc-3803b169a7bf",
       monitorStatus: "ACTIVE", intervalSeconds: 300, recentTrend: [], version: 1 })
     expect(room).toMatchObject({ shortId: "0", areaId: "0", parentAreaId: "0", uname: " 合成直播主播 " })
+    const media = { faceUrl: room.faceUrl, coverUrl: room.coverUrl, keyframeUrl: room.keyframeUrl }
+    expect(media).toEqual({ faceUrl: " //example.test/avatar.png ", coverUrl: " relative/cover.png ", keyframeUrl: "not-a-url" })
+    expect(BilibiliSubjectLiveRoomSchema.parse({ ...media, monitorId: room.id, uid: room.uid, roomId: room.roomId,
+      uname: room.uname, liveStatus: room.liveStatus, monitorStatus: room.monitorStatus })).toMatchObject(media)
   })
 
   it.each(validation)("shared output acceptance: $name", fixture => {
@@ -56,5 +61,15 @@ describe("original live Worker output fields shared with Python", () => {
     expect(BilibiliLiveFetchedOptionalSnapshotSchema.parse(metadata)).toEqual(metadata)
     expect(BilibiliLiveFetchedOptionalSnapshotSchema.safeParse({ ...metadata, snapshot: null }).success).toBe(false)
     expect(BilibiliLiveFetchedStatusBatchSchema.parse({ ...metadata, snapshots: [] }).snapshots).toEqual([])
+    const rawCases: Array<{ status: string }> = JSON.parse(
+      readFileSync(new URL("../fixtures/follower-raw-payload-storage.json", import.meta.url), "utf8"))
+    for (const { status } of rawCases) {
+      const value = { ...metadata, rawPayloadStorageStatus: status }
+      expect(BilibiliLiveFetchedOptionalSnapshotSchema.parse(value)).toEqual(value)
+      expect(BilibiliLiveFetchedSnapshotSchema.parse({ ...value, uid: "101", roomId: "201", liveStatus: 0 }).rawPayloadStorageStatus).toBe(status)
+      expect(BilibiliLiveFetchedStatusBatchSchema.parse({ ...value, snapshots: [] }).rawPayloadStorageStatus).toBe(status)
+    }
+    expect(BilibiliLiveFetchedOptionalSnapshotSchema.safeParse({ ...metadata, rawPayloadStorageStatus: null }).success).toBe(false)
+    expect(BilibiliLiveFetchedOptionalSnapshotSchema.safeParse({ ...metadata, rawPayloadStorageStatus: "unknown" }).success).toBe(false)
   })
 })

@@ -54,3 +54,36 @@ def test_nested_subject_mid_matches_positive_long_domain(case, identity):
         {"$ref": "#/$defs/BilibiliSubjectWorkbenchV2", "$defs": SCHEMA["$defs"]}
     )
     assert validator.is_valid(value) is case["positive"]
+
+
+def test_normalized_subject_text_is_preserved_by_both_portable_versions():
+    """Python checks the shared response; Subject commands run only in the TS Core."""
+    fixture = json.loads((CONTRACTS / "fixtures/subject-text-inputs.json").read_text("utf-8"))
+    binding = {
+        "id": IDENTIFIER,
+        "subjectId": IDENTIFIER,
+        "enabledCapabilities": fixture["expectedCapabilities"],
+        "danmuEnabled": False,
+        "createdAt": TIMESTAMP,
+        "updatedAt": TIMESTAMP,
+    }
+    subject = {
+        "id": IDENTIFIER,
+        **fixture["expected"],
+        "remark": fixture["remarkUnit"] * fixture["remarkRepeat"],
+        "monitorStatus": "ACTIVE",
+        "createdAt": TIMESTAMP,
+        "updatedAt": TIMESTAMP,
+        "bilibiliBinding": binding,
+    }
+    for version in (2, 3):
+        schema = json.loads(
+            (CONTRACTS / f"schemas/bilibili-subject.v{version}.schema.json").read_text("utf-8")
+        )
+        for field, value in (("subject", subject), ("bilibiliBinding", binding)):
+            Draft202012Validator(
+                {
+                    "$ref": f"#/$defs/BilibiliSubjectWorkbenchV{version}/properties/{field}",
+                    "$defs": schema["$defs"],
+                }
+            ).validate(value)

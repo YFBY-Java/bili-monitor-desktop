@@ -39,6 +39,14 @@
         "limitPerRoom": { "$ref": "#/$defs/LiveHistoryLimit" }
       }
     },
+    "QueryBilibiliLiveDanmakuMetricsInput": {
+      "type": "object", "additionalProperties": false, "required": ["roomMonitorId"],
+      "properties": {
+        "roomMonitorId": { "$ref": "#/$defs/RoomMonitorId" },
+        "range": { "type": ["string", "null"], "default": "1h",
+          "description": "Preserve raw strings for the original service parser. Core normalizes missing/null to 1h; invalid ranges also fall back to 1h in the service." }
+      }
+    },
     "QueryBilibiliLiveEventsInput": {
       "type": "object", "additionalProperties": false,
       "properties": { "limit": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991, "default": 20,

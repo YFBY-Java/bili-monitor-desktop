@@ -329,6 +329,9 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991
+        },
+        "rawPayloadStorageStatus": {
+          "enum": ["ACCEPTED", "INVALID_JSON", "NUL", "INVALID_UNICODE", "NUMBER_OUT_OF_RANGE"]
         }
       },
       "required": [
@@ -343,9 +346,37 @@
       ],
       "additionalProperties": false
     },
+    "BilibiliFollowerFetchFailureV2": {
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "endpoint": { "type": "string" },
+        "statusCode": { "type": "integer", "exclusiveMinimum": 0, "maximum": 9007199254740991 },
+        "biliCode": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        "evidenceObject": { "$ref": "#/$defs/BilibiliFollowerFetchedSnapshotV2/properties/evidenceObject" }
+      },
+      "required": ["code", "message", "retryable"],
+      "additionalProperties": false
+    },
+    "BilibiliPlatformAccountFetchRequestV1": {
+      "type": "object",
+      "properties": {
+        "captureFailureEvidence": { "$ref": "#/$defs/BilibiliFollowerFetchRequestV2/properties/captureFailureEvidence" },
+        "httpConfiguration": { "$ref": "#/$defs/BilibiliFollowerFetchRequestV2/properties/httpConfiguration" },
+        "taskId": { "$ref": "#/$defs/BilibiliFollowerFetchRequestV2/properties/taskId" },
+        "attempt": { "$ref": "#/$defs/BilibiliFollowerFetchRequestV2/properties/attempt" },
+        "leaseId": { "$ref": "#/$defs/BilibiliFollowerFetchRequestV2/properties/leaseId" },
+        "mid": { "$ref": "#/$defs/JavaLongString" }
+      },
+      "required": ["taskId", "attempt", "leaseId", "mid"],
+      "additionalProperties": false
+    },
     "BilibiliFollowerFetchRequestV2": {
       "type": "object",
       "properties": {
+        "captureFailureEvidence": { "type": "boolean" },
         "httpConfiguration": {
           "type": "object",
           "properties": {

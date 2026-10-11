@@ -1,10 +1,10 @@
-import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import react from "@vitejs/plugin-react"
 import { chromium, type Browser, type Page } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { browserFixtureCacheDirectory } from "./__fixtures__/browser-fixture-cache"
 
 // Actual React/Query/Chromium events; only the typed bridge is synthetic.
 describe("original follower manual refresh interaction", () => {
@@ -20,7 +20,7 @@ describe("original follower manual refresh interaction", () => {
 
   beforeAll(async () => {
     server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
-      cacheDir: resolve("node_modules/.vite-follower-manual-refresh-test"), plugins: [react()],
+      cacheDir: browserFixtureCacheDirectory, plugins: [react()],
       server: { host: "127.0.0.1", port: 0 }, logLevel: "error" })
     await server.listen()
     const address = server.httpServer!.address()

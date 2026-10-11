@@ -26,18 +26,26 @@ describe("Bilibili danmaku packet codec", () => {
       uid: "123456789",
       token: "token-value",
       buvid: "buvid-value",
-      clientVersion: "1.14.3",
+      clientVersion: " version ",
       protocolVersion: 3
     })
     expect(auth.readUInt16BE(4)).toBe(16)
+    expect(auth.readUInt16BE(6)).toBe(1)
     expect(auth.readUInt32BE(8)).toBe(BILIBILI_DANMAKU_OPERATION.AUTH)
     expect(JSON.parse(auth.subarray(16).toString("utf8"))).toMatchObject({
       uid: 123456789,
       roomid: 7734200,
       protover: 3,
       key: "token-value",
-      buvid: "buvid-value"
+      buvid: "buvid-value",
+      clientver: " version "
     })
+    const body = (clientVersion: string | null) => JSON.parse(buildBilibiliDanmakuAuthPacket({
+      roomId: "33", token: "synthetic", protocolVersion: 2, clientVersion }).subarray(16).toString())
+    expect(body("\u001c\u3000").clientver).toBe("1.14.3")
+    expect(body("").clientver).toBe("1.14.3")
+    expect(body(null).clientver).toBe("1.14.3")
+    expect(body("\u00a0\ufeff").clientver).toBe("\u00a0\ufeff")
   })
 
   it.each([

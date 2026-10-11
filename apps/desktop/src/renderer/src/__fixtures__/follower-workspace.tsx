@@ -1,4 +1,4 @@
-import type { AddBilibiliFollowerMonitorInputV2, BilibiliFollowerCollectResultV2, BilibiliFollowerMonitorListV2, BilibiliFollowerMonitorV2, BilibiliFollowerPointV2, ListBilibiliFollowerMonitorsInput, QueryBilibiliFollowerTrendsInput, RefreshBilibiliFollowerMonitorInput, UpdateBilibiliFollowerMonitorSettingsInput } from "@bmd/contracts"
+import type { AddBilibiliFollowerMonitorInputV2, BilibiliFollowerCollectResultV2, BilibiliFollowerMonitorListV2, BilibiliFollowerMonitorV2, BilibiliFollowerPointV2, ListBilibiliFollowerMonitorsInput, QueryBilibiliFollowerTrendsInput, RefreshBilibiliFollowerMonitorInput, UpdateBilibiliFollowerMonitorSettingsInput, UpdateBilibiliFollowerMonitorStatusInput } from "@bmd/contracts"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useState } from "react"
 import { createRoot } from "react-dom/client"
@@ -87,10 +87,57 @@ const refreshFlow = {
     waiter.reject(new Error(message))
   }
 }
+type StatusPlan = { hold?: boolean; error?: string; resultPatch?: Partial<BilibiliFollowerMonitorV2>; listPatch?: Partial<BilibiliFollowerMonitorV2> }
+const statusWaiters = new Map<number, { resolve: () => void; reject: (error: Error) => void }>()
+const statusFlow = {
+  enabled: fixtureParameters.get("status-flow") === "1",
+  statusPlans: [] as StatusPlan[],
+  statusCalls: [] as { input: UpdateBilibiliFollowerMonitorStatusInput; phase: FixtureCallPhase }[],
+  releaseStatus: (index: number) => {
+    const waiter = statusWaiters.get(index)
+    if (!waiter) throw new Error(`No held status at index ${index}`)
+    waiter.resolve()
+  },
+  rejectStatus: (index: number, message: string) => {
+    const waiter = statusWaiters.get(index)
+    if (!waiter) throw new Error(`No held status at index ${index}`)
+    waiter.reject(new Error(message))
+  }
+}
+const deleteWaiters = new Map<number, { resolve: () => void; reject: (error: Error) => void }>()
+const deleteFlow = {
+  enabled: fixtureParameters.get("delete-flow") === "1",
+  plans: [] as { hold?: boolean; error?: string }[],
+  calls: [] as { userId: string; phase: FixtureCallPhase; deletedUser?: BilibiliFollowerMonitorV2 }[],
+  restore: (index: number) => {
+    const user = deleteFlow.calls[index]?.deletedUser
+    if (!user) throw new Error("Missing deleted synthetic user")
+    users = [structuredClone(user), ...users]
+  },
+  release: (index: number) => { const waiter = deleteWaiters.get(index); if (!waiter) throw new Error("Missing held delete"); waiter.resolve() },
+  reject: (index: number, message: string) => { const waiter = deleteWaiters.get(index); if (!waiter) throw new Error("Missing held delete"); waiter.reject(new Error(message)) }
+}
+async function controlledDelete(userId: string): Promise<{ deleted: true }> {
+  const plan = deleteFlow.plans.shift() ?? {}
+  const index = deleteFlow.calls.length
+  const record: (typeof deleteFlow.calls)[number] = { userId, phase: "pending" }
+  deleteFlow.calls.push(record)
+  try {
+    if (plan.hold) await new Promise<void>((resolve, reject) => { deleteWaiters.set(index, { resolve, reject }) })
+    if (plan.error) throw new Error(plan.error)
+    record.deletedUser = structuredClone(requireUser(userId))
+    users = users.filter(user => user.id !== userId)
+    record.phase = "fulfilled"
+    return { deleted: true }
+  } catch (error) { record.phase = "failed"; throw error }
+  finally { deleteWaiters.delete(index) }
+}
 const fixture = {
   addFlow,
   intervalFlow,
   refreshFlow,
+  statusFlow,
+  deleteFlow,
   actionError: "", readError: "", calls: [] as string[],
   legacyCalls: [] as string[], addRequests: [] as AddBilibiliFollowerMonitorInputV2[],
   holdRefresh: false,
@@ -112,6 +159,7 @@ const fixture = {
     users = users.map((user, position) => position === index ? { ...user, ...patch } : user)
   },
   listRequests: [] as ListBilibiliFollowerMonitorsInput[],
+  listPhases: [] as { phase: "LIST_START" | "LIST_SETTLED"; at: number; result?: "SUCCESS" | "ERROR" }[],
   expandList: () => {
     const first = users[0]!
     users = Array.from({ length: 505 }, (_, index) => ({ ...first,
@@ -216,25 +264,54 @@ async function controlledRefresh(input: RefreshBilibiliFollowerMonitorInput): Pr
     throw failure
   } finally { refreshWaiters.delete(index) }
 }
+async function controlledStatus(input: UpdateBilibiliFollowerMonitorStatusInput): Promise<BilibiliFollowerMonitorV2> {
+  const plan = statusFlow.statusPlans.shift() ?? {}
+  const index = statusFlow.statusCalls.length
+  const record: (typeof statusFlow.statusCalls)[number] = { input: structuredClone(input), phase: "pending" }
+  statusFlow.statusCalls.push(record)
+  try {
+    if (plan.hold) await new Promise<void>((resolve, reject) => { statusWaiters.set(index, { resolve, reject }) })
+    if (plan.error) throw new Error(plan.error)
+    const updated: BilibiliFollowerMonitorV2 = { ...requireUser(input.userId), monitorStatus: input.enabled ? "ACTIVE" : "PAUSED" }
+    users = users.map(user => user.id === input.userId ? { ...updated, ...plan.listPatch } : user)
+    record.phase = "fulfilled"
+    return { ...updated, ...plan.resultPatch }
+  } catch (failure) {
+    record.phase = "failed"
+    throw failure
+  } finally { statusWaiters.delete(index) }
+}
 bridge.bilibiliFollowers.list = async () => { fixture.legacyCalls.push("list"); throw new Error("Fixture requires the precision-safe v2 bridge") }
 bridge.bilibiliFollowers.add = async () => { fixture.legacyCalls.push("add"); throw new Error("Fixture requires the precision-safe v2 bridge") }
 bridge.bilibiliFollowers.trends = async () => { fixture.legacyCalls.push("trends"); throw new Error("Fixture requires the precision-safe v2 bridge") }
 bridge.bilibiliFollowersV2 = {
   list: async (input = {}) => {
+    const record = (phase: "LIST_START" | "LIST_SETTLED", result?: "SUCCESS" | "ERROR") => {
+      if (fixture.listPhases.length < 64) fixture.listPhases.push({ phase, at: performance.now(), ...(result ? { result } : {}) })
+    }
+    record("LIST_START")
+    try {
     fixture.calls.push("list")
     fixture.listRequests.push(input)
-    if (addFlow.enabled || intervalFlow.enabled || refreshFlow.enabled) return controlledList(input)
+    if (addFlow.enabled || intervalFlow.enabled || refreshFlow.enabled || statusFlow.enabled || deleteFlow.enabled) {
+      const result = await controlledList(input)
+      record("LIST_SETTLED", "SUCCESS")
+      return result
+    }
     if (fixture.readError) throw new Error(fixture.readError)
     if (fixture.holdList) {
       fixture.listWaiting = true
       await new Promise<void>(resolve => { fixture.releaseList = () => { fixture.holdList = false; resolve() } })
       fixture.listWaiting = false
     }
+    record("LIST_SETTLED", "SUCCESS")
     return { items: input.limit ? users.slice(0, input.limit) : users, total: users.length, snapshotAt: timestamp }
+    } catch (error) { record("LIST_SETTLED", "ERROR"); throw error }
   },
   add: async (input) => { fixture.addRequests.push(input); action("add"); return addFlow.enabled ? controlledAdd(input) : users[0]! },
   updateStatus: async ({ userId, enabled }) => {
     action("status")
+    if (statusFlow.enabled) return controlledStatus({ userId, enabled })
     users = users.map((user) => user.id === userId ? { ...user, monitorStatus: enabled ? "ACTIVE" : "PAUSED" } : user)
     return requireUser(userId)
   },
@@ -253,7 +330,7 @@ bridge.bilibiliFollowersV2 = {
     if (fixture.holdListAfterRefresh) fixture.holdList = true
     return { userId, mid: requireUser(userId).mid, success: true, followerCount: "100", capturedAt: timestamp, message: "ok" }
   },
-  remove: async ({ userId }) => { action("delete"); users = users.filter((user) => user.id !== userId); return { deleted: true } },
+  remove: async ({ userId }) => { action("delete"); if (deleteFlow.enabled) return controlledDelete(userId); users = users.filter((user) => user.id !== userId); return { deleted: true } },
   trend: async ({ userId }) => { const user = requireUser(userId); return { user, points: user.recentTrend } },
   trends: async (input) => {
     fixture.calls.push("trends")
@@ -261,7 +338,7 @@ bridge.bilibiliFollowersV2 = {
     fixture.trendStartedAt.push(performance.now())
     fixture.activeTrends++
     fixture.maxActiveTrends = Math.max(fixture.maxActiveTrends, fixture.activeTrends)
-    const failure = fixture.trendError || (addFlow.enabled || intervalFlow.enabled || refreshFlow.enabled ? "" : fixture.readError)
+    const failure = fixture.trendError || (addFlow.enabled || intervalFlow.enabled || refreshFlow.enabled || statusFlow.enabled || deleteFlow.enabled ? "" : fixture.readError)
     try {
       const result = (input.userIds ?? []).map(id => { const user = requireUser(id); return { user, points: fixture.history[user.mid] ?? user.recentTrend } })
       if (fixture.holdTrends) await new Promise<void>(resolve => { fixture.trendReleases.push(resolve) })
@@ -272,7 +349,7 @@ bridge.bilibiliFollowersV2 = {
 }
 // Opt-in add/settings tests reproduce the production default; the follower Query must
 // override retry itself to preserve the original single-read business flow.
-const client = new QueryClient({ defaultOptions: { queries: { retry: addFlow.enabled || intervalFlow.enabled || refreshFlow.enabled ? 1 : false, staleTime: 0 } } })
+const client = new QueryClient({ defaultOptions: { queries: { retry: addFlow.enabled || intervalFlow.enabled || refreshFlow.enabled || statusFlow.enabled || deleteFlow.enabled ? 1 : false, staleTime: 0 } } })
 function Fixture() {
   const [view, setView] = useState<"监控用户" | "趋势对比">("监控用户")
   const [creationOpen, setCreationOpen] = useState(false)

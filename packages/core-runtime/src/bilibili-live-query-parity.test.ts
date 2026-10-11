@@ -79,7 +79,7 @@ describe("original live room query semantics on actual SQLite", () => {
       onlineCount: 2104, capturedAt: f.state.fetchedAt, sourceEndpoint: "room/v1/Room/get_status_info_by_uids" })
     expect(f.database.findBilibiliLiveRoomSnapshots(room.id, { limit: 3000 })).toHaveLength(2005)
     expect(f.database.findBilibiliLiveRoomById(room.id)).toMatchObject({ monitorId: room.id,
-      uid: room.uid, roomId: room.roomId, onlineCount: 2104, lastSnapshotAt: f.state.fetchedAt,
+      uid: room.uid, roomId: room.roomId, onlineCount: 2104n, lastSnapshotAt: f.state.fetchedAt,
       lastSuccessAt: f.state.fetchedAt, sourceEndpoint: "room/v1/Room/get_status_info_by_uids" })
     const trend = f.service.trend({ roomMonitorId: room.id, limit: -1 })
     expect(trend.points).toHaveLength(500)

@@ -1,4 +1,4 @@
-import type { BilibiliLiveRoom, BilibiliLiveStatusEvent } from "@bmd/contracts"
+import type { BilibiliLiveRoomV2, BilibiliLiveStatusEventV2 } from "@bmd/contracts"
 import { formatLiveDateTime } from "./live-monitor-presentation"
 
 export function liveRelativeTime(value: string | undefined, now: number): string {
@@ -11,9 +11,9 @@ export function liveRelativeTime(value: string | undefined, now: number): string
   return formatLiveDateTime(value)
 }
 
-export function liveEventName(event: BilibiliLiveStatusEvent, rooms: readonly BilibiliLiveRoom[]): string {
+export function liveEventName(event: BilibiliLiveStatusEventV2, rooms: readonly BilibiliLiveRoomV2[]): string {
   const room = rooms.find(item => item.id === event.monitorId)
-  const labels: Record<BilibiliLiveStatusEvent["eventType"], string> = {
+  const labels: Record<BilibiliLiveStatusEventV2["eventType"], string> = {
     LIVE_STARTED: "开播", LIVE_ENDED: "下播", ROUND_STARTED: "开始轮播", TITLE_CHANGED: "标题变化",
     ERROR_OCCURRED: "采集异常", ERROR_RECOVERED: "异常恢复"
   }

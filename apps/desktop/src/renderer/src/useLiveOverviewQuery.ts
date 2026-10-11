@@ -8,7 +8,7 @@ export async function readLiveOverview(bridge: DesktopBridge, signal: AbortSigna
   // Original loadAll publishes nothing until all three reads have succeeded.
   // This is a single page projection, not a database transaction across the reads.
   const [roomList, summary, events] = await Promise.all([
-    bridge.bilibiliLive.list({}), bridge.bilibiliLive.summary(), bridge.bilibiliLive.events({ limit: 20 })
+    bridge.bilibiliLiveV2.list({}), bridge.bilibiliLiveV2.summary(), bridge.bilibiliLiveV2.events({ limit: 20 })
   ])
   signal.throwIfAborted()
   return { roomList, summary, events }

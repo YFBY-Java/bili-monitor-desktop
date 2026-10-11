@@ -1,8 +1,9 @@
 import type {
   AddBilibiliLiveRoomInput,
-  BilibiliLiveRoom,
-  BilibiliLiveRoomTrend,
+  BilibiliLiveRoomV2,
+  BilibiliLiveRoomTrendV2,
   BilibiliLiveRankSummary,
+  BilibiliLiveRankSummaryV2,
   BilibiliLiveDanmakuMetricBucket,
   BilibiliLiveDanmakuRecent,
   BilibiliLiveDanmakuStatus,
@@ -11,8 +12,8 @@ import type {
   BilibiliLiveSessionInsight,
   BilibiliLiveSessionSummary,
   BilibiliLiveSessionUser,
-  BilibiliLiveStatusEvent,
-  BilibiliLiveSummary,
+  BilibiliLiveStatusEventV2,
+  BilibiliLiveSummaryV2,
   DesktopBridge,
   QueryBilibiliLiveSessionEventsInput
 } from "@bmd/contracts"
@@ -37,8 +38,14 @@ import { BilibiliLiveTrendBoard } from "./BilibiliLiveTrendBoard"
 import { useLiveTrendQuery } from "./useLiveTrendQuery"
 import { useLiveOverviewQuery } from "./useLiveOverviewQuery"
 import { LiveOverviewSummary, LiveStatusEvents } from "./BilibiliLiveOverview"
+import { normalizeFollowerUidInput } from "./follower-uid-input"
+import { BilibiliLiveSessionPanel } from "./BilibiliLiveSessionPanel"
+import { BilibiliLiveAnalysis } from "./BilibiliLiveAnalysis"
+import { useLiveSessionPanel } from "./useLiveSessionPanel"
+import { SessionEventPagination } from "./SessionEventPagination"
+import { SearchableSelect } from "./SearchableSelect"
 
-const emptyLiveRooms: BilibiliLiveRoom[] = []
+const emptyLiveRooms: BilibiliLiveRoomV2[] = []
 
 export type BilibiliLiveView =
   | "直播间"
@@ -52,20 +59,28 @@ export type BilibiliLiveView =
 export type BilibiliLiveRoomAction = "refresh" | "toggle" | "interval" | "delete"
 
 export interface BilibiliLiveWorkspacePresentationProps {
-  renderRoomData?: (room: BilibiliLiveRoom) => ReactNode
+  renderRoomData?: (room: BilibiliLiveRoomV2) => ReactNode
   view: BilibiliLiveView
   creationOpen: boolean
-  rooms: BilibiliLiveRoom[]
+  rooms: BilibiliLiveRoomV2[]
   roomsRevision?: number
-  summary?: BilibiliLiveSummary
-  events: BilibiliLiveStatusEvent[]
-  trends: BilibiliLiveRoomTrend[]
-  rankSummary?: BilibiliLiveRankSummary
+  summary?: BilibiliLiveSummaryV2
+  events: BilibiliLiveStatusEventV2[]
+  trends: BilibiliLiveRoomTrendV2[]
+  rankSummary?: BilibiliLiveRankSummary | BilibiliLiveRankSummaryV2
   danmakuStatus?: BilibiliLiveDanmakuStatus
   danmakuRecent?: BilibiliLiveDanmakuRecent[]
   danmakuMetrics?: BilibiliLiveDanmakuMetricBucket[]
   sessions?: BilibiliLiveSessionSummary[]
   sessionUsers?: BilibiliLiveSessionUser[]
+  sessionDetail?: BilibiliLiveSessionSummary
+  sessionDetailLoading?: boolean
+  sessionDetailUnavailable?: boolean
+  sessionPanelError?: string
+  sessionRefreshSeconds?: number
+  onSessionRefresh?: () => void
+  onSessionRefreshSecondsChange?: (seconds: number) => void
+  onDismissSessionError?: () => void
   sessionEvents?: BilibiliLiveSessionEventPage
   sessionInsight?: BilibiliLiveSessionInsight
   sessionEventFilters?: QueryBilibiliLiveSessionEventsInput
@@ -75,9 +90,22 @@ export interface BilibiliLiveWorkspacePresentationProps {
   selectedSessionRoomId?: string
   selectedSessionId?: string
   insightBucketSeconds?: 60 | 300 | 900
+  insightError?: string
+  insightAutoRefresh?: boolean
+  insightRefreshSeconds?: number
+  onInsightRefresh?: () => void
+  onInsightAutoRefreshChange?: (enabled: boolean) => void
+  onInsightRefreshSecondsChange?: (seconds: number) => void
   rankPending?: boolean
   danmakuPending?: boolean
   sessionPending?: boolean
+  sessionEventsPending?: boolean
+  sessionUsersPending?: boolean
+  sessionEventsError?: string
+  sessionUsersError?: string
+  sessionEventsStale?: boolean
+  onRetrySessionEvents?: () => Promise<unknown>
+  onRetrySessionUsers?: () => Promise<unknown>
   exportPending?: boolean
   exportMessage?: string
   rankErrors?: string[]
@@ -92,10 +120,10 @@ export interface BilibiliLiveWorkspacePresentationProps {
   trendPending?: boolean
   trendError?: string
   onReloadTrends?: () => Promise<unknown>
-  onAdd: (input: AddBilibiliLiveRoomInput) => Promise<BilibiliLiveRoom | void>
+  onAdd: (input: AddBilibiliLiveRoomInput) => Promise<BilibiliLiveRoomV2 | void>
   onRoomAction: (
     action: BilibiliLiveRoomAction,
-    room: BilibiliLiveRoom,
+    room: BilibiliLiveRoomV2,
     intervalSeconds?: number,
     onCommitted?: () => void
   ) => Promise<boolean | void>
@@ -131,6 +159,14 @@ export function BilibiliLiveWorkspacePresentation({
   danmakuMetrics = [],
   sessions = [],
   sessionUsers = [],
+  sessionDetail,
+  sessionDetailLoading = false,
+  sessionDetailUnavailable = false,
+  sessionPanelError,
+  sessionRefreshSeconds = 10,
+  onSessionRefresh,
+  onSessionRefreshSecondsChange,
+  onDismissSessionError,
   sessionEvents,
   sessionInsight,
   sessionEventFilters,
@@ -140,9 +176,22 @@ export function BilibiliLiveWorkspacePresentation({
   selectedSessionRoomId,
   selectedSessionId,
   insightBucketSeconds = 300,
+  insightError,
+  insightAutoRefresh = false,
+  insightRefreshSeconds = 10,
+  onInsightRefresh = () => {},
+  onInsightAutoRefreshChange = () => {},
+  onInsightRefreshSecondsChange = () => {},
   rankPending = false,
   danmakuPending = false,
   sessionPending = false,
+  sessionEventsPending = false,
+  sessionUsersPending = false,
+  sessionEventsError,
+  sessionUsersError,
+  sessionEventsStale = false,
+  onRetrySessionEvents,
+  onRetrySessionUsers,
   exportPending = false,
   exportMessage,
   rankErrors = [],
@@ -181,9 +230,9 @@ export function BilibiliLiveWorkspacePresentation({
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault()
-    const value = identifier.trim()
+    const value = normalizeFollowerUidInput(identifier)
     const seconds = Number(interval)
-    if (!/^[1-9]\d*$/.test(value)) {
+    if (value === undefined) {
       setFormError(`请输入有效${addMode === "roomId" ? "房间号" : "UID"}。`)
       return
     }
@@ -332,19 +381,32 @@ export function BilibiliLiveWorkspacePresentation({
       )}
 
       {view === "直播场次" && (
-        <LiveSessionBoundaryView
+        <BilibiliLiveSessionPanel
           rooms={rooms}
           sessions={sessions}
+          users={sessionUsers}
+          detail={sessionDetail}
           selectedRoomId={selectedSessionRoomId}
           selectedSessionId={selectedSessionId}
-          pending={sessionPending}
+          loading={sessionPending}
+          detailLoading={sessionDetailLoading}
+          detailUnavailable={sessionDetailUnavailable}
+          errorMessage={sessionPanelError}
+          refreshSeconds={sessionRefreshSeconds}
+          exportPending={exportPending}
+          exportMessage={exportMessage}
           onRoomChange={onSessionRoomChange}
           onSessionChange={onSessionChange}
+          onRefresh={() => onSessionRefresh?.()}
+          onRefreshSecondsChange={seconds => onSessionRefreshSecondsChange?.(seconds)}
+          onDismissError={onDismissSessionError}
+          onExport={onSessionExport}
         />
       )}
 
       {view === "数据中心" && (
         <LiveSessionDataView
+          key={selectedSessionId ?? selectedSessionRoomId ?? "unselected"}
           rooms={rooms}
           sessions={sessions}
           users={sessionUsers}
@@ -353,6 +415,13 @@ export function BilibiliLiveWorkspacePresentation({
           selectedRoomId={selectedSessionRoomId}
           selectedSessionId={selectedSessionId}
           pending={sessionPending}
+          eventsPending={sessionEventsPending}
+          usersPending={sessionUsersPending}
+          eventsError={sessionEventsError}
+          usersError={sessionUsersError}
+          eventsStale={sessionEventsStale}
+          onRetryEvents={onRetrySessionEvents}
+          onRetryUsers={onRetrySessionUsers}
           exportPending={exportPending}
           exportMessage={exportMessage}
           onRoomChange={onSessionRoomChange}
@@ -363,14 +432,20 @@ export function BilibiliLiveWorkspacePresentation({
       )}
 
       {view === "场次分析" && (
-        <LiveSessionInsightView
+        <BilibiliLiveAnalysis
           rooms={rooms}
           sessions={sessions}
           insight={sessionInsight}
           selectedRoomId={selectedSessionRoomId}
           selectedSessionId={selectedSessionId}
           bucketSeconds={insightBucketSeconds}
-          pending={sessionPending}
+          loading={sessionPending}
+          errorMessage={insightError}
+          autoRefresh={insightAutoRefresh}
+          refreshSeconds={insightRefreshSeconds}
+          onRefresh={onInsightRefresh}
+          onAutoRefreshChange={onInsightAutoRefreshChange}
+          onRefreshSecondsChange={onInsightRefreshSecondsChange}
           onRoomChange={onSessionRoomChange}
           onSessionChange={onSessionChange}
           onBucketChange={onInsightBucketChange}
@@ -392,7 +467,7 @@ function LiveDanmakuView({
   onStart,
   onStop
 }: {
-  rooms: BilibiliLiveRoom[]
+  rooms: BilibiliLiveRoomV2[]
   status?: BilibiliLiveDanmakuStatus
   recent: BilibiliLiveDanmakuRecent[]
   metrics: BilibiliLiveDanmakuMetricBucket[]
@@ -408,7 +483,8 @@ function LiveDanmakuView({
   }
   const selected = rooms.find((room) => room.id === selectedRoomId) ?? rooms[0]
   if (!selected) return <LiveState title="尚无直播间" detail="请先添加真实直播间监控。" />
-  const connected = status?.running === true && status.status === "CONNECTED"
+  const running = status?.running === true
+  const connected = running && status?.status === "CONNECTED"
   return (
     <section className="live-danmaku-panel" aria-label="实时弹幕监听">
       <header className="live-danmaku-header">
@@ -439,7 +515,7 @@ function LiveDanmakuView({
               <option value={0}>protover=0</option>
             </select>
           </label>
-          {connected
+          {running
             ? (
                 <button
                   type="button"
@@ -533,8 +609,8 @@ function LiveRankView({
   onRoomChange,
   onRefresh
 }: {
-  rooms: BilibiliLiveRoom[]
-  summary?: BilibiliLiveRankSummary
+  rooms: BilibiliLiveRoomV2[]
+  summary?: BilibiliLiveRankSummary | BilibiliLiveRankSummaryV2
   selectedRoomId?: string
   pending: boolean
   errors: string[]
@@ -606,7 +682,7 @@ function LiveRankView({
                               <strong>{entry.displayName ?? "未公开昵称"}</strong>
                               <small>{entry.userUid ? `UID ${entry.userUid}` : "UID 未解析"}{entry.medalName ? ` · ${entry.medalName} ${entry.medalLevel ?? ""}` : ""}</small>
                             </span>
-                            <em>{entry.score !== undefined ? entry.score.toLocaleString("zh-CN") : entry.accompanyDays !== undefined ? `${entry.accompanyDays} 天` : entry.guardLevel !== undefined ? `Lv.${entry.guardLevel}` : "—"}</em>
+                            <em>{entry.score !== undefined ? formatCount(entry.score) : entry.accompanyDays !== undefined ? `${entry.accompanyDays} 天` : entry.guardLevel !== undefined ? `Lv.${entry.guardLevel}` : "—"}</em>
                           </div>
                         ))}
                       </div>}
@@ -614,85 +690,6 @@ function LiveRankView({
                 </article>
               ))}
             </div>}
-    </section>
-  )
-}
-
-function LiveSessionBoundaryView({
-  rooms,
-  sessions,
-  selectedRoomId,
-  selectedSessionId,
-  pending,
-  onRoomChange,
-  onSessionChange
-}: {
-  rooms: BilibiliLiveRoom[]
-  sessions: BilibiliLiveSessionSummary[]
-  selectedRoomId?: string
-  selectedSessionId?: string
-  pending: boolean
-  onRoomChange?: (roomMonitorId: string) => void
-  onSessionChange?: (sessionId: string) => void
-}): JSX.Element {
-  if (rooms.length === 0) {
-    return <LiveState title="尚无直播场次来源" detail="请先添加直播间；场次只会来自真实 REST 状态和 WebSocket 边界。" />
-  }
-  const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? rooms[0]
-  if (!selectedRoom) return <LiveState title="尚无直播间" detail="请先添加真实直播间监控。" />
-  return (
-    <section className="live-session-panel" aria-label="直播场次边界">
-      <header className="live-session-header">
-        <div>
-          <span>ORIGINAL LIVE SESSION BOUNDARY</span>
-          <h2>直播场次边界</h2>
-          <p>REST 状态负责确认开播与下播，PREPARING 只进入待确认；历史状态事件会回填为边界场次。</p>
-        </div>
-        <SessionSelectors
-          rooms={rooms}
-          sessions={sessions}
-          selectedRoomId={selectedRoom.id}
-          selectedSessionId={selectedSessionId}
-          onRoomChange={onRoomChange}
-          onSessionChange={onSessionChange}
-          showSession={false}
-        />
-      </header>
-      {pending
-        ? <LiveState title="正在读取直播场次" detail="从 SQLite v10 查询场次边界和在线采集覆盖。" />
-        : sessions.length === 0
-          ? <LiveState title="暂无直播场次" detail="直播状态变化或在线弹幕事实出现后，Local Core 才会创建真实场次。" />
-          : (
-              <div className="live-session-list">
-                {sessions.map((session) => (
-                  <button
-                    type="button"
-                    key={session.id}
-                    className={session.id === selectedSessionId ? "is-selected" : ""}
-                    onClick={() => onSessionChange?.(session.id)}
-                  >
-                    <div className="live-session-card-title">
-                      <span className={`session-state state-${session.state.toLowerCase()}`}>
-                        {sessionStateLabel(session.state)}
-                      </span>
-                      <strong>{formatTime(session.startedAt)}</strong>
-                      <em>{coverageLabel(session.coverageStatus)}</em>
-                    </div>
-                    <p>{formatTime(session.startedAt)} → {session.endedAt ? formatTime(session.endedAt) : "仍在进行"}</p>
-                    <div className="live-session-card-metrics">
-                      <span><small>弹幕</small><strong>{formatNullableCount(session.danmakuCount)}</strong></span>
-                      <span><small>礼物事件</small><strong>{formatNullableCount(session.giftEventCount)}</strong></span>
-                      <span><small>付费用户</small><strong>{formatNullableCount(session.paidUserCount)}</strong></span>
-                      <span><small>付费金额</small><strong>{formatMilliYuan(session.paidAmountMilliYuan)}</strong></span>
-                    </div>
-                    <footer>
-                      <span>{session.startSource}</span>
-                      <span>{session.transportSessionCount} 个 WebSocket 传输会话</span>
-                    </footer>
-                  </button>
-                ))}
-              </div>
-            )}
     </section>
   )
 }
@@ -706,6 +703,13 @@ function LiveSessionDataView({
   selectedRoomId,
   selectedSessionId,
   pending,
+  eventsPending,
+  usersPending,
+  eventsError,
+  usersError,
+  eventsStale,
+  onRetryEvents,
+  onRetryUsers,
   exportPending,
   exportMessage,
   onRoomChange,
@@ -713,7 +717,7 @@ function LiveSessionDataView({
   onFiltersChange,
   onExport
 }: {
-  rooms: BilibiliLiveRoom[]
+  rooms: BilibiliLiveRoomV2[]
   sessions: BilibiliLiveSessionSummary[]
   users: BilibiliLiveSessionUser[]
   events?: BilibiliLiveSessionEventPage
@@ -721,6 +725,13 @@ function LiveSessionDataView({
   selectedRoomId?: string
   selectedSessionId?: string
   pending: boolean
+  eventsPending: boolean
+  usersPending: boolean
+  eventsError?: string
+  usersError?: string
+  eventsStale: boolean
+  onRetryEvents?: () => Promise<unknown>
+  onRetryUsers?: () => Promise<unknown>
   exportPending: boolean
   exportMessage?: string
   onRoomChange?: (roomMonitorId: string) => void
@@ -728,6 +739,14 @@ function LiveSessionDataView({
   onFiltersChange?: (filters: QueryBilibiliLiveSessionEventsInput) => void
   onExport?: (sessionId: string, category: BilibiliLiveSessionExportCategory) => Promise<void>
 }): JSX.Element {
+  const initialFilters = filters?.sessionId === selectedSessionId ? filters : undefined
+  const [draft, setDraft] = useState(() => ({
+    kind: initialFilters?.kind ?? "",
+    keyword: initialFilters?.keyword ?? "",
+    userUid: initialFilters?.userUid ?? "",
+    paid: initialFilters?.paid === undefined ? "" : String(initialFilters.paid)
+  }))
+  const [filterError, setFilterError] = useState<string>()
   if (rooms.length === 0) {
     return <LiveState title="数据中心暂无来源" detail="请先添加直播间并形成真实直播场次。" />
   }
@@ -743,6 +762,24 @@ function LiveSessionDataView({
     ...(filters?.userUid ? { userUid: filters.userUid } : {}),
     ...(filters?.paid === undefined ? {} : { paid: filters.paid })
   }
+  const applyFilters = (event: FormEvent): void => {
+    event.preventDefault()
+    if (!sessionId) return
+    const userUid = draft.userUid.trim() ? normalizeFollowerUidInput(draft.userUid) : undefined
+    if (draft.userUid.trim() && !userUid) {
+      setFilterError("请输入有效的正整数 UID，不支持小数或越界值。")
+      return
+    }
+    setFilterError(undefined)
+    onFiltersChange?.({
+      sessionId, page: 1, size: currentFilters.size,
+      ...(draft.kind ? { kind: draft.kind as QueryBilibiliLiveSessionEventsInput["kind"] } : {}),
+      ...(draft.keyword.trim() ? { keyword: draft.keyword.trim() } : {}),
+      ...(userUid ? { userUid } : {}),
+      ...(draft.paid === "" ? {} : { paid: draft.paid === "true" })
+    })
+  }
+  const selectedSession = sessions.find(session => session.id === sessionId)
   return (
     <section className="live-data-panel" aria-label="直播场次数据中心">
       <header className="live-session-header">
@@ -760,7 +797,9 @@ function LiveSessionDataView({
           onSessionChange={onSessionChange}
         />
       </header>
-      {!sessionId
+      {pending
+        ? <LiveState title="正在读取直播场次" detail="读取本地场次与在线采集覆盖。" />
+        : !sessionId
         ? <LiveState title="暂无可查询场次" detail="场次形成后才能筛选事件、聚合用户和导出。" />
         : (
             <>
@@ -783,17 +822,20 @@ function LiveSessionDataView({
                 </div>
                 <span>{exportMessage ?? "导出 schema v2 · 默认保存到 D 盘本地数据目录"}</span>
               </div>
-              <div className="live-event-filters">
+              {selectedSession && <section className="live-session-quality" aria-label="场次数据质量">
+                <div>
+                  <article><span>覆盖状态</span><strong>{coverageLabel(selectedSession.coverageStatus)}</strong></article>
+                  <article><span>传输连接</span><strong>{selectedSession.transportSessionCount} 个</strong></article>
+                  <article><span>未解析互动事件</span><strong>{formatNullableCount(selectedSession.unresolvedInteractingEventCount)}</strong></article>
+                  <article><span>未解析付费事件</span><strong>{formatNullableCount(selectedSession.unresolvedPaidEventCount)}</strong></article>
+                </div>
+                <p>{sessionCoverageCaveat(selectedSession.coverageStatus)}</p>
+              </section>}
+              <form className="live-event-filters" onSubmit={applyFilters} aria-label="事件筛选">
                 <label>事件类型
                   <select
-                    value={currentFilters.kind ?? ""}
-                    onChange={(event) => onFiltersChange?.({
-                      ...currentFilters,
-                      page: 1,
-                      ...(event.target.value
-                        ? { kind: event.target.value as QueryBilibiliLiveSessionEventsInput["kind"] }
-                        : { kind: undefined })
-                    })}
+                    value={draft.kind}
+                    onChange={event => setDraft(value => ({ ...value, kind: event.target.value }))}
                   >
                     <option value="">全部事件</option>
                     <option value="DANMAKU">弹幕</option>
@@ -804,215 +846,87 @@ function LiveSessionDataView({
                 </label>
                 <label>关键词
                   <input
-                    value={currentFilters.keyword ?? ""}
-                    placeholder="消息、昵称、勋章或礼物"
-                    onChange={(event) => onFiltersChange?.({
-                      ...currentFilters,
-                      page: 1,
-                      keyword: event.target.value || undefined
-                    })}
+                    value={draft.keyword}
+                    maxLength={100}
+                    placeholder="昵称、弹幕或礼物关键词"
+                    onChange={event => setDraft(value => ({ ...value, keyword: event.target.value }))}
                   />
                 </label>
                 <label>用户 UID
                   <input
-                    value={currentFilters.userUid ?? ""}
+                    value={draft.userUid}
                     inputMode="numeric"
                     placeholder="精确 UID"
-                    onChange={(event) => onFiltersChange?.({
-                      ...currentFilters,
-                      page: 1,
-                      userUid: event.target.value || undefined
-                    })}
+                    aria-invalid={Boolean(filterError)}
+                    onChange={event => { setFilterError(undefined); setDraft(value => ({ ...value, userUid: event.target.value })) }}
                   />
                 </label>
                 <label>付费
                   <select
-                    value={currentFilters.paid === undefined ? "" : String(currentFilters.paid)}
-                    onChange={(event) => onFiltersChange?.({
-                      ...currentFilters,
-                      page: 1,
-                      paid: event.target.value === "" ? undefined : event.target.value === "true"
-                    })}
+                    value={draft.paid}
+                    onChange={event => setDraft(value => ({ ...value, paid: event.target.value }))}
                   >
                     <option value="">全部</option>
                     <option value="true">仅付费</option>
                     <option value="false">仅非付费</option>
                   </select>
                 </label>
-              </div>
-              {pending
-                ? <LiveState title="正在查询场次数据" detail="读取 SQLite 中的事件事实和用户聚合。" />
-                : (
+                <button type="submit" className="button button-secondary">筛选</button>
+              </form>
+              {filterError && <p className="inline-error" role="alert">{filterError}</p>}
                     <div className="live-data-grid">
                       <section className="live-session-events-table">
-                        <header><strong>事件明细</strong><span>{events?.total ?? 0} 条</span></header>
-                        {!events || events.items.length === 0
+                        <header><strong>事件明细</strong><span>{events ? `${events.total} 条` : "—"}</span></header>
+                        {eventsPending && <p className="live-query-notice" role="status">正在查询事件；已有结果保留。</p>}
+                        {eventsError && <div className="live-query-notice" role="alert">
+                          <span>{eventsError}{events ? "；保留上次成功结果。" : "；尚未取得查询结果。"}</span>
+                          <button type="button" disabled={eventsPending} onClick={() => void onRetryEvents?.()}>重试事件查询</button>
+                        </div>}
+                        {eventsStale && events && <p className="live-query-notice" role="status">当前显示上次成功结果，本次查询尚未成功。</p>}
+                        {events?.items.length === 0
                           ? <p className="live-table-empty">当前筛选条件没有已保存事件。</p>
-                          : events.items.map((event) => (
+                          : events?.items.map((event) => (
                               <article key={event.id}>
                                 <span>{sessionEventKindLabel(event.eventKind)}</span>
                                 <div>
                                   <strong>{event.senderName ?? "身份未解析"}</strong>
                                   <small>{event.senderUid ? `UID ${event.senderUid}` : "UID 未解析"}</small>
                                 </div>
-                                <p>{event.messageText ?? event.giftName ?? event.command ?? event.eventKind}</p>
-                                <em>{event.paidAmountMilliYuan ? formatMilliYuan(event.paidAmountMilliYuan) : "—"}</em>
+                                <p><span>{event.messageText ?? event.giftName ?? event.command ?? event.eventKind}</span>
+                                  <small>数量 {event.giftCount ?? "—"}</small>
+                                </p>
+                                <em>{formatMilliYuan(event.paidAmountMilliYuan)}</em>
                                 <time>{formatTime(event.occurredAt)}</time>
                               </article>
                             ))}
-                        <footer>
-                          <button
-                            type="button"
-                            disabled={(events?.page ?? 1) <= 1}
-                            onClick={() => onFiltersChange?.({ ...currentFilters, page: Math.max(1, (events?.page ?? 1) - 1) })}
-                          >上一页</button>
-                          <span>第 {events?.page ?? 1} 页</span>
-                          <button
-                            type="button"
-                            disabled={!events || events.page * events.size >= events.total}
-                            onClick={() => onFiltersChange?.({ ...currentFilters, page: (events?.page ?? 1) + 1 })}
-                          >下一页</button>
-                        </footer>
+                        <SessionEventPagination result={events} pending={eventsPending} size={currentFilters.size ?? 50}
+                          onPageChange={page => onFiltersChange?.({ ...currentFilters, page })}
+                          onSizeChange={size => onFiltersChange?.({ ...currentFilters, page: 1, size })} />
                       </section>
                       <aside className="live-session-users-table">
-                        <header><strong>用户聚合</strong><span>前 {users.length} 条</span></header>
-                        {users.length === 0
+                        <header><strong>用户聚合</strong><span>{users.length === 0 && (usersPending || usersError) ? "尚未取得结果" : `前 ${users.length} 条 · 最多 500 条`}</span></header>
+                        {usersPending && <p className="live-query-notice" role="status">正在查询用户；已有结果保留。</p>}
+                        {usersError && <div className="live-query-notice" role="alert">
+                          <span>{usersError}{users.length ? "；保留上次成功结果。" : "；尚未取得查询结果。"}</span>
+                          <button type="button" disabled={usersPending} onClick={() => void onRetryUsers?.()}>重试用户查询</button>
+                        </div>}
+                        {users.length === 0 && !usersPending && !usersError
                           ? <p className="live-table-empty">暂无可聚合用户事实。</p>
                           : users.map((user) => (
                               <article key={user.actorKey}>
                                 <div><strong>{user.displayName ?? "身份未解析"}</strong><small>{user.userUid ? `UID ${user.userUid}` : "未解析事件"}</small></div>
-                                <span>弹幕 {user.danmakuCount}</span>
-                                <span>礼物 {user.giftCount}</span>
+                                <div className="live-user-event-counts">
+                                  <span>弹幕 {user.danmakuCount}</span>
+                                  <span>礼物事件 {user.giftEventCount}</span>
+                                  <span>付费事件 {user.paidEventCount}</span>
+                                </div>
                                 <em>{formatMilliYuan(user.paidAmountMilliYuan)}</em>
                               </article>
                             ))}
                       </aside>
                     </div>
-                  )}
             </>
           )}
-    </section>
-  )
-}
-
-function LiveSessionInsightView({
-  rooms,
-  sessions,
-  insight,
-  selectedRoomId,
-  selectedSessionId,
-  bucketSeconds,
-  pending,
-  onRoomChange,
-  onSessionChange,
-  onBucketChange
-}: {
-  rooms: BilibiliLiveRoom[]
-  sessions: BilibiliLiveSessionSummary[]
-  insight?: BilibiliLiveSessionInsight
-  selectedRoomId?: string
-  selectedSessionId?: string
-  bucketSeconds: 60 | 300 | 900
-  pending: boolean
-  onRoomChange?: (roomMonitorId: string) => void
-  onSessionChange?: (sessionId: string) => void
-  onBucketChange?: (bucketSeconds: 60 | 300 | 900) => void
-}): JSX.Element {
-  if (rooms.length === 0) return <LiveState title="暂无分析来源" detail="请先形成真实直播场次。" />
-  const roomId = selectedRoomId ?? rooms[0]?.id
-  const sessionId = selectedSessionId ?? sessions[0]?.id
-  if (!roomId) return <LiveState title="尚无直播间" detail="请先添加真实直播间监控。" />
-  return (
-    <section className="live-insight-panel" aria-label="直播场次分析">
-      <header className="live-session-header">
-        <div>
-          <span>ORIGINAL SESSION INSIGHTS</span>
-          <h2>场次分析</h2>
-          <p>互动、付费、参与深度和历史复购均按原项目规则从本地事实计算。</p>
-        </div>
-        <div className="live-insight-selectors">
-          <SessionSelectors
-            rooms={rooms}
-            sessions={sessions}
-            selectedRoomId={roomId}
-            selectedSessionId={sessionId}
-            onRoomChange={onRoomChange}
-            onSessionChange={onSessionChange}
-          />
-          <label>时间桶
-            <select value={bucketSeconds} onChange={(event) => onBucketChange?.(Number(event.target.value) as 60 | 300 | 900)}>
-              <option value={60}>1 分钟</option>
-              <option value={300}>5 分钟</option>
-              <option value={900}>15 分钟</option>
-            </select>
-          </label>
-        </div>
-      </header>
-      {!sessionId
-        ? <LiveState title="暂无可分析场次" detail="场次形成后才会计算洞察。" />
-        : pending
-          ? <LiveState title="正在计算场次分析" detail="从本地事件事实按当前时间桶重新聚合。" />
-          : !insight
-            ? <LiveState title="暂无场次分析" detail="当前场次没有可计算的受支持事件。" />
-            : (
-                <>
-                  <div className="live-insight-kpis">
-                    <span><small>每分钟弹幕</small><strong>{formatNullableNumber(insight.kpis.danmakuPerMinute)}</strong></span>
-                    <span><small>付费转化率</small><strong>{formatRate(insight.kpis.payerConversionRate)}</strong></span>
-                    <span><small>ARPPU</small><strong>{formatMilliYuan(insight.kpis.arppuMilliYuan)}</strong></span>
-                    <span><small>付费金额</small><strong>{formatMilliYuan(insight.kpis.paidAmountMilliYuan)}</strong></span>
-                    <span><small>Top 5 收入占比</small><strong>{formatRate(insight.kpis.topFiveRevenueShare)}</strong></span>
-                  </div>
-                  <div className="live-insight-grid">
-                    <section className="live-insight-timeline">
-                      <header><strong>时间线</strong><span>{insight.bucketSeconds / 60} 分钟桶</span></header>
-                      {insight.timeline.length === 0
-                        ? <p className="live-table-empty">暂无时间桶数据。</p>
-                        : insight.timeline.map((bucket) => (
-                            <article key={bucket.bucketStart}>
-                              <time>{new Date(bucket.bucketStart).toLocaleTimeString("zh-CN", { hour12: false })}</time>
-                              <span>弹幕 {bucket.danmakuCount}</span>
-                              <span>活跃用户 {bucket.activeUserCount}</span>
-                              <span>付费 {formatMilliYuan(bucket.paidAmountMilliYuan)}</span>
-                            </article>
-                          ))}
-                    </section>
-                    <aside className="live-insight-findings">
-                      <header><strong>规则洞察</strong><span>{insight.findings.length} 条</span></header>
-                      {insight.findings.map((finding) => (
-                        <article key={finding.code} className={`finding-${finding.level.toLowerCase()}`}>
-                          <span>{finding.level}</span>
-                          <strong>{finding.title}</strong>
-                          <p>{finding.description}</p>
-                        </article>
-                      ))}
-                    </aside>
-                  </div>
-                  <div className="live-insight-depth-grid">
-                    <section>
-                      <header><strong>互动深度</strong></header>
-                      <p>已识别弹幕用户 <b>{formatNullableCount(insight.danmakuDepth.identifiedDanmakuUserCount)}</b></p>
-                      <p>重复互动率 <b>{formatRate(insight.danmakuDepth.repeatInteractionRate)}</b></p>
-                      <p>持续参与率 <b>{formatRate(insight.danmakuDepth.sustainedParticipationRate)}</b></p>
-                      <p>重复消息率 <b>{formatRate(insight.danmakuDepth.duplicateMessageRate)}</b></p>
-                    </section>
-                    <section>
-                      <header><strong>付费深度</strong></header>
-                      <p>付费用户 <b>{formatNullableCount(insight.paymentDepth.payerCount)}</b></p>
-                      <p>场内复购率 <b>{formatRate(insight.paymentDepth.repeatPayerRate)}</b></p>
-                      <p>历史复购率 <b>{formatRate(insight.paymentDepth.returningPayerRate)}</b></p>
-                      <p>Top 1 收入占比 <b>{formatRate(insight.paymentDepth.topOneRevenueShare)}</b></p>
-                    </section>
-                    <section>
-                      <header><strong>数据质量</strong></header>
-                      <p>覆盖 <b>{coverageLabel(insight.quality.coverageStatus)}</b></p>
-                      <p>覆盖秒数 <b>{insight.quality.coveredSeconds.toLocaleString("zh-CN")}</b></p>
-                      <p>身份解析率 <b>{formatRate(insight.quality.identityResolvedEventShare)}</b></p>
-                      <small>{insight.quality.caveat}</small>
-                    </section>
-                  </div>
-                </>
-              )}
     </section>
   )
 }
@@ -1026,7 +940,7 @@ function SessionSelectors({
   onSessionChange,
   showSession = true
 }: {
-  rooms: BilibiliLiveRoom[]
+  rooms: BilibiliLiveRoomV2[]
   sessions: BilibiliLiveSessionSummary[]
   selectedRoomId: string
   selectedSessionId?: string
@@ -1037,20 +951,17 @@ function SessionSelectors({
   return (
     <div className="live-session-selectors">
       <label>直播间
-        <select value={selectedRoomId} onChange={(event) => onRoomChange?.(event.target.value)}>
-          {rooms.map((room) => <option key={room.id} value={room.id}>{room.uname} · {room.roomId}</option>)}
-        </select>
+        <SearchableSelect label="直播间" value={selectedRoomId} placeholder="选择直播间"
+          onChange={value => onRoomChange?.(value)}
+          options={rooms.map(room => ({ value: room.id, label: `${room.uname || "未知主播"} · 房间 ${room.roomId}` }))} />
       </label>
       {showSession && (
         <label>直播场次
-          <select value={selectedSessionId ?? ""} onChange={(event) => onSessionChange?.(event.target.value)}>
-            {sessions.length === 0 && <option value="">暂无场次</option>}
-            {sessions.map((session) => (
-              <option key={session.id} value={session.id}>
-                {formatTime(session.startedAt)} · {sessionStateLabel(session.state)}
-              </option>
-            ))}
-          </select>
+          <SearchableSelect label="直播场次" value={selectedSessionId ?? ""} placeholder="选择场次"
+            disabled={sessions.length === 0} onChange={value => onSessionChange?.(value)}
+            options={sessions.length === 0 ? [{ value: "", label: "暂无场次" }]
+              : sessions.map(session => ({ value: session.id,
+                  label: `#${session.id} · ${formatTime(session.startedAt)} · ${sessionStateLabel(session.state)}` }))} />
         </label>
       )}
     </div>
@@ -1062,13 +973,13 @@ function LiveState({ title, detail }: { title: string; detail: string }): JSX.El
 }
 
 function useLastSuccessfulLiveTrends(
-  rooms: BilibiliLiveRoom[],
-  data: BilibiliLiveRoomTrend[] | undefined,
+  rooms: BilibiliLiveRoomV2[],
+  data: BilibiliLiveRoomTrendV2[] | undefined,
   updatedAt: number
-): BilibiliLiveRoomTrend[] {
+): BilibiliLiveRoomTrendV2[] {
   // View-only stale snapshots, bounded by the monitored rooms. A changed selection
   // has a different Query key, but must not erase successfully loaded room curves.
-  const [saved, setSaved] = useState(() => new Map<string, { trend: BilibiliLiveRoomTrend; updatedAt: number }>())
+  const [saved, setSaved] = useState(() => new Map<string, { trend: BilibiliLiveRoomTrendV2; updatedAt: number }>())
   useEffect(() => {
     const roomIds = new Set(rooms.map((room) => room.id))
     setSaved((previous) => {
@@ -1120,6 +1031,8 @@ export function ConnectedBilibiliLiveWorkspace({
     size: 50
   })
   const [insightBucketSeconds, setInsightBucketSeconds] = useState<60 | 300 | 900>(300)
+  const [insightAutoRefresh, setInsightAutoRefresh] = useState(false)
+  const [insightRefreshSeconds, setInsightRefreshSeconds] = useState(10)
   const [exportMessage, setExportMessage] = useState<string>()
   const [rankErrors, setRankErrors] = useState<string[]>([])
   const overviewQuery = useLiveOverviewQuery(bridge)
@@ -1131,10 +1044,10 @@ export function ConnectedBilibiliLiveWorkspace({
   const trendsQuery = useLiveTrendQuery(bridge, rooms, overviewQuery.dataUpdatedAt, validSelection, deletedRoomIds.current)
   const lastSuccessfulTrends = useLastSuccessfulLiveTrends(rooms, trendsQuery.data, trendsQuery.dataUpdatedAt)
   const rankQuery = useQuery({
-    queryKey: ["bilibili-live", "rank", selectedRankRoomId],
+    queryKey: ["bilibili-live", "rank.v2", selectedRankRoomId],
     queryFn: () => {
       if (!selectedRankRoomId) throw new Error("尚未选择直播间。")
-      return bridge.bilibiliLive.rankSummary({ roomMonitorId: selectedRankRoomId })
+      return bridge.bilibiliLiveRankV2.summary({ roomMonitorId: selectedRankRoomId })
     },
     enabled: view === "观众榜单" && selectedRankRoomId !== undefined,
     refetchInterval: view === "观众榜单" ? 30_000 : false
@@ -1166,8 +1079,9 @@ export function ConnectedBilibiliLiveWorkspace({
     enabled: view === "实时弹幕" && selectedDanmakuRoomId !== undefined,
     refetchInterval: view === "实时弹幕" ? 2_000 : false
   })
-  const sessionView = view === "直播场次" || view === "数据中心" || view === "场次分析"
-  const sessionLimit = view === "直播场次" ? 20 : 200
+  const sessionPanel = useLiveSessionPanel(bridge, view === "直播场次", selectedSessionRoomId, selectedSessionId, setSelectedSessionId)
+  const sessionView = view === "数据中心" || view === "场次分析"
+  const sessionLimit = 200
   const sessionsQuery = useQuery({
     queryKey: ["bilibili-live", "sessions", selectedSessionRoomId, sessionLimit],
     queryFn: () => {
@@ -1175,7 +1089,8 @@ export function ConnectedBilibiliLiveWorkspace({
       return bridge.bilibiliLive.sessions({ roomMonitorId: selectedSessionRoomId, limit: sessionLimit })
     },
     enabled: sessionView && selectedSessionRoomId !== undefined,
-    refetchInterval: sessionView ? 10_000 : false
+    refetchInterval: view === "数据中心" ? 10_000 : false,
+    refetchOnWindowFocus: view === "数据中心"
   })
   const sessionUsersQuery = useQuery({
     queryKey: ["bilibili-live", "session-users", selectedSessionId],
@@ -1188,34 +1103,68 @@ export function ConnectedBilibiliLiveWorkspace({
   })
   const sessionEventsQuery = useQuery({
     queryKey: ["bilibili-live", "session-events", sessionEventFilters],
-    queryFn: () => bridge.bilibiliLive.sessionEvents(sessionEventFilters),
+    queryFn: async ({ signal }) => {
+      const result = await bridge.bilibiliLive.sessionEvents(sessionEventFilters)
+      // A bounded page projection, scoped to its session, survives a new filter's failure.
+      if (!signal.aborted) queryClient.setQueryData(["bilibili-live", "session-events-success", sessionEventFilters.sessionId], {
+        filters: sessionEventFilters, page: result
+      })
+      return result
+    },
+    staleTime: 0,
     enabled: view === "数据中心" && selectedSessionId !== undefined
       && sessionEventFilters.sessionId === selectedSessionId,
     refetchInterval: view === "数据中心" ? 10_000 : false
   })
+  const successfulSessionEventsQuery = useQuery<{
+    filters: QueryBilibiliLiveSessionEventsInput
+    page: BilibiliLiveSessionEventPage
+  }>({
+    queryKey: ["bilibili-live", "session-events-success", selectedSessionId],
+    enabled: false
+  })
   const sessionInsightQuery = useQuery({
     queryKey: ["bilibili-live", "session-insight", selectedSessionId, insightBucketSeconds],
-    queryFn: () => {
+    queryFn: async ({ signal }) => {
       if (!selectedSessionId) throw new Error("尚未选择直播场次。")
-      return bridge.bilibiliLive.sessionInsight({
+      const result = await bridge.bilibiliLive.sessionInsight({
         sessionId: selectedSessionId,
         bucketSeconds: insightBucketSeconds
       })
+      signal.throwIfAborted()
+      queryClient.setQueryData(["bilibili-live", "session-insight-success", selectedSessionId], result)
+      return result
     },
+    retry: false,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
     enabled: view === "场次分析" && selectedSessionId !== undefined,
-    refetchInterval: view === "场次分析" ? 10_000 : false
+    refetchInterval: false
   })
+  const successfulSessionInsightQuery = useQuery<BilibiliLiveSessionInsight>({
+    queryKey: ["bilibili-live", "session-insight-success", selectedSessionId],
+    enabled: false
+  })
+  const refreshInsight = sessionInsightQuery.refetch
+  const insightFetching = sessionInsightQuery.isFetching
+  useEffect(() => {
+    if (view !== "场次分析" || !insightAutoRefresh || !selectedSessionId || insightFetching) return
+    // Like the original fixed-delay loop: the next delay starts after the request settles.
+    const timer = setTimeout(() => { void refreshInsight({ cancelRefetch: false }) }, insightRefreshSeconds * 1_000)
+    return () => clearTimeout(timer)
+  }, [view, insightAutoRefresh, selectedSessionId, insightBucketSeconds, insightFetching, insightRefreshSeconds, refreshInsight])
   const refreshQueries = async (): Promise<void> => {
     const result = await overviewQuery.reload()
     if (!result.isSuccess || result.isFetching) return
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["bilibili-live", "rank"] }),
+      queryClient.invalidateQueries({ queryKey: ["bilibili-live", "rank.v2"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "danmaku"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "sessions"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "session-users"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "session-events"] }),
       queryClient.invalidateQueries({ queryKey: ["bilibili-live", "session-insight"] })
     ])
+    if (view === "直播场次") await sessionPanel.refreshNow()
   }
   const mutation = useMutation({
     mutationFn: async (operation: () => Promise<unknown>) => operation(),
@@ -1228,12 +1177,12 @@ export function ConnectedBilibiliLiveWorkspace({
     setRoomActionErrors((errors) => ({ ...errors, [room.id]: undefined }))
     try {
       if (action === "refresh") {
-        const result = await bridge.bilibiliLive.refresh({ roomMonitorId: room.id })
+        const result = await bridge.bilibiliLiveV2.refresh({ roomMonitorId: room.id })
         if (!result.success) throw new Error(result.message)
       } else if (action === "toggle") {
-        await bridge.bilibiliLive.updateStatus({ roomMonitorId: room.id, enabled: room.monitorStatus !== "ACTIVE" })
+        await bridge.bilibiliLiveV2.updateStatus({ roomMonitorId: room.id, enabled: room.monitorStatus !== "ACTIVE" })
       } else if (action === "interval") {
-        await bridge.bilibiliLive.updateSettings({ roomMonitorId: room.id, intervalSeconds: intervalSeconds ?? room.intervalSeconds })
+        await bridge.bilibiliLiveV2.updateSettings({ roomMonitorId: room.id, intervalSeconds: intervalSeconds ?? room.intervalSeconds })
       } else {
         await bridge.bilibiliLive.remove({ roomMonitorId: room.id })
         deletedRoomIds.current.add(room.id)
@@ -1257,10 +1206,10 @@ export function ConnectedBilibiliLiveWorkspace({
     }
   }
   const rankMutation = useMutation({
-    mutationFn: (roomMonitorId: string) => bridge.bilibiliLive.rankRefresh({ roomMonitorId }),
+    mutationFn: (roomMonitorId: string) => bridge.bilibiliLiveRankV2.refresh({ roomMonitorId }),
     onSuccess: async (result) => {
       setRankErrors(result.errors)
-      await queryClient.invalidateQueries({ queryKey: ["bilibili-live", "rank", result.roomMonitorId] })
+      await queryClient.invalidateQueries({ queryKey: ["bilibili-live", "rank.v2", result.roomMonitorId] })
     }
   })
   const danmakuMutation = useMutation({
@@ -1301,17 +1250,23 @@ export function ConnectedBilibiliLiveWorkspace({
     if (!rooms.some((room) => room.id === selectedDanmakuRoomId)) setSelectedDanmakuRoomId(rooms[0]?.id)
     if (!rooms.some((room) => room.id === selectedSessionRoomId)) setSelectedSessionRoomId(rooms[0]?.id)
   }, [rooms, selectedDanmakuRoomId, selectedRankRoomId, selectedSessionRoomId])
-  const sessions = sessionsQuery.data ?? []
+  const sessions = view === "直播场次" ? sessionPanel.sessions : sessionsQuery.data ?? []
   useEffect(() => {
     // A new room/limit query is not an empty result until it has actually loaded.
-    if (!sessionsQuery.data) return
+    if (!sessionView || !sessionsQuery.data) return
     const next = sessions.find((session) => session.id === selectedSessionId)?.id ?? sessions[0]?.id
     if (next !== selectedSessionId) setSelectedSessionId(next)
-  }, [selectedSessionId, sessions, sessionsQuery.data])
+  }, [selectedSessionId, sessionView, sessions, sessionsQuery.data])
   useEffect(() => {
     if (!selectedSessionId || sessionEventFilters.sessionId === selectedSessionId) return
-    setSessionEventFilters({ sessionId: selectedSessionId, page: 1, size: 50 })
+    setSessionEventFilters(previous => ({ sessionId: selectedSessionId, page: 1, size: previous.size ?? 50 }))
   }, [selectedSessionId, sessionEventFilters.sessionId])
+  const retainedSessionEvents = selectedSessionId && sessionEventFilters.sessionId === selectedSessionId
+    ? successfulSessionEventsQuery.data
+    : undefined
+  const displayedSessionEvents = sessionEventFilters.sessionId === selectedSessionId
+    ? retainedSessionEvents?.page
+    : undefined
 
   return (
     <BilibiliLiveWorkspacePresentation
@@ -1329,9 +1284,17 @@ export function ConnectedBilibiliLiveWorkspace({
       danmakuRecent={danmakuRecentQuery.data ?? []}
       danmakuMetrics={danmakuMetricsQuery.data ?? []}
       sessions={sessions}
-      sessionUsers={sessionUsersQuery.data ?? []}
-      sessionEvents={sessionEventsQuery.data}
-      sessionInsight={sessionInsightQuery.data}
+      sessionUsers={view === "直播场次" ? sessionPanel.users : sessionUsersQuery.data ?? []}
+      sessionDetail={sessionPanel.detail}
+      sessionDetailLoading={sessionPanel.detailLoading}
+      sessionDetailUnavailable={sessionPanel.detailUnavailable}
+      sessionPanelError={sessionPanel.errorMessage}
+      sessionRefreshSeconds={sessionPanel.refreshSeconds}
+      onSessionRefresh={() => { void sessionPanel.refreshNow() }}
+      onSessionRefreshSecondsChange={sessionPanel.setRefreshSeconds}
+      onDismissSessionError={sessionPanel.dismissError}
+      sessionEvents={displayedSessionEvents}
+      sessionInsight={successfulSessionInsightQuery.data}
       sessionEventFilters={sessionEventFilters}
       selectedTrendIds={validSelection}
       selectedRankRoomId={selectedRankRoomId}
@@ -1339,11 +1302,26 @@ export function ConnectedBilibiliLiveWorkspace({
       selectedSessionRoomId={selectedSessionRoomId}
       selectedSessionId={selectedSessionId}
       insightBucketSeconds={insightBucketSeconds}
+      insightError={sessionInsightQuery.error ? errorMessageOf(sessionInsightQuery.error) : undefined}
+      insightAutoRefresh={insightAutoRefresh}
+      insightRefreshSeconds={insightRefreshSeconds}
+      onInsightRefresh={() => { void refreshInsight({ cancelRefetch: false }) }}
+      onInsightAutoRefreshChange={setInsightAutoRefresh}
+      onInsightRefreshSecondsChange={seconds => setInsightRefreshSeconds(
+        Number.isFinite(seconds) ? Math.min(3_600, Math.max(3, Math.round(seconds))) : 10
+      )}
       rankPending={rankQuery.isPending || rankMutation.isPending}
       danmakuPending={danmakuMutation.isPending || danmakuStatusQuery.isPending}
-      sessionPending={sessionsQuery.isPending
-        || (view === "数据中心" && (sessionUsersQuery.isPending || sessionEventsQuery.isPending))
-        || (view === "场次分析" && sessionInsightQuery.isPending)}
+      sessionPending={view === "直播场次" ? sessionPanel.loading : sessionsQuery.isPending
+        || (view === "场次分析" && sessionInsightQuery.isFetching)}
+      sessionEventsPending={sessionEventsQuery.isFetching}
+      sessionUsersPending={sessionUsersQuery.isFetching}
+      sessionEventsError={sessionEventsQuery.error ? errorMessageOf(sessionEventsQuery.error) : undefined}
+      sessionUsersError={sessionUsersQuery.error ? errorMessageOf(sessionUsersQuery.error) : undefined}
+      sessionEventsStale={Boolean(retainedSessionEvents && (sessionEventsQuery.error
+        || !sameSessionEventFilters(retainedSessionEvents.filters, sessionEventFilters)))}
+      onRetrySessionEvents={() => sessionEventsQuery.refetch()}
+      onRetrySessionUsers={() => sessionUsersQuery.refetch()}
       exportPending={exportMutation.isPending}
       exportMessage={exportMessage}
       rankErrors={rankErrors}
@@ -1366,16 +1344,16 @@ export function ConnectedBilibiliLiveWorkspace({
         danmakuRecentQuery.error,
         danmakuMetricsQuery.error,
         danmakuMutation.error,
-        sessionsQuery.error,
-        sessionUsersQuery.error,
-        sessionEventsQuery.error,
-        sessionInsightQuery.error,
+        view === "直播场次" ? null : sessionsQuery.error,
+        view === "数据中心" ? null : sessionUsersQuery.error,
+        view === "数据中心" ? null : sessionEventsQuery.error,
+        view === "场次分析" ? null : sessionInsightQuery.error,
         exportMutation.error
       )}
       onAdd={async (input) => {
-        let added: BilibiliLiveRoom | undefined
+        let added: BilibiliLiveRoomV2 | undefined
         await mutation.mutateAsync(async () => {
-          const room = await bridge.bilibiliLive.add(input)
+          const room = await bridge.bilibiliLiveV2.add(input)
           added = room
         })
         if (added) {
@@ -1410,14 +1388,26 @@ export function ConnectedBilibiliLiveWorkspace({
         setExportMessage(undefined)
       }}
       onSessionChange={(sessionId) => {
+        if (view === "直播场次") void sessionPanel.select(sessionId)
         setSelectedSessionId(sessionId)
-        setSessionEventFilters({ sessionId, page: 1, size: 50 })
+        setSessionEventFilters(previous => ({ sessionId, page: 1, size: previous.size ?? 50 }))
         setExportMessage(undefined)
       }}
-      onSessionEventFiltersChange={setSessionEventFilters}
+      onSessionEventFiltersChange={filters => {
+        // A submitted filter/page always refreshes, even when its cache is still fresh.
+        void queryClient.invalidateQueries({ queryKey: ["bilibili-live", "session-events", filters], exact: true, refetchType: "none" })
+        setSessionEventFilters(filters)
+        if (sameSessionEventFilters(filters, sessionEventFilters)) {
+          void sessionEventsQuery.refetch()
+        }
+      }}
       onInsightBucketChange={setInsightBucketSeconds}
       onSessionExport={async (sessionId, category) => {
-        await exportMutation.mutateAsync({ sessionId, category })
+        try {
+          await exportMutation.mutateAsync({ sessionId, category })
+        } catch (error) {
+          setExportMessage(errorMessageOf(error))
+        }
       }}
     />
   )
@@ -1428,8 +1418,13 @@ function toggleTrendId(ids: string[], id: string): string[] {
   return ids.length >= 4 ? ids : [...ids, id]
 }
 
-function formatCount(value: number | undefined): string {
-  return value === undefined ? "暂无" : value.toLocaleString("zh-CN")
+function sameSessionEventFilters(left: QueryBilibiliLiveSessionEventsInput, right: QueryBilibiliLiveSessionEventsInput): boolean {
+  return (["sessionId", "page", "size", "kind", "keyword", "userUid", "paid"] as const)
+    .every(field => left[field] === right[field])
+}
+
+function formatCount(value: number | string | undefined): string {
+  return value === undefined ? "暂无" : typeof value === "string" ? BigInt(value).toLocaleString("zh-CN") : value.toLocaleString("zh-CN")
 }
 
 function formatDelta(value: number | undefined): string {
@@ -1470,24 +1465,24 @@ function sessionEventKindLabel(kind: string): string {
   } as Record<string, string>)[kind] ?? kind
 }
 
-function formatNullableCount(value: number | null | undefined): string {
-  return value === null || value === undefined ? "不可用" : value.toLocaleString("zh-CN")
+function sessionCoverageCaveat(status: BilibiliLiveSessionSummary["coverageStatus"]): string {
+  if (status === "BOUNDARY_ONLY") {
+    return "历史边界记录：没有可验证的在线成功解析并持久化区间；空白指标不能解释为 0。"
+  }
+  if (status === "RECEIVED_WHILE_ONLINE") {
+    return "仅覆盖 WebSocket 在线期间成功解析并持久化的受支持事件/记录；不代表平台全量，也不包含未知/畸形帧或持久化失败的数据。"
+  }
+  return "无在线采集区间：没有可验证的成功解析并持久化记录，当前指标不具备完整覆盖保证。"
 }
 
-function formatNullableNumber(value: number | null | undefined): string {
-  return value === null || value === undefined ? "不可用" : value.toLocaleString("zh-CN", { maximumFractionDigits: 3 })
+function formatNullableCount(value: number | null | undefined): string {
+  return value === null || value === undefined ? "不可用" : value.toLocaleString("zh-CN")
 }
 
 function formatMilliYuan(value: number | null | undefined): string {
   return value === null || value === undefined
     ? "不可用"
     : `¥${(value / 1_000).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-}
-
-function formatRate(value: number | null | undefined): string {
-  return value === null || value === undefined
-    ? "不可用"
-    : `${(value * 100).toLocaleString("zh-CN", { maximumFractionDigits: 1 })}%`
 }
 
 function danmakuStatusLabel(status: BilibiliLiveDanmakuStatus | undefined): string {

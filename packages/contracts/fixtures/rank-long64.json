@@ -1,0 +1,22 @@
+{
+  "guard": {
+    "body": { "code": 0, "data": { "info": { "num": "+9,223,372,036,854,775,807" }, "list": [
+      { "uid": 92, "rank": 2147483648, "score": 9223372036854775807, "accompany": "-2",
+        "uinfo": { "uid": 0, "base": { "name": "精确航海观众" }, "guard": { "level": 4294967298 }, "medal": { "level": 4294967295 } } }
+    ] } },
+    "expected": { "totalCount": "9223372036854775807", "countText": "9223372036854775807", "entries": [
+      { "userUid": "0", "rankNo": -2147483648, "entryKind": "LIST", "displayName": "精确航海观众",
+        "score": "9223372036854775807", "guardLevel": 2, "medalLevel": -1, "accompanyDays": -2 }
+    ] }
+  },
+  "audience": {
+    "body": { "code": 0, "data": { "count": -2, "count_text": 0, "item": [
+      { "uid": 9223372036854775808, "rank": 1, "name": "精确贡献观众", "score": "9,007,199,254,740,993", "wealth_level": 4294967296 },
+      { "uid": " 99", "rank": "1,2", "name": "不修剪数值文本", "score": " 120" }
+    ] } },
+    "expected": { "totalCount": "-2", "countText": "0", "entries": [
+      { "userUid": "-9223372036854775808", "rankNo": 1, "entryKind": "LIST", "displayName": "精确贡献观众", "score": "9007199254740993", "wealthLevel": 0 },
+      { "rankNo": 12, "entryKind": "LIST", "displayName": "不修剪数值文本" }
+    ] }
+  }
+}

@@ -1,10 +1,106 @@
 # BiliMonitor Desktop
 
-2026-10-06 按用户要求保存本地提交快照，业务迁移保持暂停：最新完成[粉丝立即刷新](docs/implementation/2026-10-05-follower-manual-refresh-audit.md)的原业务对齐及定向回归，此前[间隔保存](docs/implementation/2026-10-05-follower-interval-audit.md)、[添加成功链](docs/implementation/2026-10-05-follower-add-flow-audit.md)、[Long64精确链路](docs/implementation/2026-10-05-follower-long64-audit.md)与[UID输入](docs/implementation/2026-10-05-follower-uid-input-audit.md)保留。提交前完整检查仍有1项旧趋势测试超时；类型检查、Python1003项及生产构建单独通过，不冒称全量绿色。当前状态、提交范围及恢复顺序见[提交快照](docs/implementation/2026-10-06-commit-snapshot.md)和[全量台账](docs/implementation/2026-09-13-full-migration-tracker.md)。本次不推送GitHub、不更新已安装客户端，不代表粉丝模块或全部业务迁移完成。
+最新续迁（2026-10-07）：[工作台标签/绑定/布局 JSON 保存](docs/implementation/2026-10-07-subject-json-storage-audit.md)已补齐新写入文本编码、空字节拒绝和实际落库返回。一个新增代表流程RED→GREEN、相关12项/类型/当前生产构建和真实Electron IPC/重启保留通过；最终四源限定复核无遗留问题，最后测试定向通过。一次阶段check仍exit1（Core1038通过/1个Subject501对象5秒超时），桌面及后续未执行；原布局逐条提交与客户端原子保存差异已向用户询问，未擅自修改。下方目录版是本片之前的版本，不含此次JSON修复，本轮未重打包。全量目标继续，不把定向结果称为全部验收。
+
+当前进度（2026-10-07）：**全量迁移继续推进，尚未全部验收完成。** 本批已对齐[普通材料API、共享错误传递与直播媒体文本](docs/implementation/2026-10-07-material-api-and-live-media-audit.md)：原错误分类/返回码、空消息、nav解析日志归属、弹幕材料错误回退，以及头像/封面/关键帧原文。原业务范围不缩减，不重做已完成切片。
+
+完整状态见[交接文档](docs/implementation/2026-09-13-migration-handoff.md)和[总台账](docs/implementation/2026-09-13-full-migration-tracker.md)。材料、导出、工作台输入与[资料回填/绑定](docs/implementation/2026-10-07-subject-backfill-and-binding-audit.md)的限定复查已闭合；阶段check终态exit1（Core1036通过/1个Subject批量5秒超时）。三处陈旧夹具对齐后，一次桌面阶段检查为664通过/3失败/19跳过；剩粉丝界面、平台采集超时未核定根因，不称整套绿色。新的schema16独立目录版已通过限定启动/重启/本地绑定保留与退出验收，见[阶段审计](docs/implementation/2026-10-07-stage-regression-and-directory-audit.md)。随后[直播添加输入](docs/implementation/2026-10-07-live-add-identifier-audit.md)复用精确解析，保留原有效数值写法并拒绝真实小数/Long64越界；一个既有浏览器流程、类型和生产构建通过，限定复查无问题。该目录版生成于此次Renderer修改前，不当作包含最新表单修复。原B/S/API只读、工具和新数据在D盘，保留全部未提交改动，未提交推送/更新安装包/接触用户库或真实凭据。下方检查点仅为历史记录。
+
+最新续迁：[工作台三个直接文本字段](docs/implementation/2026-10-07-subject-direct-text-audit.md)已补原数据库编码的新写入规则；一个既有Core流程、两个旧Follower存储流程、相关类型与当前生产构建通过，四源限定复查无问题。新隔离生产IPC创建→Core重启→资料保持→删除/退出及自有密钥OS保护原语通过，不等于真人凭据/剪贴板/原生保存/安装验收。最新目录版在这两次后续修复前生成，当前bundle已更新；跨资源回滚、JSON字段及其他全量缺口继续保留。
+
+随后[工作台创建整体回滚](docs/implementation/2026-10-07-subject-create-transaction-audit.md)已实现：创建失败不残留相关监控、快照、场次、请求日志和Outbox，准备期间独立添加保留；先准备资料再同步提交，不在网络等待期间持有数据库事务，改绑原行为不变。只新增一个代表流程，相关三个文件12项、类型/当前生产构建与实际隔离启停通过，五源限定复查无问题。JSON字段/其他失败行为、配置、阶段超时及真人/原生仍待收尾，完整迁移继续。
+
+当前独立目录版：[BiliMonitor Desktop.exe](release/migration-20261007-subject-transaction/win-unpacked/BiliMonitor%20Desktop.exe)，包含上述后续修复。已实际脱离开发环境验证内置Worker、IPC、对象重启保留与退出，未安装NSIS/使用真人凭据；旧包与历史结果保持。详细证据见事务审计，不把目录启动等同全量验收。
+
+本片后最新阶段check仍exit1：Core1035通过/3个原5秒超时（工作台501、直播批量配置、弹幕101容量），新增回滚流程通过；后续阶段未由check执行。后两项原流程有限诊断通过，不等同并行问题已解决。上方Core1失败及旧目录版都是此前结果，完整迁移与阶段收尾继续。
+
+此前检查点（弹幕指标时间范围）：
+
+最新检查点（2026-10-06）：[弹幕指标时间范围](docs/implementation/2026-10-06-danmaku-metrics-range-audit.md)已按原Java解析/回退和日期越界规则接通Core/SQLite；正常闭区间/最新2000升序保持。仅2个新业务用例及1个共享样例，5项定点、三包类型与一次构建通过。任务差量审查/安全检查结论见审计。
+
+下一项继续原事实写入时间等M09业务；全M01–M18及旧整体缺口仍open。每功能少量关键验证，完整回归留阶段末；原项目只读、产物D盘、未提交推送。以下为历次当时状态。
+
+此前检查点（弹幕连接容量）：
+
+最新检查点（2026-10-06）：[弹幕连接容量](docs/implementation/2026-10-06-danmaku-capacity-audit.md)已去除Worker额外100连接限制，遵循Core原配置默认10/至少1/手动自动共享名额；操作队列背压和停止保护不变。仅1新贯穿用例、4项复用通过，两包类型与一次生产构建通过，2路径增量审查通过；非阻断测试清理建议记入阶段收尾，不追加验证。
+
+下一项继续原指标查询规则；其它M09、全M01–M18和旧整体验证缺口仍未完成。保持少量关键验证、阶段末完整回归，原项目只读、产物D盘、未提交推送。以下为历次当时状态。
+
+此前检查点（弹幕指标分桶）：
+
+最新检查点（2026-10-06）：[弹幕指标分桶](docs/implementation/2026-10-06-danmaku-metric-buckets-audit.md)已按原规则接通：配置原值入库/返回、至少10秒仅用于对齐、无额外3600上限，追加SQLite v15保留历史。原15个启动输入字段已绑定，probe无消费者不新增任务。仅新增3项，定点10项、三包类型及一次生产构建通过；19路径任务增量审查通过，无需修复或追加验证。
+
+按用户要求加快迁移：每功能2–3个关键用例，不铺矩阵/重复历史套件，完整回归留阶段收尾。其它M09、全M01–M18、真人/原生/安装及旧整体验证缺口仍未完成；原源码只读、产物D盘、未提交推送。下方历次状态仅作历史记录。
+
+此前检查点（WBI / Buvid 缓存时长）：
+
+最新检查点（2026-10-06）：[WBI / Buvid 缓存时长](docs/implementation/2026-10-06-danmaku-cache-configuration-audit.md)已接通弹幕与 Python 榜单。保留原默认12小时、消费下限300秒及成功后计时；登录过期保留Buvid/强刷WBI，风控清两项，nav匿名。仅新增3个测试，新旧定点10项、类型/格式及一次生产构建通过，27路径任务增量审查PASS，无需修复。
+
+每个功能只做少量主流程/关键边界验证，不再逐项跑历史套件或铺矩阵，完整检查留阶段结束。现13/15配置，余统计桶/probe；跨Worker共享缓存、同步双检、完整多段fallback及其它M09/全量M01–M18仍未完成。旧整体验证缺口保留，原源码只读、产物D盘，未提交推送。以下保留历次当时状态，当前范围以上方和最新台账为准。
+
+此前检查点（连接配置与身份策略）：
+
+最新检查点（2026-10-06）：[弹幕连接配置与身份策略](docs/implementation/2026-10-06-danmaku-connection-configuration-audit.md)已迁移，心跳、WS超时、登录凭据开关、webLocation与clientVersion贯通配置→Core→实际连接。禁凭据时不读取/发送登录凭据；补正单调心跳计时与花括号文本读取。相关验证、修复后构建、任务复审通过。
+
+仅新增3个代表业务场景，复用已有回归；不重复全历史check/累计审查，阶段收尾再全量。弹幕配置现11/15项，余统计桶/WBI缓存/Buvid缓存/probe、其它M09、完整M01–M18及真人/原生/安装未完成。旧全量缺口保留，源码只读、产物D盘，未提交推送。以下历次检查点保留当时结果，当前剩余范围以上方为准。
+
+最新检查点（2026-10-06）：[弹幕连接、认证与心跳生命周期](docs/implementation/2026-10-06-danmaku-auth-lifecycle-audit.md)已按原 B/S 迁移：每候选重新获取信息/首host、发认证后返回、异步认证成功或拒绝、独立尝试会话、发后心跳、关闭/停止与迟到结果保护。鉴权期间可停止。主要复用既有用例，只新增一个贯穿业务的Core集成用例；相关定向、类型、最终生产构建及独立任务复审通过。首两次构建失败已最小修正，原日志保留。
+
+后续以原业务实现为主，少量正常/关键失败/停止安全验证，阶段收尾再全量；不为每个分支新增测试或重复历史检查。旧整体验证缺口保留，剩余9项弹幕属性、其它M09及完整M01–M18/真人/原生/安装仍未完成。原源码只读、产物D盘，未提交推送或更新安装客户端。
+
+此前检查点（2026-10-06）：[弹幕协议选择](docs/implementation/2026-10-06-danmaku-protocol-selection-audit.md)已按原 B/S 贯通配置→Core→Worker→实际认证包：自动优先配置协议、手动覆盖、越界请求按自动处理、活动连接复用。只新增3个代表性业务场景及少量契约样例；相关定向验证、类型检查、生产构建及独立任务复审通过。本轮不重复全量历史检查；旧整体验证缺口保留。其当时的下一功能已由上方生命周期检查点接续，历史记录不作为当前未完成清单。
+
+以下为弹幕正文与最近消息准入此前检查点，保留当时结果：
+
+当前检查点（2026-10-06）：[弹幕正文与最近消息准入](docs/implementation/2026-10-06-danmaku-text-admission-audit.md)已按原 B/S 实现：保留正文原文/标量、精确数字文本；Java 空白消息不进 recent、不裁剪，但事实与指标保留。独立任务复审 Approved，最终串行定向310项通过。一次冻结完整check仍exit1：此前阶段1716项通过，桌面Vitest进程异常退出（3221226505），没有桌面用例汇总，不冒称旧两项已修好。全部类型/Black60/isort/mypy18/Python1037/build及实际Electron bundle/CJS另行补验exit0。完整M01–M18、余10弹幕属性与真人/原生/安装仍未完成；下一协议偏好仅只读提案。原B/S/API只读、产物D盘，未提交推送或更新安装客户端。
+
+以下为最近弹幕保留数量此前检查点，保留当时结果：
+
+当前检查点（2026-10-06）：[最近弹幕保留数量](docs/implementation/2026-10-06-danmaku-recent-retention-audit.md)已按原配置→Core→SQLite迁移：默认200/服务至少20/无额外500上限，独立查询仍限200，永久事件与指标不裁剪，重启及两房隔离有真实回归。独立task审查Approved；[UID/Worker测试边界](docs/implementation/2026-10-06-uid-worker-observation-audit.md)另task Approved。一次冻结check仍exit1：Node2276过/2失败/2278无跳过，Core989全过；当前失败是pending Worker add的10秒marker等待及四用户2000点趋势5秒body超时。UID12轮本次执行完成，不宣称稳定性根因修复。
+
+全部类型/Black60/isort/mypy18/Python1037/build各0；补验末尾main用了错误Worker输出路径致命令exit1，原日志保留，随后只核实际Electron bundle路径/CJS通过，不把补验或整套check改称exit0。最终69路径累计审查完成：实现质量Approved，无新增生产缺陷，当前两项whole验证Important仍开放，merge/ship NOT READY。M01–M18、余10弹幕属性与真人/原生/安装仍未完成。下一原文/空白消息准入仅只读提案，未实现；不重复旧观察任务或放宽预算。原B/S/API只读、产物D盘、未提交推送/更新安装客户端。
+
+以下为六处浏览器启动边界此前检查点，保留当时结果：
+
+此前一次全量Node2181/2183、Desktop653/655、两失败无跳过；六startup路径完成但UID循环与首次Worker marker失败。TypeScript/Black60/isort/mypy18/Python1022/build补验通过；60路径累计审查slice Approved/merge With fixes/ship No。UID循环和当前完整失败清单以后续最近弹幕保留审计为准，不能把此历史状态当当前结果。
+
+以下为Worker首读与目录保护此前检查点，保留当时结果：
+
+最新迁移检查点（2026-10-06）：[Worker首次读取与测试目录保护](docs/implementation/2026-10-06-worker-first-read-audit.md)已完成测试侧取证与创建前D盘保护，独立task审查Approved。本次原预算全量运行中，首次粉丝add/refresh实际完成取消、子进程退出和SQLite无迟到写入断言；不称此前间歇启动根因已修复。完整check仍退出1：Node2151通过/4失败/19跳过（2174），6个浏览器文件在setup/导航阶段失败；未执行的19项不计通过。全类型、Black60/isort/mypy18、Python1022与生产构建另行通过。下一步定位这6处浏览器验收缺口，再继续下一业务；完整M01–M18未完成，原B/S只读、产物D盘、未提交推送或更新安装客户端。
+
+本轮完整55路径独立审查已结束：切片质量Approved，merge With fixes / ship No，无新增生产Critical/Important；此前Worker取消执行缺口和D预检Minor已按本次证据关闭，当前6处浏览器整体验证Important保持。下一最小observer只是提案、未实施，详见新审计。
+
+以下为粉丝投影刷新此前检查点，保留当时结果：
+
+最新迁移进度（2026-10-06）：[粉丝趋势投影刷新](docs/implementation/2026-10-06-follower-projection-verification-audit.md)已区分无变化后台读取与显式成功刷新，保持原共享请求、操作顺序及700/900提示；真实浏览器RED→GREEN，独立task复审Approved，最终定向浏览器98/Worker11通过。冻结后一次完整check退出1：Node2170/2171、Desktop644/645、无跳过，唯一失败为首次粉丝Worker尚未到HTTP启动标记；其余三项旧失败本次未出现，不冒称稳定性根因已修复。全部类型、Black58/isort/mypy18、Python1016与生产构建另行通过。完整51项增量审查切片质量Approved、merge With fixes/ship No：无新增生产Critical/Important，但Worker全量验证Important仍开放，auto-target创建前D预检Minor保留。下一步单次fix wave处理这两项，先取证首次真实stdin读取，不豁免旧失败或放宽预算；M06/M09及完整M01–M18继续迁移。本轮未提交推送、启动原B/S或更新安装客户端，产物仍在D盘，实际项目进程/监听0。
+
+以下为弹幕启动控制的此前检查点，保留当时结果：
+
+最新迁移进度（2026-10-06）：[弹幕启动控制及完成后调度](docs/implementation/2026-10-06-danmaku-startup-scheduler-audit.md)已实现四字段配置与开关/容量、首次0延迟、每轮结束后固定等待和退出保护，独立task审查Approved。修改后完整check退出1：Node2161通过/2165、4旧失败、无跳过，Core937/Contracts475全部通过；全部类型、Python1016及生产构建另行通过，新Python格式问题已修正。最终完整分支审查切片质量Approved、合并With fixes、发布No：四项未关闭验证失败为Important，优先补Worker启动/请求和浏览器状态证据，不豁免旧失败。不能称全量绿色；原15属性余11、完整M09/M01–M18及真人/原生仍未完成；删除probe通过不等于已证明冷启动修复，旧测试稳定性保留。
+
+弹幕配置位于实际数据目录的 `config/bilibili-live-danmaku.json`，只读加载、重启生效，缺失时不写文件；[示例](config/bilibili-live-danmaku.example.json)支持15个原输入字段，兼容原环境别名与规范名覆盖。关闭自动监听仍可手动连接，总开关关时拒绝新连接但保留查询/停止和历史。容量消费最少1，自动调度每轮完成/失败后再等delay，退出不续排。直播storage关闭时不创建该服务；只关两flag仍不能绕过storage存在时的正数raw调度校验。协议、连接认证、五项连接配置、两缓存时长与统计桶已接；probe原无消费者，只绑定，不添加探测业务。其它M09仍未完成。
+
+`bucketSeconds` 默认60，保留原signed32值，只有桶起点计算使用至少10秒，不设3600上限；保存/返回保留raw，配置修改不重算历史桶。`listenProbeSeconds` 默认20，没有原业务消费者。原环境别名和v15升级规则见[分桶审计](docs/implementation/2026-10-06-danmaku-metric-buckets-audit.md)。
+
+`wbiCacheSeconds`、`buvidCacheSeconds` 默认均43200，缓存成功解析后按至少300秒计时；WBI配置也用于Python榜单采集。进程缓存仍独立，跨Worker共享/同步双检和完整多段fallback留后续，见[缓存时长审计](docs/implementation/2026-10-06-danmaku-cache-configuration-audit.md)。
+
+新增连接配置默认 `heartbeatSeconds=30`、`connectTimeoutMs=8000`、`useLoginCredential=true`、`webLocation="444.8"`、`clientVersion="1.14.3"`。实际心跳至少5秒、WS握手至少1000ms，HTTP超时独立。禁登录凭据保留原激活重连但仍匿名；非空白版本不裁剪。字段与别名见[本轮审计](docs/implementation/2026-10-06-danmaku-connection-configuration-audit.md)。
+
+`protocolVersion` 为自动模式的启动偏好：0..3 先尝试配置值，再按3/2/1/0去重；其他合法signed32配置值回退默认顺序。手动选择0..3只尝试该协议，省略或其他signed32请求值视为自动并复用已活动连接。兼容原 `SOCIAL_MONITOR_BILIBILI_LIVE_DANMAKU_PROTOCOL_VERSION`，规范名 `APP_BILIBILI_LIVEMONITOR_DANMAKU_PROTOCOLVERSION` 优先。
+
+`recentMessageLimitPerRoom` 保留原signed32整数配置，实际每房至少保留20条，不设额外500条上限；查询仍最多返回200条。兼容原 `SOCIAL_MONITOR_BILIBILI_LIVE_DANMAKU_RECENT_LIMIT`，规范环境名 `APP_BILIBILI_LIVEMONITOR_DANMAKU_RECENTMESSAGELIMITPERROOM` 优先覆盖。降低配置不会在启动时清理，按原规则在新弹幕入库后裁剪最近列表；永久场次事件及统计不随裁剪删除。文件类型/越界错误不能用环境覆盖掩盖，启动错误不泄露配置值。
+
+以下为自动候选/容量切片的此前检查点，保留当时结果：
+
+最新进度（2026-10-06）：按原B/S续迁[弹幕自动监听候选与容量仲裁](docs/implementation/2026-10-06-danmaku-auto-targets-audit.md)，已修复创建顺序、完整候选、先跳过手动再填容量；停止/启动顺序、手动保护和失败后重试有真实Core/SQLite回归。新增9项和相关旧33项通过，task独立复审Approved。完整check退出1：Node2076通过、4失败、9跳过（2089总数）；Core884通过，4个旧浏览器断言/hook失败，粉丝删除suite初始化失败致9项跳过。全部类型、Python1003及生产构建另行通过，不能称全量绿色或M09完成。下一独立业务核对自动监听配置与fixedDelay，旧测试稳定性、M06共享recycler及完整M01–M18继续保留；不自动提交/推送、启动原B/S或更新安装客户端。当前总览见[迁移台账](docs/implementation/2026-09-13-full-migration-tracker.md)。
+
+以下为此前同日粉丝操作检查点，保留当时验证结果：
+
+2026-10-06 已恢复逐项迁移，本轮按原 B/S 完成[粉丝暂停/恢复与删除](docs/implementation/2026-10-06-follower-monitor-actions-audit.md)的交互对齐及定向验收：新增33项真实浏览器/V2/Core/SQLite测试、主代理新旧84项通过，两个操作独立复审通过。此前[立即刷新](docs/implementation/2026-10-05-follower-manual-refresh-audit.md)、[间隔保存](docs/implementation/2026-10-05-follower-interval-audit.md)、[添加成功链](docs/implementation/2026-10-05-follower-add-flow-audit.md)、[Long64精确链路](docs/implementation/2026-10-05-follower-long64-audit.md)与[UID输入](docs/implementation/2026-10-05-follower-uid-input-audit.md)保留。最终完整check仍退出1（Node2072/2080，8项旧浏览器导航hook超时）；类型、Python1003项及生产构建另行通过，不冒称全量绿色。独立缓存没有消除旧超时，冷预打包仍是未证实候选。历史提交范围见[提交快照](docs/implementation/2026-10-06-commit-snapshot.md)，剩余业务见[全量台账](docs/implementation/2026-09-13-full-migration-tracker.md)。本轮未自动提交/推送或更新安装客户端，不代表粉丝模块或全部业务迁移完成。
 
 BiliMonitor Desktop 是把原 BiliMonitor B/S 项目的真实业务改造成完全本地桌面应用的独立仓库。它不依赖远程业务后端，也不要求本机维护数据库服务、消息队列、容器或 WSL。
 
-当前导航只显示已接到本地 Contract、Core、SQLite、Worker、IPC 与真实 UI 的原业务：B站用户工作台、粉丝监控、扫码登录、直播间 REST、实时弹幕、观众/大航海榜、直播场次、数据中心、场次洞察与导出，以及抖音本人 Web/OAuth 登录态。源码中的 SQLite schema 为 v14；敏感凭据由 Electron `safeStorage` 封装的本机密钥进行 AES-256-GCM 加密。B站真人扫码和抖音真人扫码/开放平台授权仍是发布前手工验收项，不把未执行的人机操作写成已通过。
+当前导航只显示已接到本地 Contract、Core、SQLite、Worker、IPC 与真实 UI 的原业务：B站用户工作台、粉丝监控、扫码登录、直播间 REST、实时弹幕、观众/大航海榜、直播场次、数据中心、场次洞察与导出，以及抖音本人 Web/OAuth 登录态。源码中的 SQLite schema 为 v16；敏感凭据由 Electron `safeStorage` 封装的本机密钥进行 AES-256-GCM 加密。B站真人扫码和抖音真人扫码/开放平台授权仍是发布前手工验收项，不把未执行的人机操作写成已通过。
 
 原项目更新至 `fa2faa6` 后正在重新逐项迁移、验收，已有入口不代表全部业务等价。最新范围及未完成项见 [全量迁移台账](docs/implementation/2026-09-13-full-migration-tracker.md)。当前场次面板读取最近 20 场，数据中心/分析可选择最近 200 场；查询数量非正数回退 20、超过 200 截断为 200。
 

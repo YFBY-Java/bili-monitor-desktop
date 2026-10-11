@@ -23,7 +23,7 @@ import {
   Trash2,
   X
 } from "lucide-react"
-import { useCallback, useEffect, useMemo, useState, type JSX } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react"
 
 export type DouyinAuthResourceState =
   | { phase: "loading" }
@@ -46,6 +46,7 @@ export interface DouyinAuthWorkspaceProps {
   onRefresh: () => void
   onStartWebQr: () => void
   onCloseQr: () => void
+  onRefreshQrImage?: () => void
   onValidateWeb: () => void
   onStartOAuth: () => void
   onCompleteOAuth: () => void
@@ -53,7 +54,7 @@ export interface DouyinAuthWorkspaceProps {
   onRefreshOAuth: () => void
   onOpenCredential: (kind: DouyinCredentialKind) => void
   onCloseCredential: () => void
-  onCopyCredential: () => void
+  onCopyCredential: (text?: string) => void
   onExportCredential: (kind: DouyinCredentialKind) => void
   onRevokeCredential: (kind: DouyinCredentialKind) => void
 }
@@ -116,6 +117,10 @@ export function DouyinAuthWorkspace(props: DouyinAuthWorkspaceProps): JSX.Elemen
     ? web.payload.cookieCount
     : payloadArray(web, "cookies").length
   const qrTerminal = props.qrStatus && ["SUCCESS", "EXPIRED", "FAILED"].includes(props.qrStatus.status)
+  const qrStep = props.qrStatus ? { STARTING: 0, WAITING: 1, SCANNED: 2, VALIDATING: 2,
+    SUCCESS: 4, EXPIRED: 1, USER_ACTION_REQUIRED: 0, FAILED: 0 }[props.qrStatus.status] : 0
+  const qrOverlay = props.qrStatus ? { STARTING: "", WAITING: "", SCANNED: "已扫码", VALIDATING: "正在复验",
+    SUCCESS: "保存成功", EXPIRED: "已过期", USER_ACTION_REQUIRED: "", FAILED: "" }[props.qrStatus.status] : ""
 
   return (
     <div className="douyin-auth-workspace">
@@ -214,7 +219,7 @@ export function DouyinAuthWorkspace(props: DouyinAuthWorkspaceProps): JSX.Elemen
           <section className="auth-modal douyin-qr-modal" role="dialog" aria-modal="true" aria-label="抖音 Web 扫码登录">
             <header><div><span>DOUYIN WEB QR</span><h2>用自己的抖音扫码登录</h2></div><button className="icon-button" type="button" aria-label="关闭抖音扫码登录" onClick={props.onCloseQr}><X size={17} /></button></header>
             <div className="douyin-qr-progress" aria-label="扫码进度">
-              {["浏览器就绪", "手机扫码", "新上下文复验", "完整保存"].map((step, index) => <span key={step}><i>{index + 1}</i>{step}</span>)}
+              {["浏览器就绪", "手机扫码", "新上下文复验", "完整保存"].map((step, index) => <span key={step} className={index < qrStep ? "is-complete" : index === Math.min(qrStep, 3) ? "is-current" : ""}><i>{index + 1}</i>{step}</span>)}
             </div>
             <div className={`auth-qr-frame douyin-qr-frame ${qrTerminal ? "is-terminal" : ""}`}>
               {props.qrStatus?.imageDataUrl
@@ -222,15 +227,18 @@ export function DouyinAuthWorkspace(props: DouyinAuthWorkspaceProps): JSX.Elemen
                 : props.qrStatus?.status === "USER_ACTION_REQUIRED"
                   ? <div className="douyin-manual-state"><CircleAlert size={34} /><strong>先完成浏览器验证</strong><span>在 Worker 打开的可见浏览器中手动完成滑块；不要关闭窗口。</span></div>
                   : <LoaderCircle className="spin" size={28} />}
+              {qrOverlay && props.qrStatus?.imageDataUrl && <div className="douyin-qr-overlay">{qrOverlay}</div>}
             </div>
             <div className={`auth-qr-status is-${props.qrStatus?.status.toLowerCase() ?? "starting"}`}>
               <strong>{statusLabel(props.qrStatus?.status)}</strong>
               <p>{props.qrStatus?.message ?? "正在创建仅用于本次扫码的浏览器会话。"}</p>
-              {props.qrStatus && props.qrStatus.status !== "SUCCESS" && <span>剩余 {props.qrStatus.expiresInSeconds} 秒</span>}
+              {props.qrStatus && !["SUCCESS", "FAILED"].includes(props.qrStatus.status) && <span>剩余 {props.qrStatus.expiresInSeconds} 秒</span>}
             </div>
             {props.qrStatus?.status === "USER_ACTION_REQUIRED" && <p className="workspace-error"><CircleAlert size={16} /><strong>先完成浏览器验证：</strong>在 Worker 打开的可见浏览器中完成滑块后，系统会继续检测。</p>}
             <div className="douyin-capture-note"><ShieldCheck size={17} /><span><strong>完整保存：</strong>Cookie、localStorage、sessionStorage、IndexedDB、storageState 与浏览器上下文。</span></div>
-            <footer><button className="button button-secondary" type="button" onClick={props.onCloseQr}>关闭</button>{qrTerminal && <button className="button button-primary" type="button" disabled={props.busy} onClick={props.onStartWebQr}>重新生成二维码</button>}</footer>
+            <footer><button className="button button-secondary" type="button" onClick={props.onCloseQr}>关闭</button>{qrTerminal
+              ? <button className="button button-primary" type="button" disabled={props.busy} onClick={props.onStartWebQr}>重新生成二维码</button>
+              : props.onRefreshQrImage && props.qrStatus && ["WAITING", "SCANNED"].includes(props.qrStatus.status) && <button className="button button-secondary" type="button" disabled={props.busy} onClick={props.onRefreshQrImage}>刷新二维码图片</button>}</footer>
           </section>
         </div>
       )}
@@ -239,7 +247,7 @@ export function DouyinAuthWorkspace(props: DouyinAuthWorkspaceProps): JSX.Elemen
         <div className="creation-backdrop" role="presentation">
           <section className="credential-drawer douyin-credential-drawer" role="dialog" aria-modal="true" aria-label={props.selectedCredential?.authType === "DOUYIN_OAUTH2" ? "完整抖音 OAuth 登录态" : "完整抖音 Web 登录态"}>
             <header><div><span>{props.selectedCredential?.authType ?? "DOUYIN CREDENTIAL"}</span><h2>{props.selectedCredential?.authType === "DOUYIN_OAUTH2" ? "完整抖音 OAuth 登录态" : "完整抖音 Web 登录态"}</h2></div><button className="icon-button" type="button" aria-label="关闭抖音登录态" onClick={props.onCloseCredential}><X size={17} /></button></header>
-            {props.selectedCredential ? <CredentialDetails credential={props.selectedCredential} onCopy={props.onCopyCredential} onExport={() => props.onExportCredential(props.selectedCredential!.authType === "DOUYIN_OAUTH2" ? "oauth" : "web")} /> : <div className="credential-loading"><LoaderCircle className="spin" size={20} />正在从本机安全存储读取…</div>}
+            {props.selectedCredential ? <CredentialDetails key={props.selectedCredential.credentialId} credential={props.selectedCredential} onCopy={props.onCopyCredential} onExport={() => props.onExportCredential(props.selectedCredential!.authType === "DOUYIN_OAUTH2" ? "oauth" : "web")} /> : <div className="credential-loading"><LoaderCircle className="spin" size={20} />正在从本机安全存储读取…</div>}
           </section>
         </div>
       )}
@@ -255,36 +263,45 @@ function Fact({ label, value }: { label: string; value: string }): JSX.Element {
   return <div><span>{label}</span><strong>{value}</strong></div>
 }
 
-function CredentialDetails({ credential, onCopy, onExport }: { credential: DouyinCredential; onCopy: () => void; onExport: () => void }): JSX.Element {
+function CredentialDetails({ credential, onCopy, onExport }: { credential: DouyinCredential; onCopy: (text?: string) => void; onExport: () => void }): JSX.Element {
+  const [activeKey, setActiveKey] = useState("account")
   const origins = payloadArray(credential, "origins") as Array<Record<string, unknown>>
-  const storage = (field: string): unknown => origins.map((origin) => ({ origin: origin.origin, [field]: origin[field] ?? [] }))
-  const sections: Array<[string, string, unknown]> = credential.authType === "DOUYIN_WEB_SESSION"
-    ? [
-        ["账号信息", "account", credential.payload.account ?? {}],
-        ["Cookie Header", "headers", credential.payload.cookieHeadersByOrigin ?? {}],
-        ["Cookies JSON", "cookies", credential.payload.cookies ?? []],
-        ["localStorage", "local", storage("localStorage")],
-        ["sessionStorage", "session", storage("sessionStorage")],
-        ["IndexedDB", "indexeddb", storage("indexedDb")],
-        ["storageState", "storage", credential.payload.storageState ?? {}],
-        ["浏览器上下文", "browser", credential.payload.browserContext ?? {}],
-        ["Worker 原始结果", "worker", credential.payload.rawWorkerResult ?? {}]
-      ]
-    : [
-        ["账号信息", "account", credential.payload.account ?? {}],
-        ["OAuth 原始字段", "oauth", credential.payload],
-        ["完整合并 JSON", "full", credential]
-      ]
+  const storage = (field: string): unknown => origins.map((origin) => ({ origin: origin.origin, [field]: origin[field] || [] }))
+  const sections: Array<[string, string, string, unknown]> = [
+    ["账号信息", "account", "Worker 或 OAuth 返回的账号原始字段。", credential.payload.account || {}],
+    ["Cookie Header", "headers", "按目标 Origin 生成的完整 Cookie Header。", credential.payload.cookieHeadersByOrigin || {}],
+    ["Cookies JSON", "cookies", "浏览器上下文内捕获的全部 Cookie 及其属性。", credential.payload.cookies || []],
+    ["localStorage", "local", "逐 Origin 保存的 localStorage。", storage("localStorage")],
+    ["sessionStorage", "session", "逐 Origin 保存的 sessionStorage。", storage("sessionStorage")],
+    ["IndexedDB", "indexeddb", "Playwright 可序列化导出的 IndexedDB。", storage("indexedDb")],
+    ["storageState", "storage", "Playwright 原始 storageState，可用于恢复新 Context。", credential.payload.storageState || {}],
+    ["浏览器上下文", "browser", "User-Agent、语言、时区、视口与平台信息。", credential.payload.browserContext || {}],
+    ["Worker 原始结果", "worker", "捕获与第二 Context 复验时的 Worker 原始结果。", credential.payload.rawWorkerResult || {}],
+    ["完整合并 JSON", "full", "数据库解密后的完整凭据对象。", credential]
+  ]
+  const active = sections.find(([, key]) => key === activeKey) ?? sections[0]!
+  const activeText = JSON.stringify(active[3] ?? null, null, 2)
   return <div className="credential-content">
     <div className="credential-warning"><KeyRound size={17} /><span><strong>敏感原文</strong>仅在明确查看时由本机 Core 解密。</span></div>
-    <div className="workspace-actions"><button className="button button-primary" type="button" onClick={onCopy}><Copy size={14} />复制全部 JSON</button><button className="button button-secondary" type="button" onClick={onExport}><Download size={14} />导出 JSON</button></div>
+    <div className="workspace-actions"><button className="button button-primary" type="button" onClick={() => onCopy()}><Copy size={14} />复制全部 JSON</button><button className="button button-secondary" type="button" onClick={onExport}><Download size={14} />导出 JSON</button></div>
     <div className="douyin-credential-meta"><span>{credential.status}</span><strong>#{credential.credentialId}</strong><small>更新于 {formatTime(credential.updatedAt)}</small></div>
-    {sections.map(([label, key, value]) => <CredentialField key={key} label={label} value={JSON.stringify(value, null, 2)} />)}
+    <div className="douyin-credential-tabs" role="tablist" aria-label="登录态原始字段">
+      {sections.map(([label, key], index) => <button type="button" role="tab" key={key} id={`credential-tab-${key}`} aria-controls={`credential-panel-${key}`} aria-selected={key === active[1]} tabIndex={key === active[1] ? 0 : -1}
+        onClick={() => setActiveKey(key)} onKeyDown={event => {
+          const offset = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : undefined
+          const nextIndex = offset === undefined ? event.key === "Home" ? 0 : event.key === "End" ? sections.length - 1 : undefined : (index + offset + sections.length) % sections.length
+          if (nextIndex === undefined) return
+          event.preventDefault()
+          const next = sections[nextIndex]!
+          setActiveKey(next[1])
+          document.getElementById(`credential-tab-${next[1]}`)?.focus()
+        }}>{label}</button>)}
+    </div>
+    <div className="credential-field" role="tabpanel" id={`credential-panel-${active[1]}`} aria-labelledby={`credential-tab-${active[1]}`}>
+      <div className="douyin-credential-toolbar"><div><strong>{active[0]}</strong><span>{active[2]}</span></div><button className="button button-secondary" type="button" onClick={() => onCopy(activeText)}><Copy size={14} />复制当前字段</button></div>
+      <pre>{activeText}</pre>
+    </div>
   </div>
-}
-
-function CredentialField({ label, value }: { label: string; value: string }): JSX.Element {
-  return <div className="credential-field"><strong>{label}</strong><pre>{value}</pre></div>
 }
 
 export function hasOAuthCredentialChanged(
@@ -334,6 +351,12 @@ export function ConnectedDouyinAuthWorkspace({ bridge, openRequest = 0 }: { brid
   const [qrOpen, setQrOpen] = useState(false)
   const [qrStart, setQrStart] = useState<DouyinQrLoginStart>()
   const [qrStatus, setQrStatus] = useState<DouyinQrLoginStatus>()
+  const [qrStarting, setQrStarting] = useState(false)
+  const [qrImageLoading, setQrImageLoading] = useState(false)
+  const qrGeneration = useRef(0)
+  const qrInFlight = useRef<{ generation: number; promise: Promise<DouyinQrLoginStatus> } | undefined>(undefined)
+  const stopQrPolling = useRef<(() => void) | undefined>(undefined)
+  const credentialGeneration = useRef(0)
   const [credentialOpen, setCredentialOpen] = useState(false)
   const [selectedCredential, setSelectedCredential] = useState<DouyinCredential>()
   const [oauthPending, setOauthPending] = useState<DouyinOAuthPending>()
@@ -417,41 +440,92 @@ export function ConnectedDouyinAuthWorkspace({ bridge, openRequest = 0 }: { brid
   }, [])
 
   const startWebQr = useCallback((): void => {
+    const generation = ++qrGeneration.current
+    stopQrPolling.current?.()
+    stopQrPolling.current = undefined
+    setQrStart(undefined)
+    setQrStatus(undefined)
+    setQrStarting(true)
+    setQrImageLoading(false)
+    setActionError(undefined)
+    setActionMessage(undefined)
     setQrOpen(true)
-    void run(async () => {
-      const started = await bridge.douyinAuth.startWebQr()
-      setQrStart(started)
-      setQrStatus({
-        loginId: started.loginId,
-        status: started.status,
-        message: "正在创建仅用于本次扫码的浏览器会话。",
-        expiresInSeconds: started.expiresInSeconds,
-        ...(started.imageDataUrl ? { imageDataUrl: started.imageDataUrl } : {})
-      })
-    })
-  }, [bridge, run])
+    void (async () => {
+      try {
+        const started = await bridge.douyinAuth.startWebQr()
+        if (qrGeneration.current !== generation) return
+        setQrStart(started)
+        setQrStatus({ loginId: started.loginId, status: started.status,
+          message: started.status === "WAITING" ? "抖音登录二维码已准备好，请使用抖音 App 扫码。" : "正在创建仅用于本次扫码的浏览器会话。",
+          expiresInSeconds: started.expiresInSeconds,
+          ...(started.imageDataUrl ? { imageDataUrl: started.imageDataUrl } : {}) })
+      } catch (error) {
+        if (qrGeneration.current !== generation) return
+        const message = error instanceof Error ? error.message : "无法创建抖音扫码会话。"
+        setActionError(message)
+        setQrStatus({ loginId: "", status: "FAILED", message, expiresInSeconds: 0 })
+      } finally {
+        if (qrGeneration.current === generation) setQrStarting(false)
+      }
+    })()
+  }, [bridge])
+
+  const closeQr = useCallback((): void => {
+    qrGeneration.current += 1
+    stopQrPolling.current?.()
+    stopQrPolling.current = undefined
+    setQrOpen(false)
+    setQrStart(undefined)
+    setQrStatus(undefined)
+    setQrStarting(false)
+    setQrImageLoading(false)
+  }, [])
+
+  useEffect(() => () => {
+    qrGeneration.current += 1
+    credentialGeneration.current += 1
+    stopQrPolling.current?.()
+  }, [])
 
   useEffect(() => {
     if (openRequest > 0) startWebQr()
   }, [openRequest, startWebQr])
 
+  const readQrStatus = useCallback((loginId: string, generation: number): Promise<DouyinQrLoginStatus> => {
+    if (qrInFlight.current?.generation === generation) return qrInFlight.current.promise
+    const promise = bridge.douyinAuth.pollWebQr({ loginId }).then(async next => {
+      if (qrGeneration.current !== generation) return next
+      setActionError(undefined)
+      setQrStatus(previous => ({ ...next,
+        ...(!next.imageDataUrl && previous?.imageDataUrl ? { imageDataUrl: previous.imageDataUrl } : {}) }))
+      if (["SUCCESS", "EXPIRED", "FAILED"].includes(next.status)) stopQrPolling.current?.()
+      if (next.status === "SUCCESS") {
+        await queryClient.invalidateQueries({ queryKey: ["douyin-auth-status"] })
+        if (qrGeneration.current === generation) setActionMessage("你的抖音 Web 登录态已完整保存。")
+      }
+      return next
+    })
+    const entry = { generation, promise }
+    qrInFlight.current = entry
+    const clear = (): void => { if (qrInFlight.current === entry) qrInFlight.current = undefined }
+    void promise.then(clear, clear)
+    return promise
+  }, [bridge, queryClient])
+
   useEffect(() => {
     if (!qrOpen || !qrStart) return
-    return startDouyinQrPolling({
+    const generation = qrGeneration.current
+    const stop = startDouyinQrPolling({
       intervalMillis: qrStart.pollIntervalMs,
-      poll: () => bridge.douyinAuth.pollWebQr({ loginId: qrStart.loginId }),
-      onStatus: async (next) => {
-        setQrStatus(next)
-        if (next.status === "SUCCESS") {
-          await queryClient.invalidateQueries({ queryKey: ["douyin-auth-status"] })
-          setActionMessage("你的抖音 Web 登录态已完整保存。")
-        }
-      },
-      onError: (error: unknown) => setActionError(
-        error instanceof Error ? error.message : String(error)
-      )
+      poll: () => readQrStatus(qrStart.loginId, generation),
+      onStatus: () => undefined,
+      onError: (error: unknown) => {
+        if (qrGeneration.current === generation) setActionError(error instanceof Error ? error.message : "暂时无法读取扫码状态，系统会继续重试。")
+      }
     })
-  }, [bridge, qrOpen, qrStart, queryClient])
+    stopQrPolling.current = stop
+    return () => { stop(); if (stopQrPolling.current === stop) stopQrPolling.current = undefined }
+  }, [qrOpen, qrStart, readQrStatus])
 
   const resource: DouyinAuthResourceState = statusQuery.isPending
     ? { phase: "loading" }
@@ -469,20 +543,41 @@ export function ConnectedDouyinAuthWorkspace({ bridge, openRequest = 0 }: { brid
     {...(selectedCredential ? { selectedCredential } : {})}
     {...(oauthPending ? { oauthPending } : {})}
     oauthCode={oauthCode}
-    busy={busy}
+    busy={busy || qrStarting || qrImageLoading}
     {...(actionError ? { actionError } : {})}
     {...(actionMessage ? { actionMessage } : {})}
     onRefresh={() => { void statusQuery.refetch() }}
     onStartWebQr={startWebQr}
-    onCloseQr={() => setQrOpen(false)}
-    onValidateWeb={() => { void run(async () => { const result = await bridge.douyinAuth.validateWeb(); await statusQuery.refetch(); return result.message }) }}
+    onCloseQr={closeQr}
+    onRefreshQrImage={() => {
+      if (!qrStart) return
+      const generation = qrGeneration.current
+      setQrImageLoading(true)
+      void readQrStatus(qrStart.loginId, generation).catch(error => {
+        if (qrGeneration.current === generation) setActionError(error instanceof Error ? error.message : "二维码暂未生成，系统会继续检测。")
+      }).finally(() => { if (qrGeneration.current === generation) setQrImageLoading(false) })
+    }}
+    onValidateWeb={() => { void run(async () => {
+      const result = await bridge.douyinAuth.validateWeb()
+      await statusQuery.refetch()
+      if (!result.valid) { setActionError(result.message || "保存的抖音登录态不可复用。"); return }
+      return result.message || "保存的抖音登录态可复用。"
+    }) }}
     onStartOAuth={() => { void run(async () => { const started = await bridge.douyinAuth.startOAuth(); setOauthCredentialIdBeforeAuthorization(statusQuery.data?.oauthCredential?.credentialId); setOauthPending(started); setOauthCode(""); window.open(started.authorizationUrl, "_blank", "noopener,noreferrer"); return "已在系统浏览器打开抖音官方授权页。" }) }}
     onCompleteOAuth={() => { void run(async () => { if (!oauthPending) throw new Error("请先发起 OAuth 授权。"); await bridge.douyinAuth.completeOAuth({ state: oauthPending.state, code: oauthCode.trim() }); setOauthPending(undefined); setOauthCredentialIdBeforeAuthorization(undefined); setOauthCode(""); await statusQuery.refetch(); return "抖音 OAuth 登录态已保存。" }) }}
     onOAuthCodeChange={setOauthCode}
     onRefreshOAuth={() => { void run(async () => { await bridge.douyinAuth.refreshOAuth(); await statusQuery.refetch(); return "OAuth Token 已刷新并保留旧历史行。" }) }}
-    onOpenCredential={(kind) => { setCredentialOpen(true); setSelectedCredential(undefined); void run(async () => { setSelectedCredential(await bridge.douyinAuth.credential({ kind })) }) }}
-    onCloseCredential={() => { setCredentialOpen(false); setSelectedCredential(undefined) }}
-    onCopyCredential={() => { if (selectedCredential) void navigator.clipboard.writeText(JSON.stringify(selectedCredential, null, 2)) }}
+    onOpenCredential={(kind) => {
+      const generation = ++credentialGeneration.current
+      void run(async () => {
+        const credential = await bridge.douyinAuth.credential({ kind })
+        if (credentialGeneration.current !== generation) return
+        setSelectedCredential(credential)
+        setCredentialOpen(true)
+      })
+    }}
+    onCloseCredential={() => { credentialGeneration.current += 1; setCredentialOpen(false); setSelectedCredential(undefined) }}
+    onCopyCredential={(text) => { if (selectedCredential) void run(async () => { await navigator.clipboard.writeText(text ?? JSON.stringify(selectedCredential, null, 2)); return "已复制原始字段。" }) }}
     onExportCredential={(kind) => { void run(async () => { const result = await bridge.douyinAuth.exportCredential({ kind }); return result.canceled ? undefined : `已导出到 ${result.savedPath}` }) }}
     onRevokeCredential={(kind) => {
       if (typeof window !== "undefined" && !window.confirm(`确认撤销当前抖音 ${kind === "web" ? "Web 登录态" : "OAuth 凭据"}？历史记录仍会保留。`)) return

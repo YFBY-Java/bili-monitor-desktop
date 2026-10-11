@@ -3,12 +3,378 @@
 ## 基线与完成条件
 
 - 原项目只读：`D:\codex_work\BiliMonitor`，当前 `fa2faa6`；开始时工作区干净。
-- 客户端：`D:\codex_work\bili_reptile\bili-monitor-desktop`，起点 `22d0d0b`；开始时工作区干净。
+- 客户端：`D:\codex_work\bili_reptile\bili-monitor-desktop`，本台账历史规划起点 `22d0d0b`；本次记录HEAD `4c94959`，工作区有累积未提交改动，暂存区为空，最新状态见下文当前执行点。
 - 原基线 `01200f3` 到 `fa2faa6` 共 4 个提交、24 个变化文件。本次范围不止这 4 个提交：旧功能仍逐操作对照当前源码验收。
 - 不启动或编辑原 B/S 工程；原 Java/Vue/PostgreSQL 仅作为业务参考。运行时仍为 Electron + React + TypeScript Core + SQLite + Python/Node Worker。
 - 不把已有方法、页面入口或绿色测试等同于业务完整。每项必须记录原源码、客户端实现、输入/状态/输出、差异回归及剩余手工验收。
 - 所有新文件、工具缓存、测试数据库、构建产物位于 D 盘；禁止保存真实凭据到测试或文档。
 - 下表所有“待核对”都属于未完成项；没有被排除出目标。原 Mock/占位能力单列，不伪装真实业务，也不擅自扩展它的能力。
+
+## 最新入口调整（2026-10-11）
+
+按用户要求，在侧栏新增“数据中心”(`#live-data`)与“分析看板”(`#live-analytics`)独立入口。对照原 `MainLayout.vue` 的 `/data`、`/analytics` 命名，复用已迁移的直播数据中心/场次分析组件和查询，不新增业务、API或schema；原直播页8个页签保留。三种入口共享已挂载的直播工作区，保留场次、筛选和分析交互状态；独立页使用各自标题，不显示直播页签，折叠导航也有可访问名称。实际RED→GREEN，4文件22项通过（仅新增2个SSR入口case和1个浏览器操作case），Desktop类型与生产构建通过。一次`check.cmd` exit1：Core1048/1050，仍是Subject501与粉丝2004两个旧规模超时，未改预算或重跑整套；日志 `.tools/temp/20261011-standalone-navigation-check.log`。开发客户端仍运行；未更新独立目录包、未提交推送，不标全量迁移完成。
+
+## 当前执行点（2026-10-11，恢复迁移与榜单配置）
+
+用户重新要求对照本机原B/S继续迁移。本轮核对路由/Controller与客户端入口，并补齐榜单enabled/pageSize/guardPageSize/maxPages/requestMinIntervalMs/webLocation六项配置。Core开库前读取、规范env/原别名/文件优先级、原服务开关、默认页数穿过Main/Preload、消费者夹值、Python WBI参数与关闭/恢复历史已接；schema18不变。详见[功能缺口复核与本轮证据](2026-10-11-feature-gap-and-rank-configuration.md)。新增命名case仅4个；本切片定向/类型/生产构建通过，限定复审C0/I0/Minor0。一次check终态exit1：Core1048/1050仍有Subject501和粉丝2004旧规模超时；没有重复跑整套求绿，不标全量完成。下一明确功能缺口是B站登录启动配置；真人/原生/安装、冷启动/规模稳定性和布局失败策略仍未关闭。未提交推送、原项目只读，D盘输出保持。
+
+## 历史执行点（2026-10-07，阶段回归与暂停）
+
+当前停止点：[直播采集启动配置](2026-10-07-live-startup-binding-audit.md)已补齐17字段的标准环境变量/旧别名、复用转换与raw条件/调度规则。最终Core35、Contracts52、Python62、workspace类型/生产构建及实际Main/Preload/Core关闭→重启开启/配置原字节/退出PID0通过；本功能完成后按用户要求停止后续迁移，不标全量完成。一次check终态exit1，Core1045/1048含两个旧规模超时和一处旧开关夹具；后者已按原不trim条件修正并定向覆盖，不冒称整套通过。详见新审计；旧记录中的“继续”保留为历史状态。
+
+最新：[WBI材料与缓存发布](2026-10-07-wbi-cache-publication-audit.md)已限定收尾：Python在成功缓存发布前按Java UTF16派生mixin，短材料返回PARSE且保留旧缓存，59单元仍接受；仅两个Python源改变、复用现有case，真实两轮RED及最终35项/格式/类型、限定复审C0/I0/Minor0。标准check93298 exit1，Core1045/1047剩Subject501/粉丝2004两个规模超时，其他历史超时未冒称修复；build59877与当前生产23623五页/IPC/证据/重启/PID0通过。独立目录版为本片前版本，不含本WBI修复；继续原功能收尾审计及实际剩余缺口，完整目标仍OPEN。
+
+最新：[当前平台采集目录版](2026-10-07-platform-account-directory-audit.md)已实际交付验收：Python打包22257、Electron目录59233及脱离开发路径的独立运行91268均终态exit0。新 `release/migration-20261007-platform-account/win-unpacked` 包含schema18与当前平台输入/失败证据；内置Worker新能力/非法输入校验、五页、实际IPC、本地对象Core重启保留与正常退出自有PID0已验证。旧目录不覆盖，NSIS/真人/原生和四规模超时/桌面稳定性仍OPEN；继续剩余业务对齐，不以此标全量完成。下文“下一步更新目录版”为此前状态。
+
+最新：[平台account输入](2026-10-07-platform-account-input-audit.md)已有限收尾：原不trim的signed64/BMP数字精确解析、新Worker请求、原样页面输入及默认监控正数隔离已接。两个既有流程真实RED→GREEN、共享校验/类型通过；capability夹具遗漏Important实际复现后闭合，最终15路径v2限定复核C0/I0/Minor0。标准check84193 exit1，Core1043/1047为四个既有规模超时，后续未执行；build22107与真实生产3345五页/输入/证据/重启/PID0通过。下一步更新当前独立目录版及内置Worker验收，再继续其余全量缺口；旧目录包不覆盖最新源码。下文signed输入“未迁”是历史状态，已由本片关闭。
+
+最新：[平台失败响应归档](2026-10-07-platform-failure-evidence-audit.md)已有限收尾：generic account opt-in，实际失败字节/媒体类型经CAS及typed ObjectRef接通，普通粉丝/profile默认不增加失败归档。旧strict root样例缺陷已实际RED→GREEN关闭，不放宽schema；最终13路径v2限定复核C0/I0/Minor0。标准check session48412 exit1，Core1044/1047仍三个既有规模超时，后续未执行；build45468及真实生产Main/Preload/Core/Python/证据核对/五页/重启/PID0通过。继续平台signed64/BMP数字输入，已发布监控正数请求不扩大；其他全量缺口仍OPEN。下面失败结果片的“失败响应证据未迁”是当时记录，已由本片关闭。
+
+最新：[平台单次采集失败结果](2026-10-07-platform-failure-result-audit.md)已有限收尾：原错误文案/风险与内部请求失败边界已接，两个源v2限定复核C0/I0/Minor0，当前hash/字节2/2匹配；既有实际Worker流程RED→GREEN、当前build及真实生产Main/Preload/Python/五页/重启/正常退出通过。标准check session3284 exit1，Core1044/1047仍是Subject501、弹幕501、粉丝2004三个规模超时，后续未执行。失败响应证据与signed MID输入仍未迁，下一业务继续该链路。[被动提交测量](2026-10-07-business-commit-profile-audit.md)显示COMMIT占主要耗时，不支持盲调checkpoint/索引/cache；未改变生产性能设置、预算/并发/持久性。布局选择、完整兼容/桌面/真人原生/最新安装仍OPEN。
+
+最新：[榜单勋章与条目原文归档](2026-10-07-rank-entry-facts-audit.md)已有限收尾：真实Worker/Fetched v2/Core/SQLite接通medal_ruid、medal_is_light、raw_entry_json，追加v18、历史未知NULL；公开DTO/旧wire及原三阶段提交不改。21源限定复核C0/I0/Minor0，当前hash/字节匹配；复用既有case实际RED→GREEN，当前构建及隔离生产五页/真实Rank归档IPC/重启保留/正常退出通过。一次标准check session82158终态exit1，Core1044/1047仍有Subject501、最近弹幕501、粉丝2004三个规模超时，Desktop及后续未执行。下一步被动测量提交/WAL实际耗时再定位，未改预算/并发/持久性；布局选择/桌面稳定性/其他兼容/真人原生/最新安装及全量目标仍OPEN。
+
+此前：[榜单公开数值v2与历史兼容](2026-10-07-rank-long64-audit.md)的signed64/Integer语义、v17精确存储及完整Worker/Core/Main/Preload/UI出口保持；43源v3限定复核与历史宽整数/排序LIMIT的RED→GREEN属于该收尾版本。该片的归档“尚未实施”由上方v18归档片关闭，不重复开发；该片阶段结果不代替最新终态。
+
+此前：[榜单三类响应字段选择](2026-10-07-rank-response-fields-audit.md)的主榜/备用字段隔离、原firstPresent及大航海人数说明保持限定完成；其检查结果是历史版本，不替代上方最新阶段终态。
+
+此前：[榜单API返回码与错误分类](2026-10-07-rank-api-values-audit.md)已有限收尾：数值文本code、-101登录失效、-500可重试及原消息/日志已接，未新增自动重试。五源复核、Core1044/1045及生产结果属于本片收尾版本，不代替最新阶段终态。
+
+此前：[榜单直接文本保存](2026-10-07-rank-storage-text-audit.md)已有限收尾：完整抓取文本在原SQL点截断/编码，人数说明按Unicode64及ASCII-space溢出规则保存；成功日志/CAS及已迁三阶段提交保持。十源限定复核及Core1042/1044属于本片版本，不代替最新阶段结果。
+
+此前：[榜单原始快照与独立提交链](2026-10-07-rank-raw-payload-storage-audit.md)已接，九源复核C0/I0/Minor0；本片前九个收尾hash/字节重新匹配。其Core1041/1043等结果保留历史，后续同名源增量不覆盖它的版本边界。
+
+此前：[直播主原始快照与整体回滚](2026-10-07-live-raw-payload-storage-audit.md)已接，只检查实际主响应，业务整体回滚而独立成功日志/CAS保留；11源限定复核C0/I0/Minor0。其Core1040/1042与相关定向结果是直播片收尾记录，不代替最新榜单阶段终态。
+
+此前：[粉丝原始快照与提交顺序](2026-10-07-follower-raw-payload-storage-audit.md)已补普通资料/日志先提交、历史失败不重试与工作台外层整体回滚；完整原文 JSONB 输入状态穿过真实 Worker，但不改 CAS 字节。16源v2限定复核C0/I0/Minor0；资料Outbox使用实际monitor MID的Important已RED→GREEN关闭，快照MID保持响应值。粉丝旧check和定向结果各自保留，不用直播通过宣称全部性能或模块完成。
+
+最新：[API日志JSONB文本](2026-10-07-api-meta-json-storage-audit.md)对齐两个元数据参数的新写入及失败传播，Subject共享算法保持；原Storage case与唯一新增实际Worker→Core流程RED→GREEN，Storage77/相关Core31/原SubjectJSON/全TS/格式/当前build及隔离生产启停通过，六源限定复核C0/I0/Minor0。未清历史、改schema/服务流程或把普通JSON写入当全JSONB兼容。最新完整check仍是本片前的裁剪版本exit1，不包含此新case；性能/浏览器/布局/真人原生继续OPEN。下一业务先核对原snapshot raw_payload JSONB及部分提交失败的实际链路，未实施，不凭API日志成果关闭它。
+
+此前有限收尾：[最近弹幕裁剪](2026-10-07-retention-prune-audit.md)仅改两个Storage源，以相同排序选择超出N的rowid删除，schema/永久事实/指标/同步提交/预算/并发不变。复用原case真实RED→GREEN，Core原15项/两包类型/当时build及隔离生产五页/IPC/重启/退出通过，限定复核C0/I0/Minor0。阶段check仍exit1，Core1037/1039，弹幕5016069ms及Subject批量6483ms超原5秒，后续未由check执行；提交仍是单次profile主要耗时，不能宣布整体超时修复。不重复旧矩阵求绿；桌面失败/布局策略/真人原生仍OPEN。
+
+最新阶段见[业务页面加载及依赖核验](2026-10-07-workspace-module-startup-audit.md)：七个真实业务模块懒加载/安全失败恢复、16个同配置夹具的标准依赖准备已接，原case/预算/并发保持；最终21源复核C0/I0/Minor0、当前全TS/构建及隔离生产五页切换/IPC/重启/退出通过。旧Python环境 recoverable 保留后按现有锁重建，不新增依赖。阶段 check 仍exit1（Core1038/1039，最近弹幕501原5s超时）；冷Desktop仍exit1（676/686，无跳过，含2个空白页创建 Target crashed）。不把局部修复算整套稳定性完成。当前继续裁剪 SQL 的真实定位；已有目录包未包含本片和最新JSON，不重做旧业务或改预算求绿。
+
+此前：[工作台 JSON 文本保存](2026-10-07-subject-json-storage-audit.md)已对齐五个新写入参数的文本编码和 NUL 拒绝，绑定修改返回实际落库对象；一个新增代表流程真实 RED→GREEN，相关两文件12项、类型、当前生产构建和实际 IPC/重启保留/正常退出验证通过。未改 schema16、历史、布局事务或其他 JSON 参数。阶段 check 终态和最终测试版本见本片审计；原布局逐条提交与客户端原子替换的差异已向用户询问，尚未据此关闭。下面创建事务与旧目录包属于前一片结果，目录包不包含本片 JSON 修复，全量目标仍 active。
+
+JSON片阶段 check 已终态exit1：Core1038通过/1个原5000ms超时（Subject501对象7641ms），新增JSON及前片回滚通过，无未处理拒绝报告；Task3/Contracts511/Storage77/Realtime162/Browser12通过，Desktop/后续未由check执行。最终四源限定复核C0/I0/Minor0，最后移动后的测试定向1项通过；生产代码在check期间保持。配置/101容量在此次完整阶段通过但旧超时根因不冒称已修；桌面历史失败继续开放。不重跑整套求绿或重打包，具体版本边界见最新审计。
+
+此前：[工作台创建整体回滚](2026-10-07-subject-create-transaction-audit.md)已按原创建事务实现：先准备资料，再同步一次提交监控、快照/场次、日志、工作台/绑定/布局及Outbox；不跨await持事务、不补偿删除，改绑原非整体事务保持。一个新增真实流程先RED后GREEN，相关三文件12项、Storage/Core类型、当前Desktop生产构建与实际隔离IPC启停通过；五文件限定复核C0/I0/Minor0。独立并发添加保留，失败十二表不残留，成功复用与重开已验证。JSONB/其他失败行为、阶段超时和真人/原生仍开放；下面各片“跨资源回滚OPEN”为当时记录，不覆盖此最新结果。
+
+本片后阶段检查已exit1：Task3/Contracts511/Storage77/Realtime162/Browser12通过，Core1035通过/3个原5秒超时（Subject501、直播批量配置、弹幕101容量），无未处理拒绝报告；后续阶段没有被该check执行。最新unsigned目录 `release/migration-20261007-subject-transaction/win-unpacked` 实际脱离开发环境运行的内置Worker/IPC/对象重启/退出验收通过，包含本片及前两修复；不是NSIS/真人/原生验收。具体终态与包hash见本片审计，旧1失败/旧包均只作历史结果。
+
+用户已恢复“继续直到全部完成”的全量目标，M01–M18全部真实业务范围保持。上一轮状态核查仅只读、不计进展；随后[直播添加输入](2026-10-07-live-add-identifier-audit.md)补齐原有效数值写法，遵循用户精确UID决定，不复刻Number舍入。一个既有真实浏览器流程先RED后GREEN，Desktop类型/生产构建通过，两源限定复查C0/I0/Minor0；不新增case/fixture或放宽预算。当前继续工作台失败提交等具体原业务边界，统一入口见[交接快照](2026-09-13-migration-handoff.md#当前进度快照2026-10-07)。
+
+随后[Subject三个直接TEXT字段](2026-10-07-subject-direct-text-audit.md)完成限定对齐：复用原pgjdbc编码，姓名/头像/备注新写入的孤立UTF16→`?`、NUL安全失败，正常文本/null语义不改；不转换JSON或清历史。既有Core1/Follower2、Storage/Core类型、当前Desktop构建通过，四源限定复查C0/I0/Minor0。实际新生产隔离Main/Preload/Core的IPC资料创建、单Core重启保留、删除/退出自有PID0通过；自有隔离密钥的OS保护原语已实际验证。后者不等于真实凭据/剪贴板/安装验收；跨资源创建事务、JSONB、阶段失败/性能及其它全量边界继续OPEN。
+
+[阶段回归及目录版](2026-10-07-stage-regression-and-directory-audit.md)已经结束而非仍在运行：check exit1，Core1036通过/1个Subject501对象8098ms超原5000ms；三处夹具失配核定后，一次桌面阶段exit1，664通过/3失败/19跳过，4文件失败。剩粉丝Delete/Status/ProjectionPolling与平台采集超时根因未核定；Widget15项、Realtime等待/退出7项在该完整桌面阶段通过。schema16新unsigned目录版实际启动/重启/本地绑定/退出限定验收通过；它生成于随后直播表单修改前，不声称含最新Renderer修复。当前生产bundle已更新，NSIS/真人/原生仍开放，旧失败日志不改写。
+
+本批已对齐[普通材料API、错误传递与直播媒体文本](2026-10-07-material-api-and-live-media-audit.md)：nav/SPI/DanmuInfo代码与标量原文、空错误消息/共享错误契约、nav解析日志归属、弹幕biliCode匿名回退、精确hex转换，以及Live/Subject头像/封面/关键帧文本。代表流程和相关类型通过，43源冻结差量只读复审无C/I/Minor；阶段完整check已exit1，见下方真实结果，不预称整模块/全量完成。此前String响应、精确计数、导出等成果保持，不重做。
+
+随后处理[导出完整背压与工作台绑定读取](2026-10-07-export-backpressure-and-subject-binding-audit.md)：原路径RED281行，显式64KiB双侧归档缓冲保持256行预算；Subject501对象读取从1002次对齐501次，缺绑定不重查。四源复查无C/I/Minor，两个既有文件8项和Core类型通过；新阶段完整check终态exit1，Core1036通过/1个Subject批量5秒超时，XLSX通过，性能问题不以定点绿色关闭。
+
+本次继续[工作台创建/修改输入](2026-10-07-subject-text-input-audit.md)：原可空字段、文本头像/长备注、raw UTF-16名称上限及Java trim、标签清理去重后12项、null修改不覆盖/[]清标签已接。复用TS2/Core7和同fixture Python响应1项通过，全工作区TS/修改Python格式与八源限定复查通过。随后[资料回填与绑定修改](2026-10-07-subject-backfill-and-binding-audit.md)已实现两种原资料回填规则、历史空串头像及 null 保留/[]清能力、能力列表原文。回填两源及绑定九源限定复查均无C/I/Minor；阶段完整check实际exit1见上方当前结果，不预称整套通过，不扩测试矩阵。
+
+弹幕SPI与DanmuInfo复用String转换：先验证响应头，再分类HTTP失败；SPI按原UNKNOWN/可重试，DanmuInfo429为RATE_LIMITED、其他HTTP失败为UNKNOWN/可重试，保留原消息及安全端点/状态。内部转换错误不进入匿名fallback、不清成功材料缓存；缺省Latin-1资料实际进入LOGIN AUTH包。仅一个新增代表流程RED→GREEN，最后复用3项通过/9项过滤未运行，Node类型、3路径限定复查C0/I0/Minor0、Desktop类型/生产构建及新 `.tools/temp/bmd-production-final-WnU9wa` schema16/精确桥接/单Core重启/正常退出PID0通过。没有改schema、依赖或正常API字段解析；不能扩称完整M09/M10完成。
+
+阶段完整 `check.cmd` 已结束，日志 `.tools/temp/20261007-http-phase-final-check.log`、exit1：Task3、Contracts510、Storage77、Realtime161、Browser12通过；Core1025通过/12失败（10文件），另有2个未处理拒绝。旧Storage Number/bigint断言已修且Storage本轮全部通过；当前Core失败包含弹幕自动/停止/升级状态、Worker启动夹具、禁用配置、场次时间文本、直播Worker解析、限流/日志异常和两项5秒超时，观察值逐项保存于最新审计，根因未核定。Desktop与后续全量类型/Python/构建未由该命令执行，不用单独构建改称整套通过。历史桌面异常退出、Worker启动和趋势超时未据此关闭。
+
+HEAD `4c94959f81033eee544211cfce29a18c84fd602f` / `codex/follower-monitor-actions`和累积未提交改动保持；暂存区空，原B/S `fa2faa6` /API `271b123`干净只读。弹幕任务前489源中仅3声明路径变化、其余486保持，记录时3个当前hash/字节与冻结manifest一致。WBI v2是其收尾时版本，不要求后来被弹幕切片改动的同名文件仍匹配旧hash。没有提交推送、打包、用户库/真实平台/全局记忆写入，文档与证据均在D盘。
+
+上述Core12项是历史结果，定点4+6+2通过不替代完整绿色。材料批次完整exit1为Core1035通过/2失败；其后 `.tools/temp/20261007-two-failures-phase-check.log` 已终态exit1：Task3、Contracts511、Storage77、Realtime162、Browser12通过，Core1036通过/1失败，无旧未处理拒绝报告，剩Subject7840ms超过原5000ms。Desktop及后续未由该命令执行。本批输入仅有限验证；其他配置、JSONB/部分提交、性能、最新schema16目录包和真人/原生验收仍OPEN，完整回归留阶段收尾。
+
+## 上一已完成功能停止点（2026-10-07，直播热度/关注数精确链路）
+
+当前功能已完成，按用户要求到此暂停后续迁移。Live v2 / Subject v3 贯通实际 Python/NDJSON/Core/SQLite/Main/Preload/UI；热度、关注、汇总、差值、工作台历史峰值保持 signed64 精确语义，旧接口安全投影/超域明确错误，不返回舍入值。任意布局 JSON 保真、长轴标签与精确可访问提示的复查问题已闭合，独立 Spec compliant / Quality Approved，无本片未关闭问题。
+
+代表流程与独立类型检查通过；root 最新 Desktop 生产构建 exit0，实际 D盘 `.tools/temp/bmd-production-final-XGdKas` schema16/精确桥接/单Core启动重启/注册表/正常退出PID0通过。最终431任务前源与62本片路径保持核验、限定空白检查通过；原B/S/API只读干净、HEAD4c/空index保持，无提交推送。见[本功能审计](2026-10-07-live-long64-audit.md)与[停止交接](2026-09-13-migration-handoff.md)。
+
+本段为 Live 功能完成时的历史结果，不作为当前状态。此后普通 Double 文本、NDJSON最终帧关联及Follower直接TEXT字段均已完成限定收尾验收，详见上方当前记录点。其他独立兼容域、阶段全量回归/历史问题、同步 SQL/性能、最新目录包、真人扫码/原生保存/安装仍开放；本片完成不是全量 M01–M18 验收完成。
+
+## 此前执行点（2026-10-07，XLSX 表数据背压）
+
+对照原 SXSSF100 行窗口和当前 ExcelJS4.4.0/Archiver5.3.2 实现，只接管 worksheet XML 输入为双向64KiB标准流；立即转换复用 StringBuf，表头/每行等待 drain，sheet.end 后等待消费完再生成下一表。错误/取消主动销毁自有表流并等待关闭，原五格式/schema2/列/类型/样式/编号/快照及 Prepared/Main 保存恢复不改。
+
+一个真实 cork 文件输出代表流程：原路径489行越过256预算，修复后生产停顿且队列≤HWM+单行，释放后读取四表，同夹具阻塞取消完成清理；新增1项及既有内容/取消3项通过，Core类型通过。预算包含已核对 Archiver 固定1MiB缓冲，不是任意RSS承诺。独立任务审阅 Spec compliant / Quality Approved，无C/I；其全局保持警告由前片差量冻结和既有内容回归承接。root Desktop类型/生产构建、实际新 `.tools/temp/bmd-production-final-ZxdbhH` schema16/单Core/重启/真实注册表/退出PID残留0通过；文件hash与冻结报告一致。
+
+报告 `.tools/temp/20261006-xlsx-backpressure-report.md`；日期跨日不改旧任务locator。下一片直播 online/attention Long64、直接汇总/差值/Subject和UI精确出口，设计 `20261006-live-long64-design.md` 已只读核对、尚未实施。之后普通Double文本和Python最终帧关联。同步SQL/写入、性能、当前目录包、阶段回归和真人/原生验收继续开放，目标active、原库干净只读、无提交推送。
+
+## 此前执行点（2026-10-06，prepared 成品交接）
+
+继续只读原 Export Service/Controller/XLSX Writer，五格式/schema2/事务快照/建议文件名保持，编号仍在文件 IO 前分配一次。新 prepared 使用专属目录，先 wx/sync 唯一 HMAC owner，再固定 output；owner 包含可信 Main UUID/PID、creator Core PID、根/目录稳定身份与完整类别。Main 身份仅从主进程 fork env 注入，不来自 Renderer；公共契约/UI 不变。
+
+Core 启动开库/Worker 前校验 key、恢复 prepared；两个 PID 分别明确 ESRCH 才清理，Main 存活时保护 Core 重启/保存对话框。签名/身份/链接/未知成员不明保留，恢复首次 unlink 前持久审计失败不删；正常 finally 按 expected owner/marker/output identity 清理，固定 output→owner→rmdir、不递归。Main 接受前和对话框后分别核对，实际 RED 查明替换输出仍被保存后补二次核对。legacy flat 可保存但不恢复，saved 成品与 `.part` journal 不变。共享安全原语抽取，snapshot 规则保持。
+
+仅新增 Core 真实双进程交接与 Main 私有保存两个代表流程，复用五格式/退出/part/保活/host：最终 Core5、Main定点6通过，31 filtered 不计通过；两包类型通过。独立13路径任务差量审阅 Spec compliant / Task quality Approved，无本片 C/I。root 最终 Desktop类型/生产构建与实际生产 Main/Preload/Renderer/Core 在 `.tools/temp/bmd-production-final-4qEFsn` ready/schema16、单 Core、重启单 Core、真实注册表与正常退出/PID残留0通过。自动平台/OAuth关闭，无用户库或真实凭据。
+
+额外旧 host rank 用例本轮两次确实失败，未豁免或宣称全套通过。只读定位：fixture未提供现行 shared Node Realtime entry，Runtime 在 Python transport 创建前返回 unavailable Rank source；prepared前后该选择方法相同。另发现 Python fixture要求 raw cache=-8 而 host未写配置。仅原case新增9行合成依赖/明确配置，72条原断言保持；原case定点1通过/21 filtered与Desktop类型通过，独立Spec compliant/Quality Approved，无C/I。关闭该项当前失败，不代表全22项/WBI/真人验收。见 `.tools/temp/20261006-prepared-export-report.md`、`20261006-rank-startup-availability-diagnosis.md` 与 `20261006-rank-fixture-report.md`。
+
+下一业务已有源证据：XLSX StreamBuf 忽略真实背压，拟窄接 worksheet XML 标准有界流；然后直播响应 Long、普通 Double 文本、Python final 关联三个有限兼容子片。只读报告不计实现。同步 SQL/写入/单条90秒、未知残留/恶意换路径/断电、旧阶段检查、最新目录包及真人/原生继续开放；目标 active，未提交推送。
+
+## 此前执行点（2026-10-06，导出自有临时文件恢复）
+
+再次只读原 Export Controller/Service/XLSX Writer：原来是事务快照写 HTTP 输出流与正常 finally 清理，本片是客户端文件生命周期适配，不新增导出格式、UI 或业务服务器。原五格式、schema2、编号和成品内容不变。
+
+Core ZIP/XLSX snapshot 目录先写 owner v1，再写快照；记录随机任务、Core PID、类型、相对名称及根/工作目录稳定身份。启动时在 SQLite/Worker 之前仅恢复确认自有、PID 明确 ESRCH、无链接和未知成员的目录；固定名单 unlink/rmdir，不递归。平铺 prepared 与用户成品不在扫描范围。恢复删除前先安全持久审计 attempted，失败保留；删除后写 removed，完成审计失败单列 removed_audit_unconfirmed。正常 finally 使用同一所有权检查，owner 不进入 ZIP/XLSX 成品。
+
+Main `.part` 使用现有 key 的 HKDF 独立域与 AES-GCM/AAD 加密 journal，不记录 savedPath、内容或明文 key。独占创建取得 FD 身份后，journal 写入/sync/close 成功才复制；完整关闭后复核身份、同目录 rename。主实例锁/key 后、Core/IPC 前只恢复确认自有且 dead Main 的精确 part；删除前持久审计失败就保留，不枚举用户目标目录。Core restart 不重复 Main recovery。新增 startup barrier 后独立复查发现在途 start 可能双 fork，实际源码函数探针 RED starts2→GREEN starts1；增加在途 Promise 共享，完成后失联仍可重启，最终复查无本片 Critical/Important。
+
+只新增两个代表流程：Core 恢复用实际退出子进程 PID 与真实文件，Main 用实际保存函数在 Node 子进程中复制后强杀，验证活动 part、类似名称的无关文件、原成品与 legacy prepared 保留。恢复缺失、首次并发 mkdir EEXIST、缺持久审计均先 RED 后修复；最终根代理定向 Core4/Main3 共7通过，Core 类型和最终 Desktop 类型/生产构建通过，无全量检查或格式矩阵。复用原编号/计数回归也通过，不把同一用例重复执行累计计数。
+
+实际最新生产 Main/Preload/Renderer/Core 在新 D 盘 `.tools/temp/bmd-production-final-aKQdSb` ready/schema16、真实平台注册表、单 Core、重启后单 Core及正常退出/记录 PID 残留0通过。首次 smoke 将 utilityProcess 配置的 serviceName 误作 ProcessMetric.serviceName，采样和已安装 Electron 类型确认它实际在 name 中；只修验证脚本字段再通过，不改业务源码或删断言。自动采集/OAuth关闭，无用户库/真实平台/凭据。
+
+Main 中间一次测试因 finally 重复等待已退出 signal 子进程而超时，修正 harness 后三项通过；早期合成目录 `.tools/temp/bmd-export-save-i6evpE` 的精确清理被自动审查拒绝，未绕过，保留于 D，最终用例各自正常清理。Core/Desktop 只添加已锁定 zod4.4.3 的直接依赖，离线恢复链接，无下载新版本/工具链。原 B/S 干净只读、旧增量/空 index 保持，未提交推送。
+
+下一片是 prepared 成品的所有权：拟采用先写签名 owner 的专属工作目录，Main 与 Core 双 PID 均明确死亡才回收，避免 Core 重启误删正在保存的成品；当前仅方案核对完成，尚未实施。marker/journal 前不可证明残留、旧无标记文件、PID复用/权限不明、恶意并发路径替换/断电事务仍保守保留。同步 SQL/写入、严格有界/性能、真人与原生验收及其他 M01–M18 缺口不关闭，目标仍 active。
+
+## 此前执行点（2026-10-06，API 日志、响应归档与导出退出）
+
+对照原 Follower/Live/Rank Service 的 `recordApiCall` 与 V1 Repository，补齐每次请求的白名单参数、成功标记、原失败消息及可选 `biliCode`。UID/房间身份沿本地契约保持精确十进制字符串，不序列化整个 Worker 请求、WBI 材料或 Cookie；原项目没有日志查询界面，不新增 UI。追加 SQLite v16 两个可空 JSON 字段，旧行保持未知、不编造元数据；旧迁移不改。
+
+复用一个真实 Python→Core→SQLite 粉丝失败流程 RED→GREEN；一个直播房间解析流程和一个 Rank 风控重试流程通过。旧 v15→v16、重开保留与精确 UID 复用已有存储流程通过；因 schema 前进，既有旧版本夹具还原旧 API-call 布局，v8/v11/v12/v13/v14 五个代表升级流程通过。首次 Rank 断言误写 pageSize=30，按实际配置修正为50后通过，不改业务配置。Storage/Core 类型通过，未运行全套。
+
+Live 响应改为端点解析和既有共享业务字段契约都通过后才写 CAS；平台错误及契约失败不归档原响应。复用同一个 Python HTTP 用例两次 RED→GREEN，最终1通过，三文件格式/两源类型通过；早先78项是在契约提前校验之前，不算最终版本覆盖。独立只读复查的 CAS Important 已修，无剩余本片阻断。
+
+M12 补 Runtime 内部停止信号，异步 ZIP/XLSX 压缩、读取及 commit 阶段取消后，等待输入/输出/归档流关闭并清理快照目录，最后关闭 SQLite。原五格式内容、编号和同步事务快照不改，无新取消界面。复用旧退出流程的 ZIP/XLSX 两阶段 RED→GREEN，连同原五格式主流程3通过；修复 ExcelJS 延迟 finalize 在取消后引发的未处理拒绝。独立只读复查及已安装库实现核对无本片 Critical/Important；Archiver 自然成功不保证 close，成功路径等待输出关闭、取消显式 destroy 后等待归档 close。同步 SQL/写入仍不能被事件循环外取消即时打断，严格有界、性能、崩溃恢复仍开放。
+
+最终 Desktop 类型/生产构建通过，初次构建发现 Rank 元数据联合类型带隐式 undefined，显式白名单类型标注后通过，未扩大字段类型。实际运行最新生产构建 Main/Preload/Renderer/Core，独立 `.tools/temp/bmd-production-final-xMCjK5`：ready/schema16、真实平台注册表、Core 重启/正常退出及记录 PID 残留0通过，自动采集/OAuth关闭，无真实平台/凭据/用户库。限定 diff check、最终 Core 类型及项目进程0通过。
+
+M06 原 API日志 failureMeta 子项及 M12 异步压缩退出取消已闭合；其他精细兼容、旧整体检查、M12 性能/崩溃恢复及真人/原生验收仍保留。原 B/S 干净只读，客户端旧增量与空 index 保持，无提交推送。上次目录包是本次改动前的 v15，不冒称它已经包含 v16/最新 Python 修复；目标仍 active。
+
+## 此前执行点（2026-10-06，HTTP 异常边界与独立目录客户端）
+
+再核对原 15 个 Controller 及真实消费者，未发现新的功能级漏迁。M06 补 MIME/charset 转换异常先于 HTTP 状态/空体分类：Worker 安全回帧且不退出，Core 映射内部错误而不记 API 失败、不重试/回退或更改 monitor/backoff/历史。一个已有 HTTP503 主流程 RED→GREEN，并复用普通解码回归；无新 case/文件/矩阵。类型、Python生产源格式/类型、最终 Desktop 构建与限定 diff check 通过。
+
+旧默认 Jackson recycler Important 经原 compiled client 再复现，限定为病理长数值的线程/预热历史兼容残差；普通短浮点/精确 Long64 一致，不臆造缓存模型或关闭该残差。完整 Java codec/UTF16、其他编码/配置等待核对保持。
+
+M18 新 unsigned 目录版 `release/migration-20261006-YHQ4nF/win-unpacked/BiliMonitor Desktop.exe` 已离线构建并实际启动：移除开发 Node/Python/环境路径，内置 Python 握手、真实 app.asar/Main/Preload/Core/SQLite v15、注册表、本地对象写入/重启保留/删除、正常退出及记录 PID 残留 0 通过，数据独立 D 目录。未安装 NSIS、未覆盖旧安装包、未访问真实平台/凭据/用户库。细节见[交接](2026-09-13-migration-handoff.md)。
+
+尚需用户配合真人扫码、授权测试 UID/房间及原生导出；旧整体回归超时、精细兼容/大数据/崩溃恢复边界仍在范围内。源库干净只读，旧增量/空 index 保持，无提交推送，目标 active，不标全验收完成。
+
+## 此前执行点（2026-10-06，功能面收口与真实客户端验证）
+
+M15 补原 Web/OAuth 原子保存、重叠消费/刷新合并、Worker 终态/TTL 清理、完整复验及原浏览器配置与身份字段。界面接原扫码重开/关闭/失败重试/手动刷新、迟到隔离与进度、完整字段抽屉/复制，校验无效不再报成功。M14 补 key 原文/80 Unicode 字符及 Service 内部 null 恢复，同时保持公共 Runtime/IPC 必填数组边界。
+
+M16 已接注册表及真实 account run-once Worker 链路、新平台采集页及精确 UID/计数/失败展示，portable schema/同一合成样例的 TS/Python 校验已补齐；其余通用采集沿原 unsupported，不新增空方法的任务历史。M17 完成 Mock/静态/真实健康分类，不恢复伪业务导航。
+
+M09 数量夹值、M10 最新分钟页集合/latest 单页/头像格式已修；另补 PREPARING→立即 REST 确认促排、原六处搜索选择器、事件数字分页及五页跳转。M01–M08、M11–M14 只读功能面核对发现的具体缺口均闭合，不把旧深层兼容清单误称缺失操作。
+
+代表性回归、全 workspace 类型、Python 生产源格式/类型和最终生产构建通过。真实 Electron Main/Preload/Renderer/Core 离线验证 ready/schema15、空列表/真实注册表、新 Core 重启及正常退出，无记录 PID 残留；旧 v12→v15/外键/rowid/重开保留代表用例通过。使用新 D 盘目录、无真实平台/凭据/用户库，headless 跳过系统协议注册。原库干净只读、旧增量/空 index 保持，无提交推送。
+
+代码功能面与真人/原生验收分开：尚需用户配合扫码、测试 UID/房间和原生导出；已询问是现在验收还是先交付代码。旧全量 check 超时、精细 JVM/Spring/HTTP/编码和性能/崩溃恢复边界不凭此次核对关闭，不扩上千项矩阵。目标仍 active，不标完整验收完成。具体证据和边界见[交接](2026-09-13-migration-handoff.md)。
+
+## 此前执行点（2026-10-06，工作台页头与指标）
+
+原页头的头像三层来源/直播标记、健康条、直播/弹幕标签准入和监听/采集文案已接；KPI 补原净增/峰值/弹幕状态/模块标签，普通数值万/亿精度及净增 0/今日文案，保留超安全整数 Long64 精确展示。最近成功/下一轮沿原相对时间/月日时分秒/缺省 `--`，无实际 user/room 显示原资源绑定提醒。沿用粉白 token，未改后端数据、轮询或采集。
+
+一个已有 UI 主流程 RED→GREEN，1 通过、3 未运行；类型与生产构建通过，未扩测试矩阵/新命名用例或全量回归。只读并行核对确认 Core/V2 所需字段和时间聚合已存在。下一业务 M15 抖音 Web/OAuth 登录态管理；M14 layout key 原文/内部 null 与必填 body 边界及其他全量业务/阶段回归/真人原生验收仍开放。原库只读、D 盘产物、旧增量/空 index 保持，无提交推送，详见[交接](2026-09-13-migration-handoff.md)。
+
+## 此前执行点（2026-10-06，布局真实边界）
+
+对照原固定四块/静态占位 UI，移除客户端额外组件列表与恢复按钮、专属 mutation/props，恢复“待添加模块”原文并保留已迁临时拖动。后台布局数据及 typed bridge 不删除：null/省略三字段归一原 true/{}/{}，false/非空对象保留，去掉额外 50 项限制；原 [] 恢复四项和 upsert 语义保持。不增加隐藏/重排/保存 UI 或 AI 能力。
+
+仅复用两个既有定点 RED→GREEN（Core/SQLite 主流程、静态工作台渲染），2 通过、7 未运行；Core 类型与最终 Desktop 类型/生产构建通过，无新测试文件/命名 case/fixture、完整回归或矩阵。下一项原页头/KPI/无资源提醒；layout key 原文 trim 和内部 null 列表/必填 HTTP body 边界仍待核对，不标全部 M14 完成。原 B/S 只读、旧增量/空 index 与 D 盘约束保持，无提交推送；完整 M01–M18/阶段回归/原生手工继续开放，详见[交接](2026-09-13-migration-handoff.md)。
+
+## 此前执行点（2026-10-06，健康面板展示）
+
+原健康组件的最近成功/事件相对时间、未来时间绝对回退、下一轮月日时分秒、缺省 `--`、对象标题和 85/65 分动态健康标签已接现有粉白 UI。复用既有格式函数/颜色 token，无新查询、轮询、后端或菜单。
+
+只扩一个既有 UI 主流程及 fixture，RED→GREEN；夹具返回独立快照，不共享 Query 缓存对象。一次 fork 异常退出保留记录且原因未知，限定检查后原命令一次补验通过（1 通过、3 未运行），桌面类型/生产构建通过，健康面板截图已检查；未新增测试文件/命名 case、全量回归或矩阵。
+
+下一项 M14 布局真实边界：原 UI 只有宽高拖动和静态占位，客户端额外组件列表/恢复入口需对齐；原后台 layout 对显式 null 的缺省语义独立保留，不臆造隐藏/重排/保存 UI。原 B/S 只读、旧增量/空 index 与 D 盘约束保持，无提交推送；完整 M14/M01–M18/阶段回归/原生手工仍开放，详见[交接](2026-09-13-migration-handoff.md)。
+
+## 此前执行点（2026-10-06，当前房间事件聚合）
+
+原工作台按房间查询最近 6 条状态事件，再合并直播/粉丝采集成功与异常、倒序取 8 条。客户端已去掉全局 200 后过滤的遗漏路径，保留原全局调用；事件标题/Java blank 说明回退、可空说明、无事件提示的本次读取时间及 lastEventAt 投影已对齐。健康扣分原规则核对一致，没有新采集/契约/schema。
+
+只扩一个既有真实 Core/SQLite 主流程，RED 复现预期 8 条实得 2 条，修正一个夹具表名笔误后 GREEN（1 通过、1 未运行）；Core 类型和最终 Desktop 类型/生产构建通过。未新增命名 case/文件、全量回归或矩阵。并行只读核对健康 UI，下一项最近成功/事件相对时间、下轮采集格式和动态健康标签；来源回退已一致，不迁移原无 handler 的“更多”为新菜单。原 B/S 只读、旧增量/空 index 与 D 盘约束保持，无提交推送。完整 M14/M01–M18/原生手工仍开放，详见[交接](2026-09-13-migration-handoff.md)。
+
+## 此前执行点（2026-10-06，对象列表完整读取）
+
+原对象列表无 LIMIT；已移除客户端 Subject 默认 100/上限 500/Core 截断/UI 固定 500，省略 limit 默认全量，显式数量限制和原排序保持。粉丝/直播绑定资源原本已经全量，核对后不改。临时 SQLite 的 501 个对象覆盖全量及显式限制，现有 UI 主流程确认传 `{}`。
+
+复用四个既有定点 RED→GREEN（4 通过、12 未运行），Core 类型和最终 Desktop 类型/生产构建通过；限定只读复核无阻断项。没有新增测试文件/命名 case/矩阵或全量回归。按用户最新提速要求，后续默认一个代表性业务主流程加必要编译，不逐层重复验证同一行为；只为实际高风险数据/凭据/退出变更补必要检查，历史回归和累计审查留阶段收尾，不再追加本片测试。
+
+下一业务 M14 工作台采集健康/事件聚合：修正先取全局 200 再过滤造成当前房间事件遗漏，并逐项对照原事件映射。后台布局、工作台其余展示、完整 M01–M18 和原生手工仍开放；原 B/S 只读、旧增量/空 index 与 D 盘约束保持，无提交推送。详见[交接](2026-09-13-migration-handoff.md)。
+
+## 此前执行点（2026-10-06，创建输入与绑定缺省）
+
+对照原 DTO/Service/Repository，创建弹幕开关由错误 default(true) 改为 optional，保留省略与显式 false/true；Core 创建绑定判断纳入显式开关。仅名称全省略无绑定，名称+开关有空身份绑定且不新增采集资源，身份+省略开关的首次绑定默认 false。原 UI 仍 UID 必填、名称可选、默认显式 true，不新增仅名称入口；UID 输入复用精确规范化器兼容空白/前导零，移除 browser pattern，required 保留。
+
+只扩四个既有相关用例，RED→GREEN（4 个不同定点通过、12 项未运行），没有新用例文件/命名 case/fixture；Core 类型、最终 Desktop 类型/生产构建通过，限定生产修改只读复核无 C/I。无全量回归或扩展矩阵；原 B/S 只读、旧增量/空 index 与 D 盘约束保持，无提交推送。
+
+下一业务是原无 LIMIT 的监控对象列表与绑定资源读取：客户端 Subject 默认100/上限500/UI硬500仍会截断；粉丝选择已全量，直播选择缺省继续核对。后台布局与工作台展示等剩余 M14、完整 M01–M18 和原生手工仍开放。详见[交接](2026-09-13-migration-handoff.md)。
+
+## 此前执行点（2026-10-06，工作台双指标趋势）
+
+对照原 `BilibiliFollowerLiveHeatWidget.vue`，已替换工作台简图：真实时间间距、有效指标时间并集、原时间范围/粉丝热度双轴范围与刻度、分别跨缺失点连线、悬停时间/指标行。粉丝范围用 BigInt 精确有理运算，超安全整数的刻度/提示不舍入；安全值沿原 compact，缺失不填零。响应式 SVG 随拖动测量像素尺寸，不拉伸文字；原平滑程度/低透明面积与现有粉白 token 保持，无新依赖/API/schema。
+
+仅扩一个既有 UI 主流程和 fixture，RED→GREEN（1 通过、3 项未运行），未新增测试文件/命名用例；截图已检查，最终 Desktop 类型/生产构建通过，限定图表/样式/接线只读复核无 C/I。没有全量回归或扩展矩阵；原 B/S 干净只读、旧增量/空 index 与 D 盘约束保持，无提交推送。
+
+下一业务为原工作台名称创建/可选身份/弹幕缺省契约，再逐项核对列表资源分页、后台布局与页头/页脚格式等 M14 差异。完整 M01–M18、阶段回归和原生手工仍开放。详见[交接](2026-09-13-migration-handoff.md)。
+
+## 此前执行点（2026-10-06，工作台拖动尺寸）
+
+对照原 `SubjectWidgetBoard.vue`，已接入工作台右下角拖动双列宽度/首行高度：默认 61%/650px、原比例 44–76% 与高度 560–920px、宽板主列 520/副列 360px 下限；<=1180px 单列且隐藏手柄。趋势 SVG 随高度缩放，合并触发 resize；释放/取消/失焦/卸载清理监听与 body 状态。只有当前页面临时尺寸，不增加原 UI 不存在的重排、隐藏或布局持久化。
+
+只在已有交互文件新增一条拖动主流程，RED→GREEN（1 通过、3 项未运行）；最终 Desktop 类型/生产构建通过，限定组件/样式/接线只读复核无 C/I。无全量回归或额外矩阵，原 B/S 干净只读、旧增量/空 index 与 D 盘约束保持，无提交推送。后续继续主流程优先，不设测试数量配额，阶段末再完整回归。
+
+下一业务核对原 `BilibiliFollowerLiveHeatWidget.vue` 的时间轴、双轴范围及悬停数据，保留精确 Long64。后台布局 API、名称创建缺省契约、列表截断/资源分页、其余 M14/M01–M18 与原生手工仍开放。详见[交接](2026-09-13-migration-handoff.md)。
+
+## 此前执行点（2026-10-06，监控对象列表与删除）
+
+对照原 `SubjectListView.vue` 的常驻刷新、具名确认、删除成功提示和刷新列表，已补客户端列表入口与 pending/成功反馈。客户端额外补强状态/删除失败反馈和重试，错误不隐藏正常内容；暂停仍仅改变对象，不改变共享监控状态。删除成功取消旧列表读取、更新列表缓存、移除该对象工作台/趋势缓存并清选择；切回工作台不再请求已删除对象，加载/错误/空状态都能返回列表。新建对象先发布实际返回值到列表，避免选择校验误回到旧对象。
+
+仅扩一个既有 UI 主流程，失败反馈 RED→GREEN（1 通过、2 项未运行）；最终 Desktop 类型/生产构建通过，限定本轮三文件只读复核无 C/I。无新测试文件/用例、矩阵、审计或计划文档，无全量回归；原 B/S 干净只读，旧增量与 D 盘约束保持，无提交推送。
+
+下一功能按原 `SubjectWidgetBoard.vue` 实现双列宽度/首行高度的临时拖动：默认 61%/650px，比例 44–76%、高度 560–920px，小屏单列/隐藏手柄。原 UI 没有重排、模块隐藏或布局持久化操作，不把这些计划成已存在业务；后台布局 API 仍独立核对。名称创建缺省契约、列表截断/资源分页、其余 M14/M01–M18 与原生手工继续开放。详见[交接](2026-09-13-migration-handoff.md)。
+
+## 此前执行点（2026-10-06，用户工作台改绑）
+
+对照原 `SubjectService.bindSubject/resolveBindingInput` 与 `SubjectRepository.upsertBinding`，修复旧监控 ID 覆盖新 UID/房间的改绑错误：只解析本次请求，再逐字段保留未提供的旧值；只切开关不重新创建资源，`false`/空能力数组按输入保存，旧共享监控与历史不删除。绑定失败保留弹窗、选择和错误，按钮恢复后可重试，消费提交 rejection。
+
+复用一个 Core 主流程与一个原绑定 UI 用例，RED→GREEN；Core 类型和最终 Desktop 类型/生产构建通过。没有新增测试文件、用例数量配额、矩阵、审计/计划文件或全量回归。用户再次要求提速：优先落地原业务，必要检查通过就移到下一功能，不在当前功能继续扩展验证范围。
+
+当时下一项为 M14 删除后的选择恢复、正常列表刷新及操作错误反馈；本轮重新核对原布局 UI，仅有双列宽高的临时拖动，没有隐藏/重排/保存操作。只含名称创建的绑定/弹幕缺省契约、资源列表分页和其余工作台差异仍待核对，不能将本片标成 M14 或 M01–M18 全量完成。原 B/S 只读、旧增量保持、产物 D 盘，无提交推送。详见[交接](2026-09-13-migration-handoff.md)。
+
+## 此前执行点（2026-10-06，长导出与本地保存）
+
+[实现与交接](2026-09-13-migration-handoff.md)：对照原 Controller 同步下载、XLSX finally 清理和 Vue 下载入口，没有新增原项目不存在的取消任务界面。同步快照按墙钟遍历保活全部已接收请求；Main 在活动导出期间用经关联验证的存活帧保护排队长请求，默认短查询/无导出的 HTTP 预算不变。Controller/Core 等活动导出及清理完成后退出/关闭 SQLite。
+
+Main 跟踪准备与保存操作；退出 abort 对话框等待和复制，重复退出在 drain 结束前继续阻止，迟到的准备结果只清理不保存。同目录独占部分文件完整复制、关闭后 rename，失败保留已有目标；检查 D 盘与真实路径、拒绝临时目录目标。取消/成功/失败和清理异常写入脱敏本地审计日志，不保存选址或导出内容。5 个不同关键用例、两项实际回调 RED/GREEN、Core/桌面类型和最终构建通过，限定只读审查无剩余 C/I；未全量回归或原生操作。
+
+等待生成完成不等于立即取消压缩；单条阻塞 SQL/写入超过 90 秒仍有 watchdog 边界，严格有界/大规模性能/超 4GB/原生保存/崩溃恢复与完整 M12/M01–M18 继续保留。下一业务 M14 用户工作台绑定改删与资源复用，先核对原实现，再逐功能迁移；不重复已完成导出取证或扩测试矩阵。原库只读、旧增量保持、所有产物 D 盘，无提交推送。
+
+## 此前执行点（2026-10-06，CSV/ZIP 逐行导出）
+
+[实现与交接](2026-09-13-migration-handoff.md)：三个 CSV 分类已用 SQL 迭代器同步逐行生成；ZIP 的摘要/明细/用户与 manifest 在一次事务写出 D 盘快照，再顺序流式压缩。BOM/CRLF/表头/转义/原 Java whitespace 防公式、固定五文件/schema 2/epoch 时间戳、字段与日编号保持。fflate 不支持写 ZIP64，新增纯 JS yazl 3.3.1 保留原大文件能力；未做超 4GB 实跑验收。
+
+仅扩充已有唯一导出主流程，先 bulk-read guard 失败后通过；复用两项编号规则，共 3 个不同定点通过，无新命名用例/测试文件或矩阵。Core 类型通过；首次桌面构建因定向安装后的依赖链接失效失败，冻结锁恢复工作区链接后类型/构建通过。下一项长任务/保存/取消生命周期；ExcelJS 严格有界、压缩库内部完整取消、原生手工与完整 M12/M01–M18/旧整体缺口保留。原库只读、产物 D 盘、未提交推送。
+
+## 此前执行点（2026-10-06，Excel 逐行导出）
+
+[实现与交接](2026-09-13-migration-handoff.md)：XLSX 已改为 SQL 汇总/事件和用户游标，在同一同步事务写出四表 D 盘快照；关闭事务后按行生成 Excel，不再保留全部事实或 Workbook/writeBuffer。原内容和样式保持，成功/失败清理快照、失败删除自身部分输出，EEXIST 不删除已有文件。编号先于文件 I/O 分配，保留并发调用顺序及失败占号。
+
+未新增测试文件/命名用例：扩充原唯一导出主流程（1000 条合成事实、禁全量读取、部分输出/EEXIST），复用两项摘要和两项编号规则，5 个不同定点通过；类型/构建通过，限定只读审查无新增阻断项。ExcelJS 慢盘内部队列不保证严格有界，未做大规模性能验收。下一项 CSV/ZIP 流式与失败清理；原生保存、完整 M12/M01–M18 及旧整体缺口仍开放，原库只读、产物 D 盘、未提交推送。
+
+## 此前执行点（2026-10-06，Excel 导出内容）
+
+[实现与交接](2026-09-13-migration-handoff.md)：对照原 XlsxWriter/Columns/ExportRepository，确认四表、双行表头、冻结/筛选/列宽、文本 UID 和主要数据口径；修正 XLSX 协议版本写为文本、历史昵称只按普通空格判空、表头/说明行细线。复用一个真实 SQLite→导出文件→ExcelJS 读取用例，先失败后通过；Core/桌面类型和构建通过，无新增测试文件或矩阵。
+
+原 SXSSF 流式行窗口与客户端全量内存生成仍有能力差异，下一项继续此导出链，不把内容对齐标成完整 M12。上游已经裁剪的昵称空白不能由导出恢复，后续采集字段核对仍保留。原生保存、其他格式/失败清理、全 M01–M18 及旧整体缺口继续开放；原库只读、产物 D 盘，未提交推送。
+
+## 此前执行点（2026-10-06，分析看板）
+
+[实现与交接](2026-09-13-migration-handoff.md)：原分析页所有展示区块与选择/粒度/刷新控制已接本地 insight。默认不轮询，启用后请求完成再计时；失败保留同场次成功结果。零金额付费用户、全弹幕阶段边界、场次内覆盖区间与分段整秒、连续 P95、转化时长四舍五入及两项五位占比按原计算修正。用户分层总数跟随当前 insight，不使用旧场次摘要。
+
+仅新增一个 UI 主流程与一个合成事实统计场景，复用两个选场和一个历史付费用例：5 个不同定点通过；Core/桌面类型及生产构建通过。限定静态审查发现的分层人数问题已修正。粉白截图已检查；无全量历史回归、测试矩阵或新增审计文件。
+
+下一项 M12 原导出业务，先 Excel XLSX 内容核对；M11/M13 完整验收、全 M01–M18、真人/原生安装及旧整体验证缺口仍开放。用户再次要求提速：不设最低新增测试数量，不重复历史诊断，必要验证后继续业务。原库只读、产物 D 盘，未提交推送。
+
+## 此前执行点（2026-10-06，直播场次面板）
+
+[本轮实现与交接](2026-09-13-migration-handoff.md)：原最近 20 场、独立详情/Top 100 身份、11 项统计与边界/覆盖说明、五种本地导出、默认 10 秒/1–3600 秒刷新和失败恢复已接通。独立面板与 hook 复用 typed bridge；自动/手动列表刷新链完成后计时，房间/视图过期结果不发布。此前[数据中心](2026-10-06-data-center-migration.md)、[场次识别](2026-10-06-session-instant-identity.md)与[共享材料](2026-10-06-shared-materials-migration.md)实现保留。
+
+仅新增 1 条代表流程，复用原选场/静态用例；三项交互、静态定点、桌面类型与构建通过。限定只读审查无新增阻断项，原版并行换选限制留可选改进。未运行全套历史回归，旧整体缺口不撤销；完整回归留阶段收尾。
+
+下一项原分析看板：信号轨/趋势图、参与阶段/重复弹幕、消费档/用户分层、礼物结构。完整 M11/M01–M18/真人原生安装及原生导出手工验收继续 open，目标 active；原库只读、旧增量和 D 盘约束保持，未提交推送。
+
+## 此前执行点（2026-10-06，弹幕指标时间范围）
+
+[本轮审计](2026-10-06-danmaku-metrics-range-audit.md)：保留原range输入，Java trim/Long64/BMP数字/非正floor1及无效/Duration溢出回退1h；日期减法越界报错。合法超JS范围窗口仅省略恒真下界，不夹窗口；原闭区间/最新2000升序保持，不改UI/数据库版本。
+
+仅2个新Core用例+1共享fixture，复用portable对齐；5个定点通过，28项选择外不计通过。三包types/Main一次build退出0，任务审查与安全结论见审计。没有完整历史套件或矩阵，旧整体缺口保留。
+
+下一原事实写入时间、共享缓存/同步双检/fallback与其它M09；完整M01–M18/真人原生安装仍open，goal active。原B/S/API只读、旧增量/D盘/HEAD4c94959/空index保持，未提交推送。
+
+## 此前执行点（2026-10-06，弹幕连接容量）
+
+[本轮审计](2026-10-06-danmaku-capacity-audit.md)：移除Worker额外100存活session限制，Core按原默认10/floor1/配置值单点仲裁，保留手动自动共享、活动连接复用、操作队列背压与停止保护。只改1生产文件，无新契约/Worker配置。
+
+仅1新贯穿用例，复用4项，共5个不同定点通过；25选择外不计通过。测试适配曾类型/strict结果失败，已最小修正，最终两包types/Main一次build退出0，2路径任务审查通过，Critical/Important无，Minor测试清理异常兜底留阶段收尾，不追加验证。无完整历史检查或矩阵，旧整体验证缺口保留。
+
+下一步M09指标range回退/Long解析、写入时间、共享缓存/同步双检/fallback及其它原业务；完整M01–M18/真人原生安装仍open，goal active。原B/S/API只读、旧增量/D盘/HEAD4c94959/空index保持，未提交推送。
+
+## 此前执行点（2026-10-06，弹幕指标分桶）
+
+[本轮审计](2026-10-06-danmaku-metric-buckets-audit.md)：bucketSeconds原signed32/default60贯通实际Core/SQLite/返回；max(10,raw)仅对齐，raw字段/唯一键保留，无3600上限。追加v15保留历史及依赖/外键，不重算旧桶，不改已发布迁移。probe默认20仅绑定，原无消费者不造任务，15个原输入字段已支持。
+
+仅3个新用例，复用7项定点共10通过；TS108项选择外不计通过。三包types/Main一次build退出0，19路径任务审查通过，Critical/Important/Minor均0，无修复或追加验证。按用户要求减少测试、加快迁移，每功能2–3个关键用例，完整回归留阶段末；旧整体验证缺口保留。
+
+下一步Node100容量、range回退/Long解析、created/updated写入时间、共享缓存/同步双检/fallback等原M09业务；完整M01–M18/真人原生安装仍open，目标active。原B/S/API只读，旧增量/D盘/HEAD4c94959/空index保持，未提交推送。
+
+## 此前执行点（2026-10-06，WBI / Buvid 缓存时长）
+
+[本轮审计](2026-10-06-danmaku-cache-configuration-audit.md)：两项 raw signed32/default43200、成功后 floor300/到期重取已贯通实际弹幕连接与 Python Rank。独立 cacheConfiguration 保持旧五项连接配置；AUTH_EXPIRED 保Buvid强刷WBI、risk清两项、nav匿名，发布前取消保护已接。
+
+只有3个新命名测试，新旧定点共10项通过（其余选择外用例不计通过），三包types/三个Python文件格式及Main一次build通过；27路径任务增量审查Spec/Task quality PASS，无需修复，未重跑验证。用户再次明确迁移太慢：不逐项跑历史套件、不铺矩阵，阶段结束再完整检查。
+
+现13/15配置，余bucket/probe。跨Worker共享WBI、同步双检、多段fallback重新LOGIN以及Node100/其他M09/完整M01–M18/真人原生安装仍open。旧完整检查缺口不撤销；原B/S/API只读、旧增量/D盘/HEAD4c94959/空index保持，未提交推送。
+
+## 此前执行点（2026-10-06，弹幕连接配置与身份策略）
+
+[本轮审计](2026-10-06-danmaku-connection-configuration-audit.md)：五项heartbeat/connectTimeout/useLoginCredential/webLocation/clientVersion贯通shared/loader/Core/Worker/Socket。禁凭据先于读取，原匿名激活重连保持；WS超时独立HTTP，原心跳floor/固定周期/长等待取消、原文与Java blank已接。
+
+仅3个新代表场景、复用原回归，相关验证/types/build通过。task-only审查R1墙钟/R2brace文本已一波修复，未新增矩阵，覆盖验证及必要重建通过，定向确认Spec/Task quality PASS。没有全历史check/累计98dirty审查，旧完整缺口保留。
+
+现11/15配置，余bucket/WBI TTL/Buvid TTL/probe四项、Node100及其它M09继续；probe无消费者不臆造。完整M01–M18/真人/原生/安装未完成，阶段收尾统一回归。原项目/API只读、此前增量/D盘/HEAD4c94959/空index保持，未提交推送。
+
+## 此前执行点（2026-10-06，弹幕连接与认证生命周期）
+
+[本轮审计](2026-10-06-danmaku-auth-lifecycle-audit.md)：每候选重新获取信息/首host，发AUTH后返回AUTHENTICATING，认证回复异步推进；启动前失败才回退，异步拒绝关闭。每次尝试独立SQLite会话、固定Worker connectionId用于停止，发后心跳更新、早到终态/迟到结果保护已接通。保留原共享Widget/工作台running展示规则，仅独立页鉴权期间可停止。
+
+主要复用原有验证，只新增一个Core贯穿业务用例及7个共享契约样例；相关定向、类型、最终build与17文件任务差量独立复审通过，Spec compliant/Approved。前两次真实构建失败和修正日志保留。没有root/全历史重复检查或累计分支审查；旧Desktop整套异常和pending add/trend缺口仍开放。
+
+下一步继续原剩余9项配置及对应消费者、额外Node100容量等M09业务；完整M01–M18/真人/原生/安装未完成。减少测试、阶段收尾统一回归的要求持续有效，不扩张诊断矩阵或把局部绿色当全量完成。原项目/API只读，90个任务前dirty路径的无关内容保留，HEAD/空index保持，产物D盘，未提交推送。
+
+## 此前执行点（2026-10-06，弹幕协议选择）
+
+[本轮审计](2026-10-06-danmaku-protocol-selection-audit.md)：第六项配置 `protocolVersion` 保留原 signed32/default3、环境别名及规范名优先，贯通真实 Core/Worker/认证循环。自动按配置偏好再3/2/1/0去重；手动0..3单协议；其他signed32请求按自动复用活动连接。成功记录实际协议，登录升级与包头版本1保持。
+
+仅新增3个代表性业务场景和8个小契约样例；相关既有定向验证、类型检查、Python修改文件格式检查及一次生产构建通过。独立23路径任务差量复审Spec compliant/Approved；本轮不重复完整check或77路径累计审查。此前Desktop整套异常和旧pending add/trend缺口保留，不称已修复或全量绿色。原项目/API只读、D盘环境和旧修改保留，HEAD4c94959/空index，无提交推送/安装/用户库操作。
+
+下一功能：原连接/认证生命周期（首host、每候选获取信息与创建会话、发认证即返回、异步拒绝关闭而非候选回退），随后心跳/缓存等剩余9配置与其他M09业务。额外Node100连接上限另列容量等价核对项。完整M01–M18及真人/原生/安装仍未完成。
+
+## 此前执行点（2026-10-06，弹幕正文与最近消息准入）
+
+[本轮审计](2026-10-06-danmaku-text-admission-audit.md)：DANMU_MSG 字符串原文与完整 scalar 转换已接真实 Worker 解析/订阅→Core→SQLite，精确整数和观察到的 JDK20 Double 格式单独实现；空白仅拒绝 recent，不阻止事实/原指标/ordinal/session，也不触发 recent 裁剪，永久完整正文/recent500 保持。独立任务 Approved，I1清理 finding关闭，最终串行23文件310项及两类型检查通过。
+
+唯一冻结check会话49085终态exit1/真实CHECK_EXIT1：此前阶段1716项通过（Core1004、Realtime140、Contracts486、Storage71、Browser12、TaskEngine3）；桌面Vitest异常退出3221226505/外层-1073740791，仅RUN，无用例汇总。本次不能算Desktop全过/跳过，也不能沿用旧两普通失败作当前实际清单。另串行补验23448 exit0：全部TS/Black60/isort/mypy18/Python1037/build及真实Electron四bundle/CJS通过；不改完整check失败。旧pending add/trend两缺口尚无解决证据。新异常只读取证，不猜根因或盲目重跑。下一protocolVersion偏好仅只读提案，原15属性余10、完整M01–M18及真人/原生/安装继续open。
+
+用户调整迁移节奏：测试数量过多影响功能进度。下一功能仅新增少量正常/关键失败/退出数据安全代表性测试，以原源码和真实实现为主；完整历史回归及累积分支审查移到阶段收尾，不在每个小切片重复。当前异常和历史两缺口单列保留，不继续用测试扩张阻塞业务，也不宣布已经修复。
+
+## 此前执行点（2026-10-06，最近弹幕保留数量）
+
+[本轮业务审计](2026-10-06-danmaku-recent-retention-audit.md)：第五字段 `recentMessageLimitPerRoom` 已贯通原别名/规范名、项目本地加载、真实Core组装和SQLite；raw signed32/default200、服务floor20/no upper500、存储次级floor1、query200独立。真实501 retained/502永久DANMAKU/502指标、两房隔离/插入序/晚到/重启有回归；启动和非弹幕不裁剪历史。task Spec compliant/Quality Approved，R1/R2/R3测试清理/路径问题全部关闭。另[UID/Worker测试边界](2026-10-06-uid-worker-observation-audit.md)task Approved，仅观察不改生产/预算。
+
+主代理唯一冻结check会话94060终态exit1/真实CHECK_EXIT1：Node2276过/2失败/2278，无跳过，Desktop669/671、57files；Core989/Contracts486/Storage71等全部过。当前完整两失败：pending v2 add marker10s（patch-ready已观察、截止无first-read观察，原显式stop/exit/SQLite断言未执行）、四用户2000点趋势body5s（已到Home tooltip，未见最终complete）。UID12轮本次实际完成、refresh退出/SQLite实际通过，不当旧超时根因修复或失败add替代；finally实际退出仅是清理。
+
+全types/Black60/isort/mypy18/Python1037/build各0；会话75506末尾main错误bundle路径检查致整个补验命令exit1，随后只检查实际Electron四bundle/CJS exit0。未重跑整套求绿/改预算，不改写失败为通过。69路径最终累计独立审查已完整结束：7494行/693413bytes，累计实现质量Approved，无新增生产Critical/Important/Minor；两个whole验收Important保持，merge/ship NOT READY。原B/S/API只读clean、HEAD4c/分支/空index、原60路径保留，产物D盘；无Git/安装/真人/用户库操作。完整M01–M18、其它10弹幕属性仍active。下一业务原字符串正文/Java blank recent准入仅只读提案，未实施；不重派已完成观察任务，独立非重叠业务安排不豁免验证缺口。审查后仅Markdown记账，详细正式结论见业务审计。
+
+## 此前执行点（2026-10-06，六处浏览器启动边界）
+
+[本轮审计](2026-10-06-browser-startup-boundaries-audit.md)：仅Node测试共用有限被动observer，原操作/异常身份、等待/断言/预算/并发/route/clock/cache保持。行为RED7失败与serializerRED1失败/8过→最终9过；定向6files77过、types与独立task Spec compliant/Quality Approved。
+
+一次冻结check退出1：Node2181/2183、Desktop653/655（56files、2failed），无跳过；Core939等全部过。旧六处startup路径本次完成，Delete9/Status10确实执行通过；当前失败完整清单为Workspace UID12输入循环body5000ms超时、pending Worker add marker10000ms未到firstread，原stop/SQLite断言未执行。cleanup实际退出true不代替业务断言；refresh对照通过。补验全TS/Black60/isort/mypy18/Python1022/build各0，不转换原check失败。阶段/限制与完整剩余见审计。完整60路径累计独立审查已结束：slice Approved / merge With fixes / ship No、无新增生产Critical/Important；上述两个验收Important保持，审查后仅Markdown记账。
+
+两项只读边界核对已完成，唯一下一波候选是原12轮UID await有限状态 + 既有FirstReadProbe首次readline属性获取（只是准备，不是线程提交），不新增RPC/payload/import/global asyncio wrapper；尚未实施，不重复旧observer/首读任务或碰绿。最近消息保留配置signed-int/raw默认200、消费min20无upper与独立read200已源代码核对，未实施；原alias RECENT_LIMIT，不把其它11属性完成。完整M01–M18与真人/原生/安装验收保持active；原B/S/API只读、HEAD/index保持、产物D盘、无提交/安装/平台/用户库操作。
+
+## 此前执行点（2026-10-06，首次Worker读取与测试目录保护）
+
+[本轮审计](2026-10-06-worker-first-read-audit.md)：纯首读代理保留原stdin参数/结果/异常、不记录协议内容，auto-target先验证D盘TEMP再创建SQLite、清理检查捕获根的严格后代。行为RED→GREEN；独立task Spec compliant / Quality Approved；定向Python6/Core11/Desktop12及类型/格式通过。生产代码、原业务/预算/并发不变。
+
+只运行一次冻结check，退出1：非Desktop全部通过（Core939），Desktop623过/4失败/19跳过（646，55files/6failed）；Node合计2151过/4失败/19跳过（2174）。本次首次add3489ms实际读入、3538ms child退出，原取消/SQLite不变断言执行通过，refresh亦通过；H2只在本次被证伪，不宣称旧间歇超时根因修复。当前6处浏览器setup/导航缺口：Delete/Status两个beforeAll（19项未执行）、Trend/Workspace两个beforeEach、Widget505 goto、TabRail深色beforeEach。阶段证据和预算在审计内，不豁免或改并发碰绿。全TS/Black60/isort/mypy18/Python1022/build单独补验退出0，不是整套绿色。
+
+下一步优先整体验证失败的完整清单核对；不重派已完成Worker/路径切片，不继续堆未支持Worker导入探针，不启动下一业务掩盖缺口。M06/M09剩余业务、其它11弹幕属性、完整M01–M18与真人/原生/安装验收继续保留。下表及后文为历史切片状态，以本节和新审计为当前验收事实。
+
+完整55路径最终独立审查：slice Approved / merge With fixes / ship No；无新增生产Critical/Important，旧Worker未达断言缺口本次补齐、D预检Minor关闭，当前6浏览器验收Important保留。只读六文件审计已完成；下一候选共用被动有界startup/lifecycle observer，精确透传/安全回归先行，目前只是提案、未实施。不把缺callback当未发生或Node时钟当浏览器耗时。代码冻结、实际源/APIclean与进程0继续核验。
+
+## 此前执行点（2026-10-06，粉丝投影刷新与失败边界）
+
+[本轮审计](2026-10-06-follower-projection-verification-audit.md)：相同后台items读取不重复趋势；显式成功共享读仍排history、失败不排，操作确认不等待history。受控RED→GREEN，独立task复审Approved；最终定向8浏览器文件98项+Worker11项来自两条串行命令，不能合称一条全量检查。诊断异常保证清理/有界旁路，原操作和预算不变。
+
+修改后一次完整check退出1：Node2170/2171、Desktop644/645、55文件、无跳过，Core937/Contracts475全部过。唯一失败是pending add尚未进入HTTP回调，旧取消/无迟到写入断言未执行：已到OS spawn/stdio，Pythonfixture patch-ready5693ms后，到10228ms等待截止仍unsettled且无replay/alive；cleanup11871ms退出观察为false。其他3项旧失败本次没有出现，只有投影反复触发有受控生产修复证据，不能宣称图表/导航稳定性根因已修复。新whole失败不能豁免；后续先补Python入口边界，不重复整套求绿。全部types/Black58/isort/mypy18/Python1016/build另行通过，不冒称check退出0。
+
+完整51项累计增量独立审查已结束：Implementation-slice quality Approved、merge With fixes、ship No。未发现新增生产Critical/Important；pendingadd完整检查未到stop/exit/SQLite断言为Important，auto-target创建TEMP前D预检为Minor，均不豁免。下一轮以一波处理完整清单：最小首次真实stdin读取探针及fixture创建前纯路径guard；探针只是分界，不预先称修复/CPU或import根因，不改预算/并发。原B/S/API只读clean、HEAD4c和空index保持，51项含原45增量保留、实际项目进程/监听0、D环境及构建封装通过；未提交推送/更新安装客户端。M06剩余共享recycler/解析等、原15弹幕属性余11、M08/M09–M18与真人/原生/安装验收保持未完成。下表M06/M09及后文保留原历史检查点，当前验证状态以本节及本轮审计为准。
 
 ## 逐项顺序与验收矩阵
 
@@ -21,30 +387,50 @@
 | M03 | `BilibiliLiveSessionQueryService.sessions`，`441d423`；DataCenter/Analytics 最近 200 场 | `packages/contracts/src/bilibili-live-session.ts`、`packages/storage/src/control-database.ts`、`BilibiliLiveWorkspace.tsx` | 默认/非正数 20、最大 200；SQLite 时间/插入顺序倒序及房间隔离；场次面板 20、数据/分析 200；查询缓存按 limit 隔离，等待响应不清有效选择 | 本项实现与自动回归完成；不代表数据中心/分析全部业务完成 |
 | M04 | `BilibiliLiveSessionExportController`、`BilibiliLiveExportSequence`、`V12__bilibili_live_export_daily_counter.sql`，`1a36b43` | Core export service/name helper、SQLite migration 12、现有 Main 保存链路 | 已接入昵称/UID 回退、上海日期、当日跨格式/场次共享序号、80 码点及原 strip 语义；已分配编号在 IO 失败/未保存后不复用；重开数据库保持。Main 仍使用建议文件名 | 本项代码与自动回归完成；原生保存对话框尚未手工验收 |
 | M05 | `frontend/src/views/bilibili-live/BilibiliLiveView.vue` 与 `subjects/widgets/BilibiliLiveDanmuWidget.vue`，`fa2faa6` | `BilibiliLiveDataWidget.tsx`、`ConnectedBilibiliLiveDataWidget.tsx`、Live/Subject workspace | 共用三模式、60 条/2 秒轮询、UID/看过人数、离线监听及协议启停；最新快照、家族/类型排序记忆、当前榜单 4 页刷新、失败保留、迟到响应隔离、展开/收起 | 组件迁移与针对性自动回归完成；独立页面/采集深层语义仍在 M09/M10，详情场次区域在 M11 |
-| M06 | `bilibili/BilibiliView.vue`、Follower Controller/Service/Repository、Properties/application.yml | Follower workspace/service/Python worker/storage | 已补列表/history、采集/重试/资料覆盖、监控/趋势UI及增删改/失败/退出；配置/解析/Long64/v2/SQLite v14、用户确认的精确UID、原添加成功链/抽屉归属及saveInterval成果保留。最新对齐原refreshUser：失败不读、共享list/读失败仍成功/不等history，无手动busy/autoCollecting/点击锁；dirty/选择同步和共用错误last-writer；Core next及relation profile取开始user，后改interval/status保留、在途删除内部失败不复活。见`2026-10-05-follower-manual-refresh-audit.md`及原间隔/添加/UID/HTTP/Long64审计 | 本项功能/定向回归通过：17 browser+9 Core，复审2个Important先4条RED后修、均关闭。78定向/19 Core及旧5suite46通过；两轮完整check仍退出1，第二轮Node2045/2047、Desktop595/597，新17全过，旧图表键盘/Worker启动等待两超时保留。其余类型/Black/isort/mypy/Python1003/生产构建/D盘单独通过，不冒称fullcheck绿色。用户明确本项后先停，全量目标暂停，恢复后先复验稳定性再原toggle/remove；HTTP承载差异映射、默认recycler共享执行域Important、完整JSON缓存/其它JVM/charset-MIME异常链、Double文本/负零wire/数字message、PG-SQLite/NUL/TEXT编码、API日志failureMeta、完整属性源/JVM/cache/冲突/indexed和NDJSON最终帧关联仍未关闭；真人/原生/安装验收保留，不等同整模块完成 |
+| M06 | `bilibili/BilibiliView.vue`、Follower Controller/Service/Repository、Properties/application.yml | Follower workspace/service/Python worker/storage | 列表/history、采集/重试/资料覆盖、监控/趋势UI、配置/解析/Long64/v2/SQLite v14、用户确认的精确UID及添加/间隔/立即刷新成果保留。本轮对齐原toggle/remove：状态不锁按钮、清共享错误/忽略返回/共享list；删除取消不清错、成功先清选择/对应详情/单user cache、读失败仍已删除，允许旧卡片回流。真实V2/Core/SQLite验证外键隔离/重加重开和自动在途4路径，见`2026-10-06-follower-monitor-actions-audit.md` | 两操作实现与定向验收完成：新19 browser+14 Core共33、主代理8套84项通过，task复审Approved。当时完整check退出1（Node2072/2080，旧4 suites8导航hook）；四行独立缓存未消除问题，冷预打包仅候选。Types/Python1003/生产构建单独通过，不冒称当前全量绿色。普通binary64资料/独立数字message及NDJSON最终帧关联已完成限定收尾验收，分别见`2026-10-07-python-scalar-text-audit.md`和`2026-10-07-python-final-association-audit.md`。直接资料/错误TEXT编码及NUL拒绝已完成定向验证、独立复查、最终构建与新隔离启停，见`2026-10-07-follower-storage-text-audit.md`；本次记录核对5个冻结源码hash一致。raw/failureMeta JSONB、数据库异常/部分提交差异仍OPEN。HTTP承载差异映射、默认recycler共享执行域Important、完整JSON缓存/其它JVM/charset-MIME异常链、增长率负零数值wire、完整属性源/JVM/cache/冲突/indexed及其他独立边界仍未关闭；API日志请求/失败元数据已补齐并升级v16，阶段完整回归及真人/原生/安装验收保留，不等同整模块完成 |
 | M07 | `bilibili/components/BilibiliAuthPanel.vue`、QR Dialog、Auth Service/PassportClient/SessionStore、CredentialActivatedListener | Auth panel/service/worker/shared contracts、credential storage、Core/Realtime停机 | UI、Cookie/会话/撤销与恢复已有审计；续补首次激活触发匿名升级、协议/归属保持、部分失败隔离、串行连接操作、撤销与切号原语义、退出及子进程取消。证据见 `2026-09-13-bilibili-auth-core-audit.md`、`2026-09-13-auth-danmaku-link-audit.md` | 登录UI/存储/连接联动代码与自动回归已复审；真人扫码、OS密钥/剪贴板、原生客户端验收仍未完成，M09全部弹幕规则另列 |
-| M08 | `bilibili-live/BilibiliLiveView.vue`、Live Monitor/Snapshot Service/Repository | Live workspace/overview/monitor panel/trend board/service/worker/storage | 查询、采集、Python/NDJSON、fixedDelay/退出、监控操作区和趋势已审计；续补loadAll整体发布/失败保留、命令确认先于重读、四项原汇总和同页状态事件；已接自动REST开关/延迟/两级批量及间隔/限流/重试/失败退避的本地配置，续接REST、Rank/WBI及Node弹幕HTTP配置/请求存活与管道断开验证，续接直播storageEnabled及工作台启用依赖，见 `2026-09-25-live-storage-audit.md`；Node详情见 `2026-09-25-danmaku-http-audit.md`。证据见 `2026-09-13-live-query-audit.md`、`2026-09-13-live-collection-audit.md`、`2026-09-13-live-worker-audit.md`、`2026-09-13-live-lifecycle-audit.md`、`2026-09-13-live-monitor-panel-audit.md`、`2026-09-13-live-trend-audit.md`、`2026-09-13-live-overview-audit.md`、`2026-09-13-live-collection-configuration-audit.md`、`2026-09-13-live-collection-policy-audit.md`、`2026-09-13-live-http-lifetime-audit.md`、`2026-09-13-rank-http-audit.md` | 查询/采集/调度/退出及监控/趋势/整体刷新/事件汇总已实现并通过本轮自动回归；原数值域/边缘解析、Spring宽松绑定、原生验收未完成；共享限流/API耗时及日志隔离已续接，见`2026-09-26-shared-rate-limit-audit.md`；详情场次在M11 |
-| M09 | Danmaku Controller/Service/parser、`BilibiliLiveEventIngestionService` | Node Realtime、Core Danmaku/Session services | 启停重连、protover 0..3/自动、匿名/登录降级、心跳、UID/昵称补全缓存、原始事件/指标去重、连接结束与覆盖窗口 | M01/M02 后逐项核对 |
-| M10 | Rank Controller/Service + 原 DanmuWidget | Rank worker/service/contracts、Live/Subject UI | 在线/进房/日周月榜、大航海周/月/陪伴；页码/排序/类型、已保存快照、部分失败、切换后不串房 | 已接HTTP配置/WBI固定Referer与长请求/退出边界，见`2026-09-13-rank-http-audit.md`；共享榜单许可/含排队耗时和日志错误隔离见`2026-09-26-shared-rate-limit-audit.md`；完整榜单业务仍待逐操作核对 |
-| M11 | Session Controller/Query/Repository、`BilibiliLiveSessionPanel.vue`、`DataCenterView.vue` | Session service/storage、Live 场次/数据页签 | 状态/边界、覆盖窗口、房间/场次选择、事件类型/关键词/UID/付费、分页、用户聚合、未知 UID、空数据与查询失败、自动刷新；M08审查发现platformLiveTime按字符串判重启而原按Instant，需补同刻不同格式回归 | M02/M03 后逐项核对 |
-| M12 | Export Service + `docs/bilibili-live-session-data.md` | Core export service、Main save | CSV BOM/CRLF/注入保护、XLSX 四表/两行表头/文本 UID、ZIP manifest schema 2、同快照一致性、筛选作用范围、取消及失败清理 | M04 后逐格式比对 |
-| M13 | Insight Controller/Service/Calculator、`AnalyticsView.vue`、`liveInsightPresentation.ts` | Session insight/contracts、Live 分析页签 | 60/300/900 秒桶；互动、人数、付费/免费、复购、历史复购、层次、礼物、峰值、质量与无覆盖 null；原 UI 所有指标和规则文本 | 待公式与 UI 双向核对 |
-| M14 | Subject Controller/Service/Workbench + `subjects` 组件 | Subject service/storage/workspace | UID-first、资源复用、直播弱失败、绑定改删、subject 状态、采集设置、健康事件、聚合趋势、布局保存/恢复及删 Subject 的资源语义 | 已接原enabled开关及直播/粉丝双依赖校验，见 `2026-09-25-live-storage-audit.md`、`2026-09-26-follower-configuration-audit.md`；续补M06资料域创建/读取/聚合/重启及头像消费，最新续补Long64创建/绑定精度、24h最新2000基线与v2趋势/展示，见`2026-10-05-follower-profile-text-audit.md`和`2026-10-05-follower-long64-audit.md`。其余工作台业务仍待逐操作核对 |
-| M15 | Douyin Controller/Web/OAuth/Credential services、`DouyinView.vue` 及子组件 | Douyin workspace/services、Python OAuth/Node Browser | Web 与 OAuth 隔离、QR 图片/五态及 USER_ACTION_REQUIRED、过期/失败/关闭后迟到响应、全新 context 复验、查看复制导出撤销、回调 state 校验/一次性处理、重启恢复 | 待逐操作核对；真人授权单列 |
-| M16 | `/api/platforms/adapters`、`/api/collect/tasks/run-once`、`PlatformView.vue`、CollectTaskExecutor | 当前通用 contracts/Core 与 product model | 接口确实存在，不能仅因任务列表 Mock 就整体排除。继续查 adapter 能力和 run-once 的可执行行为，再映射本地 command；不把模拟成功当真实采集 | 待实现依据核对 |
-| M17 | Dashboard/Tasks/AI/Identity/Settings、`/api/ai/mock-summary`、`/api/analytics/summary`、`/api/dev/*` | 当前隐藏演示导航、runtime health | 已见 Dashboard/任务列表/AI 为 Mock。逐页核实哪些只是占位、哪些有持久化/可执行操作；真实部分纳入迁移，Mock 只记录对等边界；开发健康映射本地运行时 | 待最终分类核对 |
-| M18 | 全部可执行业务收尾 | `check.cmd`、生产包/本地 smoke | 全量操作矩阵、无测试数据进生产、离线启动/重启/退出、旧数据库升级、D 盘约束、无业务 HTTP 服务、原仓库仍无差异；真人确认项没有证据不能勾完成 | 未开始 |
+| M08 | `bilibili-live/BilibiliLiveView.vue`、Live Monitor/Snapshot Service/Repository | Live workspace/overview/monitor panel/trend board/service/worker/storage | 查询、采集、Python/NDJSON、fixedDelay/退出、监控操作区和趋势已审计；续补loadAll整体发布/失败保留、命令确认先于重读、四项原汇总和同页状态事件；已接自动REST开关/延迟/两级批量及间隔/限流/重试/失败退避的本地配置，续接REST、Rank/WBI及Node弹幕HTTP配置/请求存活与管道断开验证，续接直播storageEnabled及工作台启用依赖，见 `2026-09-25-live-storage-audit.md`；Node详情见 `2026-09-25-danmaku-http-audit.md`。证据见 `2026-09-13-live-query-audit.md`、`2026-09-13-live-collection-audit.md`、`2026-09-13-live-worker-audit.md`、`2026-09-13-live-lifecycle-audit.md`、`2026-09-13-live-monitor-panel-audit.md`、`2026-09-13-live-trend-audit.md`、`2026-09-13-live-overview-audit.md`、`2026-09-13-live-collection-configuration-audit.md`、`2026-09-13-live-collection-policy-audit.md`、`2026-09-13-live-http-lifetime-audit.md`、`2026-09-13-rank-http-audit.md` | 查询/采集/调度/退出及监控/趋势/整体刷新/事件汇总已实现并通过对应自动回归；2026-10-07直播热度/关注数、汇总/差值signed64精确链及安全旧出口已完成，见`2026-10-07-live-long64-audit.md`。普通Double资料/独立message及直播HTTP响应文本/内部错误域已完成，见`2026-10-07-python-scalar-text-audit.md`和`2026-10-07-live-response-text-audit.md`。其他独立数值/边缘解析、Spring宽松绑定、原生验收未完成；共享限流/API耗时及日志隔离已续接，见`2026-09-26-shared-rate-limit-audit.md`；详情场次在M11 |
+| M09 | Danmaku Controller/Service/parser、`BilibiliLiveEventIngestionService` | Node Realtime、Core Danmaku/Session services | 自动候选/手动容量、15输入字段、fixedDelay/recent、正文/scalar/Java blank、协议/连接认证/关闭保护、缓存TTL/分桶/容量、range、事务写入时间已接；probe仅绑定。跨Worker共享/同步双检/多段fallback与当前账号重读已接；recent.limit 原 int32/default30/1–200 夹值已恢复 | 功能入口已接，代表流程/types/build有各自通过记录。2026-10-07共享WBI/nav及SPI/DanmuInfo的限定String响应处理完成，见对应审计；普通API错误/字段解析仍OPEN。阶段check Core12失败/2未处理错误和未执行后续阶段、历史整体检查、其他解析/时间/覆盖边界及真人原生未验收，不据此标完整M09完成 |
+| M10 | Rank Controller/Service + 原 DanmuWidget | Rank worker/service/contracts、Live/Subject UI | 在线/进房/日周月榜、大航海周/月/陪伴；页码/排序/类型、已保存快照、部分失败、切换不串房；最新分钟分页集合/latest 单页/原头像文本已对齐，旧秒行仅读取兼容不删除 | HTTP配置/WBI固定Referer、长请求/退出、共享许可/排队耗时/日志隔离/Node共享provider已接；四页 SQLite 主流程与构建有各自通过记录。2026-10-07榜单HTTP响应文本/内部异常直传与共享Node/Python WBI/nav转换、nav失败日志归属已完成限定验证和审查，见`2026-10-07-rank-response-text-audit.md`和`2026-10-07-wbi-response-text-audit.md`；普通nav API错误/字段、当前阶段限流/日志异常失败、其它独立边界和真人榜单仍未验收，不标完整M10完成 |
+| M11 | Session Controller/Query/Repository、`BilibiliLiveSessionPanel.vue`、`DataCenterView.vue` | Session service/storage、Live 场次/数据页签 | 场次识别/边界/恢复、数据中心和场次详情/Top 100 身份/完整统计/五类导出入口/刷新周期/失败恢复已接通，见最新交接 | 原生导出/真人场景验收保留，完整 M11 未完成 |
+| M12 | Export Service + `docs/bilibili-live-session-data.md` | Core export service、Main save | CSV BOM/CRLF/注入保护、XLSX 四表/两行表头/文本 UID、ZIP manifest schema 2、同快照一致性、筛选作用范围、取消及失败清理 | 五格式逐行/ZIP64、保活/排队、退出 drain/异步取消、完整发布及脱敏审计已接；确认自有 Core snapshot、Main part 与 prepared 专属签名目录/双 PID 交接恢复已接。XLSX worksheet64KiB输入背压/逐表消费/阻塞取消已接，代表流程/内容/类型/独立审阅/实际生产启停通过；旧/不可证明残留、同步阻塞/性能及原生验收保持开放，完整 M12 未完成 |
+| M13 | Insight Controller/Service/Calculator、`AnalyticsView.vue`、`liveInsightPresentation.ts` | Session insight/contracts、Live 分析页签 | 60/300/900 秒桶；完整信号/趋势/深度/分层/礼物/洞察/质量展示与刷新已接通；已修正本轮查明的统计差异 | 本轮少量业务验证与类型/构建通过；不代表所有公式边缘或真人场景已验收，完整 M13 保留 |
+| M14 | Subject Controller/Service/Workbench + `subjects` 组件 | Subject service/storage/workspace | UID-first、资源复用、直播弱失败、绑定改删、subject 状态、采集设置、健康事件、聚合趋势、布局保存/恢复及删 Subject 的资源语义 | enabled 双依赖、原资料域/头像、Long64 身份和24h基线已接。改绑、列表刷新/删除缓存恢复、临时尺寸拖动、真实时间/精确双轴/悬停、创建输入缺省与原 UID 必填、列表全量及绑定资源、当前房间事件/健康投影和时间标签已迁。额外布局 UI 恢复原静态占位；后台 null 字段/全量项、key 原文/80 Unicode 字符、内部 null 列表及公共必填数组边界均已对齐。页头头像/健康条/标签准入、KPI 状态/时间/精度与资源提醒已接。2026-10-07 Subject v3热度/24h差值/历史峰值/趋势精确链和v1/v2任意布局JSON保真已完成。代表流程/类型/构建通过；深层边缘和原生/真人验收仍单列，见最新执行点与交接 |
+| M15 | Douyin Controller/Web/OAuth/Credential services、`DouyinView.vue` 及子组件 | Douyin workspace/services、Python OAuth/Node Browser | Web/OAuth 独立；QR 重开/关闭/手动刷新/迟到隔离/失败重试；完整字段抽屉/复制；原子保存/刷新会话/合并/竞争保护；Worker TTL 清理、新 Context 复验、身份及配置均已接 | 代表 Web/OAuth/浏览器/UI 流程及类型/构建通过；真人授权、原生复制导出和重启验收保留 |
+| M16 | `/api/platforms/adapters`、`/api/collect/tasks/run-once`、`PlatformView.vue`、CollectTaskExecutor | platform-collection contracts/service、Main/Preload、PlatformCollectionWorkspace | 注册表和真实 account 单次查询已迁移；UID/计数精确，失败/unsupported 保留，证据只传 ObjectRef；原空 Raw/Log/checkpoint 不伪实现 | Core/桥接/UI 主流程及类型/构建、portable schema 同一 TS/Python 样例、真实生产页读取注册表通过；原其余七类 unsupported，不列成待造新业务 |
+| M17 | Dashboard/Tasks/AI/Identity/Settings、`/api/ai/mock-summary`、`/api/analytics/summary`、`/api/dev/*` | 隐藏演示导航、runtime health、已迁真实 M13 分析 | 已按原源码确认 Mock/固定数据/无保存/预留；dev health 映射现有 bootstrap/Worker，真实场次分析属于 M13 | 分类完成；未新增原不存在的 AI/身份/设置业务 |
+| M18 | 全部可执行业务收尾 | 代表性既有回归、生产包/本地 smoke | 全 workspace 类型/生产构建/Python源格式类型、实际 Main/Preload/Renderer/Core 启动与重启/退出、旧 v12→v15 重开保留已验证；新 unsigned win-unpacked 脱离开发路径的内置 Python 握手/真实 IPC/本地对象重启保留/退出已通过。用户提速要求下不扩矩阵 | 等用户真人扫码/测试目标与原生导出选择；NSIS安装、旧全量超时/精细兼容/大数据/崩溃边界保留，不勾全验收完成 |
 
 ## 工作方式
 
-**当前进度（2026-10-06）：** 全量迁移按用户要求暂停；本轮只保存本地提交和进度，不恢复开发。精确UID、Long64/v2、添加成功链、间隔保存及最新[立即刷新](2026-10-05-follower-manual-refresh-audit.md)成果保留，刷新定向78/78及Core19/19通过。提交前重新完整运行`check.cmd`退出1：Node2046/2047、Desktop596/597，旧2000点趋势键盘测试5s超时；新刷新17条全部通过。其余TypeScript/Black/isort/mypy/Python1003/生产构建单独通过，旧超时稳定性根因未修复。最新提交范围、验证日志和未完成项见[提交快照](2026-10-06-commit-snapshot.md)及[交接](2026-09-13-migration-handoff.md)。恢复后先复验全量测试稳定性，再按原toggleUser/removeUser逐操作核对。默认recycler、NDJSON最终帧、完整JVM/HTTP编码异常、Double/日志/数据库编码/完整属性源和M08、M09–M18继续保留；M06/M01–M18及真人、原生、安装验收均未整体完成。
+完整迁移继续推进，不将当前波次或单项完成视为全量完成。统一入口是[交接中的当前快照](2026-09-13-migration-handoff.md#当前进度快照2026-10-07)；完成/验证缺口以上方“当前执行点”和对应审计为准。先处理当前阶段Core差异，再续迁API错误/字段等剩余业务，不重派已完成的历史任务。
+
+原弹幕15个输入字段已支持，probe无消费者仅绑定；其它M09及全M01–M18继续open。以迁移为主，只补必要主流程/关键失败验证并尽量复用旧用例，不规定每功能最低新增数量；不默认跑完整文件/历史套件或逐分支铺矩阵。阶段收尾再完整check，旧失败如实保留；不重复已完成取证、累计审查或无限观察器。
+
+### 历史启动控制检查点（以下是当时状态，不作为当前未完成清单）
+
+**当前进度（2026-10-06，逐项迁移进行中）：** 在`codex/follower-monitor-actions`、HEAD`4c94959`继续迁移，保留此前粉丝暂停/恢复与删除等全部未提交增量。M09自动候选/容量及四字段启动控制、首次0/完成后delay已按原源码对齐并经task复审，见[启动控制审计](2026-10-06-danmaku-startup-scheduler-audit.md)与[实施计划](../superpowers/plans/2026-10-06-danmaku-startup-scheduler.md)。最终whole-branch切片质量Approved、merge With fixes、ship No，四项整体验证Important仍开放，候选suite创建前D盘校验为Minor建议；不能据单切片审批称M09或全量完成。
+
+最新修改后完整check退出1：Node2161通过/2165、4旧失败、无跳过，Core937与Contracts475全部通过。先前缺失的删除9项本次完整执行通过；其启动诊断不证明冷启动或稳定性修复。四个旧失败为MainLong64等待http-started后ENOENT、趋势2000点测试体5s、趋势700/900提示poll、Widget第505房间goto2500ms；根因仍未关闭。第一次补充全部types通过后新增Python文件Black失败，仅机械格式修正并13项定向通过，后续Black58/isort/mypy18/Python1016/生产构建另行通过，不能合并宣称check退出0。此前DEBUG2077/2080、auto-targets2076/2089（9跳过）及诊断2087/2089仍按历史执行记录保留。未放宽预算、降低并发、改操作、预热或重复完整check求绿。先处理整体验证Important，分别补Worker启动/请求及浏览器导航/提示证据；其后下一业务候选是M09最近弹幕保留配置，尚未实现。其余11属性、M06共享recycler执行域Important、NDJSON最终帧、完整JVM/HTTP编码/Double/日志/数据库/属性来源及M08、M09–M18全部保留。历史暂停及提交验证见[提交快照](2026-10-06-commit-snapshot.md)，本轮不自动提交/推送，不把切片或本轮结束等同全量完成/暂停。
 
 1. 每次处理一项业务，先读原实现及原测试，再读对应客户端链路；必要依赖包含在该项中，不跨项假冒完成。
-2. 先保存该项执行计划和失败回归，再实现，跑针对性测试与 `check.cmd`。
+2. 保存简短范围与少量业务失败回归，再实现；只跑覆盖改动的验证、必要types/build和task复审，阶段收尾统一 `check.cmd`。
 3. 每轮把证据、差异和剩余项写回本表。原仓库出现新提交时记录新基线及新增差异，不覆盖历史验收记录。
 4. 本次授权不包括推送远程或修改原仓库；保留用户现有数据，不清空错误场次来掩盖问题。若需历史数据修复，先定义可审计识别条件和备份/预览方案。
 
+验证策略：旧全量失败/异常保留，不称已修复或全量绿色；最新实际结果以上方审计为准。业务迁移不再被历史诊断、完整回归或测试扩张占用，必要安全问题仍修复，阶段收尾统一回归。受控验证不能代替真人平台或原生应用验收。
+
 ## 执行记录
+
+- 2026-10-06（弹幕启动控制/完成后调度）：原primitive与storage-only raw消费/首次0/完成后delay核对后，首批RED11业务失败/1已有通过；接共享契约、只读loader/安全Host错误、Service双guard/容量与Runtime可取消单次调度。最终相关Core105/Contracts25/Host15/Python13/types通过；task Important为复用Host目录未显式安全检查，补纯路径RED6→Host22/22+Desktoptypes→独立复审Spec compliant/Quality Approved。主代理一次修改后wholecheck终态退出1：Node2161/2165、四旧失败、无跳过；删除9执行通过。全部types及格式修正后的Black58/isort/mypy18/Python1016/build另行通过，final broad切片quality Approved、merge With fixes、ship No；四项验证Important/候选suite创建前D预检Minor保持开放，下一优先取证，不冒称全量绿色。最终源码/APIclean、HEAD/index/45增量和D盘/无残留检查通过。其余11字段含recent保留min20/no upper差异、协议/缓存/完成域及M01–M18继续；无提交推送、原库修改/启动、真实平台或用户库访问。详见[新审计](2026-10-06-danmaku-startup-scheduler-audit.md)。
+
+- 2026-10-06（删除启动诊断/下一弹幕控制项）：仅新增测试有界phase探针，独立Spec compliant / Quality Approved；一次instrumented whole check中删除9项执行通过，startup4274ms/pending0。Node2087通过/2旧失败/2089，无跳过；旧趋势5s和MainLong64 http-started ENOENT仍在，不称根因/冷启动稳定性或完整绿色。后续types/Python/build本次未执行。[诊断记录](2026-10-06-delete-startup-diagnostic.md)保留前后差异；[四字段启动控制及fixedDelay计划](../superpowers/plans/2026-10-06-danmaku-startup-scheduler.md)已开始实现但未验收，M09/M01–M18不标完成、原仓库只读、无提交推送。
+
+- 2026-10-06（弹幕自动候选与容量）：原Repository/Service/V4/BIGSERIAL/upsert及客户端rowid映射先只读审计；最终RED6失败/2通过，最小修改Storage完整候选与Service跳过手动后的目标收集，最终新9/旧33通过，独立task Spec compliant/quality Approved。保留手动协议与会话、先停auto再启动、无递补/下轮重试和退出取消；不把9项全部说成曾RED，无新schema/配置/Worker/UI。
+- 2026-10-06（本轮验证）：DEBUG基线终态2077/2080、Subject清理hook，暖缓存8旧导航失败未复现但不证明冷启动修复。修改后一次check终态退出1：Node2076通过/4失败/9跳过（2089），Desktop617/630，Core884通过。旧趋势5s/提示时序及直播2个初始化hook失败，新粉丝删除beforeAll超时导致9项跳过；全Types/Black57/isort/mypy18/Python1003/生产构建补跑通过。未改预算/并发/操作或重复完整check求绿。细节与D盘日志见[最新审计](2026-10-06-danmaku-auto-targets-audit.md)；完整M09/M01–M18和真人/原生/发布未完成。
+- 2026-10-06（最终复审/安全）：24项完整增量独立复审切片quality Approved，无新增生产Critical/Important；merge With fixes，完整check缺口（删除9项未执行）为Important保留，M09测试创建前D盘预检为Minor建议未实现。11:09安全进程/监听/生产标记0、bundles/CJS/diff/新文本尾空白/规则/index核验通过，原/API clean、HEAD4c94959/分支/全部增量保留；新产物D盘，无提交推送/合并/安装或原B/S/用户库操作，不标全量完成/暂停。
+- 2026-10-06（粉丝暂停/恢复、删除）：两个原操作分别源码核对→RED/最小实现→GREEN→独立task复审。status准确4失败/5通过；delete初2明确断言后修，完善夹具临时恢复自有patch补6失败/3通过，保留顺序/中间夹具错误记录。最终新19 browser+14 V2/Core/SQLite共33项通过，主代理8套84项通过；后台生产已相同，仅补GREEN审计，不重写规则或schema。恢复next=now但不直接采集；删除先清选择/当前详情/单用户cache，再共享list，读失败仍已删除；Subject/live/另一用户整对象隔离、重加/重开和自动在途4路径通过。
+- 2026-10-06（同轮验证）：四旧suite只新增各1 cacheDir，独立复审Approved；原预算/并发/操作的完整check仍退出1，Node2072/2080、Desktop622/630，8旧导航hook未执行业务断言、新33全部通过。缓存隔离未消除问题，Vite默认6个HTML扫描/crawl processing为未证实候选；后续一次DEBUG时间线诊断，不反复重跑求绿。Types/Black57/isort/mypy18/Python1003/生产构建单独通过；10:43安全进程/监听/生产标记0、源/API clean、index空、HEAD4c94959。未提交推送/安装/平台或用户库访问，不标M06/全量迁移完成。证据见[操作审计](2026-10-06-follower-monitor-actions-audit.md)。
 
 - 2026-10-06（本地提交快照）：按用户要求将`b2e5a89`以来累计240项源码/测试/配置/文档增量与新增提交快照一起保存；不推送、不继续下一功能。提交前Node2046/2047通过、完整check退出1，唯一旧趋势5s超时；其余类型/格式/Python1003/生产构建单独通过。安全审计未发现真实凭据、运行数据或生成二进制，原B/S与API参考只读clean。修正README手动刷新说明及本台账active/下一refreshUser陈旧状态；历史失败和未完成项保留，提交哈希以包含[快照记录](2026-10-06-commit-snapshot.md)的Git提交为准。
 

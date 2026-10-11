@@ -72,7 +72,6 @@ describe("BilibiliFollowerWorkspace", () => {
         trends={{ phase: "success", data: [] }}
         creationOpen={false}
         mutationError={undefined}
-        busyUserIds={[]}
         {...handlers}
       />
     )
@@ -98,7 +97,6 @@ describe("BilibiliFollowerWorkspace", () => {
         trends={{ phase: "success", data: [] }}
         creationOpen={false}
         mutationError={undefined}
-        busyUserIds={[]}
         {...handlers}
       />
     )
@@ -109,7 +107,6 @@ describe("BilibiliFollowerWorkspace", () => {
         trends={{ phase: "success", data: [] }}
         creationOpen={false}
         mutationError={undefined}
-        busyUserIds={[]}
         {...handlers}
       />
     )
@@ -120,7 +117,6 @@ describe("BilibiliFollowerWorkspace", () => {
         trends={{ phase: "success", data: [] }}
         creationOpen
         mutationError={undefined}
-        busyUserIds={[]}
         {...handlers}
       />
     )
@@ -146,7 +142,6 @@ describe("BilibiliFollowerWorkspace", () => {
         trends={{ phase: "success", data: [trend] }}
         creationOpen={false}
         mutationError={undefined}
-        busyUserIds={[]}
         {...handlers}
       />
     )

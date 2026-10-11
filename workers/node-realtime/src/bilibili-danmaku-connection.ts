@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto"
-import { BilibiliLiveHttpConfigurationSchema, type BilibiliLiveHttpConfiguration } from "@bmd/contracts"
+import { BilibiliLiveHttpConfigurationSchema, type BilibiliLiveHttpConfiguration,
+  BilibiliLiveDanmakuConnectionConfigurationSchema, type BilibiliLiveDanmakuConnectionConfiguration,
+  BilibiliLiveDanmakuCacheConfigurationSchema, type BilibiliLiveDanmakuCacheConfiguration,
+  type BilibiliDanmakuCredential,
+  type BilibiliDanmakuWorkerLifecycleEvent, type BilibiliDanmakuWorkerStartResult } from "@bmd/contracts"
 
 import WebSocket, { type RawData } from "ws"
 import { getBilibiliJson, ensureNotCancelled, danmakuCancelled } from "./bilibili-http"
+import { bilibiliApiInt, bilibiliApiText, hasBilibiliApiText, readBilibiliApiJson } from "./bilibili-api-json"
+import { bilibiliAnonymousMaterialProvider, type BilibiliAnonymousMaterialProvider } from "./bilibili-anonymous-material-provider"
 
 import { parseBilibiliDanmakuEvents, type ParsedBilibiliDanmakuEvent } from "./bilibili-danmaku-event"
 import {
@@ -23,24 +29,24 @@ const MIXIN_KEY_ENC_TAB = [
 export interface BilibiliDanmakuConnectionInput {
   roomId: string
   protocolVersion?: number
-  credential?: { cookieHeader: string; authUid: string }
+  preferredProtocolVersion?: number
+  credential?: BilibiliDanmakuCredential
   connectTimeoutMs?: number
   heartbeatSeconds?: number
+  connectionConfiguration?: BilibiliLiveDanmakuConnectionConfiguration
+  cacheConfiguration?: BilibiliLiveDanmakuCacheConfiguration
   httpConfiguration?: BilibiliLiveHttpConfiguration
   signal?: AbortSignal
 }
 
 export type BilibiliDanmakuConnectionEvent =
-  | { type: "command"; receivedAt: string; event: ParsedBilibiliDanmakuEvent }
-  | { type: "heartbeat"; popularity: number; receivedAt: string }
-  | { type: "closed"; receivedAt: string; code: number; reason: string }
-  | { type: "error"; receivedAt: string; errorType: string; message: string }
+  | BilibiliDanmakuWorkerLifecycleEvent
+  | { type: "command"; attempt?: number; receivedAt: string; event: ParsedBilibiliDanmakuEvent }
+  | { type: "heartbeat"; attempt?: number; popularity: number; receivedAt: string }
+  | { type: "closed"; attempt?: number; receivedAt: string; code: number; reason: string }
+  | { type: "error"; attempt?: number; receivedAt: string; errorType: string; message: string }
 
-export interface RunningBilibiliDanmakuConnection {
-  connectHost: string
-  protocolVersion: number
-  authMode: "ANONYMOUS" | "LOGIN"
-  authUid?: string
+export type RunningBilibiliDanmakuConnection = BilibiliDanmakuWorkerStartResult & {
   stop: () => Promise<void>
 }
 
@@ -52,33 +58,50 @@ interface DanmuInfo {
   hosts: string[]
 }
 
-let cachedWbiKeys: { imgKey: string; subKey: string; expiresAt: number } | undefined
-let cachedBuvid: { buvid3: string; buvid4?: string; expiresAt: number } | undefined
+export interface BilibiliDanmakuConnectionDependencies {
+  materials?: BilibiliAnonymousMaterialProvider
+  credentialProvider?: () => Promise<BilibiliDanmakuCredential | undefined>
+}
 
 export async function startBilibiliDanmakuConnection(
   input: BilibiliDanmakuConnectionInput,
-  onEvent: (event: BilibiliDanmakuConnectionEvent) => void
+  onEvent: (event: BilibiliDanmakuConnectionEvent) => void,
+  dependencies: BilibiliDanmakuConnectionDependencies = {}
 ): Promise<RunningBilibiliDanmakuConnection> {
   ensureNotCancelled(input.signal)
   const configuration = BilibiliLiveHttpConfigurationSchema.parse(input.httpConfiguration ?? {})
-  const info = await fetchDanmuInfoWithFallback(input.roomId, configuration, input.credential, input.signal)
-  const candidates = protocolCandidates(input.protocolVersion)
+  const connectionConfiguration = BilibiliLiveDanmakuConnectionConfigurationSchema.parse(input.connectionConfiguration ?? {})
+  const cacheConfiguration = BilibiliLiveDanmakuCacheConfigurationSchema.parse(input.cacheConfiguration ?? {})
+  const materials = dependencies.materials ?? bilibiliAnonymousMaterialProvider
+  const credentialProvider = dependencies.credentialProvider ?? (async () => input.credential)
+  const candidates = protocolCandidates(input.protocolVersion, input.preferredProtocolVersion)
   let lastError: unknown
+  let attempt = 0
   for (const protocolVersion of candidates) {
-    for (const connectHost of info.hosts) {
+      attempt++
       ensureNotCancelled(input.signal)
       try {
+        const info = await fetchDanmuInfoWithFallback(input.roomId, configuration, connectionConfiguration,
+          cacheConfiguration, materials, credentialProvider, input.signal)
+        const connectHost = info.hosts[0] ?? "wss://broadcastlv.chat.bilibili.com/sub"
+        ensureNotCancelled(input.signal)
+        onEvent({ type: "connecting", attempt, receivedAt: new Date().toISOString(), connectHost,
+          protocolVersion, authMode: info.authMode, ...(info.authUid ? { authUid: info.authUid } : {}) })
         const socket = await authenticateSocket({
+          attempt,
           connectHost,
           roomId: input.roomId,
           protocolVersion,
           info,
-          connectTimeoutMs: Math.max(1_000, input.connectTimeoutMs ?? 8_000),
-          heartbeatSeconds: Math.max(5, input.heartbeatSeconds ?? 30),
+          connectTimeoutMs: Math.max(1_000, input.connectionConfiguration?.connectTimeoutMs ?? input.connectTimeoutMs ?? connectionConfiguration.connectTimeoutMs),
+          heartbeatSeconds: Math.max(5, input.connectionConfiguration?.heartbeatSeconds ?? input.heartbeatSeconds ?? connectionConfiguration.heartbeatSeconds),
+          clientVersion: connectionConfiguration.clientVersion,
           signal: input.signal,
           onEvent
         })
         return {
+          status: "AUTHENTICATING",
+          attempt,
           connectHost,
           protocolVersion,
           authMode: info.authMode,
@@ -88,8 +111,10 @@ export async function startBilibiliDanmakuConnection(
       } catch (error) {
         ensureNotCancelled(input.signal)
         lastError = error
+        onEvent({ type: "attempt-failed", attempt, receivedAt: new Date().toISOString(),
+          code: errorCode(error) ?? "BILIBILI_DANMAKU_CONNECT_FAILED",
+          message: error instanceof Error ? error.message : String(error) })
       }
-    }
   }
   throw withCode(
     lastError instanceof Error ? lastError.message : "Unable to connect Bilibili danmaku WebSocket.",
@@ -100,49 +125,64 @@ export async function startBilibiliDanmakuConnection(
 async function fetchDanmuInfoWithFallback(
   roomId: string,
   configuration: BilibiliLiveHttpConfiguration,
-  credential?: { cookieHeader: string; authUid: string },
+  connectionConfiguration: BilibiliLiveDanmakuConnectionConfiguration,
+  cacheConfiguration: BilibiliLiveDanmakuCacheConfiguration,
+  materials: BilibiliAnonymousMaterialProvider,
+  credentialProvider: () => Promise<BilibiliDanmakuCredential | undefined>,
   signal?: AbortSignal
 ): Promise<DanmuInfo> {
-  if (credential) {
-    try {
-      return await fetchDanmuInfo(roomId, credential, false, configuration, signal)
-    } catch (error) {
-      ensureNotCancelled(signal)
-      if (!isCredentialFallbackError(error)) throw error
-      cachedWbiKeys = undefined
-      cachedBuvid = undefined
+  const fetchInner = async (forceRefreshWbi: boolean): Promise<DanmuInfo> => {
+    ensureNotCancelled(signal)
+    const credential = connectionConfiguration.useLoginCredential ? await credentialProvider() : undefined
+    ensureNotCancelled(signal)
+    if (credential) {
+      try {
+        return await fetchDanmuInfo(roomId, credential, forceRefreshWbi, configuration,
+          connectionConfiguration.webLocation, cacheConfiguration, materials, signal)
+      } catch (error) {
+        ensureNotCancelled(signal)
+        if (!isCredentialFallbackError(error)) throw error
+        if (isRiskError(error)) materials.clear()
+        return fetchDanmuInfo(roomId, undefined, true, configuration,
+          connectionConfiguration.webLocation, cacheConfiguration, materials, signal)
+      }
     }
+    return fetchDanmuInfo(roomId, undefined, forceRefreshWbi, configuration,
+      connectionConfiguration.webLocation, cacheConfiguration, materials, signal)
   }
   try {
-    return await fetchDanmuInfo(roomId, undefined, false, configuration, signal)
+    return await fetchInner(false)
   } catch (error) {
     ensureNotCancelled(signal)
     if (!isRiskError(error)) throw error
-    cachedWbiKeys = undefined
-    cachedBuvid = undefined
-    return fetchDanmuInfo(roomId, undefined, true, configuration, signal)
+    materials.clear()
+    return fetchInner(true)
   }
 }
 
 async function fetchDanmuInfo(
   roomId: string,
-  credential: { cookieHeader: string; authUid: string } | undefined,
+  credential: BilibiliDanmakuCredential | undefined,
   forceRefresh: boolean,
   configuration: BilibiliLiveHttpConfiguration,
+  webLocation: string,
+  cacheConfiguration: BilibiliLiveDanmakuCacheConfiguration,
+  materials: BilibiliAnonymousMaterialProvider,
   signal?: AbortSignal
 ): Promise<DanmuInfo> {
   ensureNotCancelled(signal)
-  const buvid = await getBuvid(forceRefresh, configuration, signal)
-  const keys = await getWbiKeys(forceRefresh, configuration, credential?.cookieHeader, signal)
+  const buvid = await materials.getBuvid(configuration, cacheConfiguration.buvidCacheSeconds, signal)
+  const keys = await materials.getWbiKeys(forceRefresh, configuration, cacheConfiguration.wbiCacheSeconds, signal)
   const parameters = signWbiParams({
     id: roomId,
     type: "0",
-    web_location: "444.8"
+    web_location: webLocation
   }, keys.imgKey, keys.subKey)
   const url = new URL("https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo")
   for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, value)
   const response = await getBilibiliJson(url, {
     configuration,
+    responseText: "spring-string",
     headers: {
       Accept: "application/json",
       Referer: configuration.referer,
@@ -154,36 +194,38 @@ async function fetchDanmuInfo(
     },
     ...(signal ? { signal } : {})
   })
-  if (!response.ok) {
-    throw withCode(
-      `Bilibili getDanmuInfo returned HTTP ${response.status}.`,
-      response.status === 429 ? "BILIBILI_RATE_LIMITED" : "BILIBILI_HTTP_ERROR"
-    )
+  if (response.status >= 400) {
+    throw Object.assign(withCode(
+      `Bilibili getDanmuInfo failed with HTTP ${response.status}`,
+      response.status === 429 ? "BILIBILI_RATE_LIMITED" : "BILIBILI_UNKNOWN_ERROR"
+    ), { endpoint: "xlive/web-room/v1/index/getDanmuInfo", statusCode: response.status })
   }
-  const root = await response.json() as unknown
-  if (!isRecord(root)) throw withCode("Bilibili getDanmuInfo returned invalid JSON.", "BILIBILI_PARSE_ERROR")
-  const code = typeof root.code === "number" ? root.code : Number.NaN
+  const root = await readBilibiliApiJson(response, "xlive/web-room/v1/index/getDanmuInfo")
+  const code = bilibiliApiInt(root, "code")
   if (code !== 0) {
     const error = withCode(
-      text(root.message) ?? `Bilibili getDanmuInfo returned code ${code}.`,
+      bilibiliApiText(root, "message", `Bilibili getDanmuInfo returned code ${code}`)!,
       code === -101 || code === 65530
         ? "BILIBILI_AUTH_EXPIRED"
         : [-352, -403, -412].includes(code)
           ? "BILIBILI_RISK_CONTROL"
-          : "BILIBILI_API_ERROR"
+          : "BILIBILI_UNKNOWN_ERROR"
     ) as Error & { biliCode?: number }
-    error.biliCode = code
+    Object.assign(error, { biliCode: code, retryable: code !== -101 && code !== 65530,
+      endpoint: "xlive/web-room/v1/index/getDanmuInfo", statusCode: 200 })
     throw error
   }
-  const data = record(root.data)
-  const token = text(data.token)
-  if (!token) throw withCode("Bilibili getDanmuInfo response missing token.", "BILIBILI_PARSE_ERROR")
-  const hosts = Array.isArray(data.host_list)
-    ? data.host_list.flatMap((item) => {
-        const host = text(record(item).host)
-        return host ? [`wss://${host}/sub`] : []
+  const data = record(record(root).data)
+  const token = bilibiliApiText(data, "token")
+  if (!hasBilibiliApiText(token)) throw Object.assign(withCode(
+    "Bilibili getDanmuInfo response missing token", "BILIBILI_PARSE_ERROR"),
+    { endpoint: "xlive/web-room/v1/index/getDanmuInfo", statusCode: 200 })
+  // Jackson's JsonNode iterator also visits object values, not only array members.
+  const hostNodes = data.host_list && typeof data.host_list === "object" ? Object.values(data.host_list) : []
+  const hosts = hostNodes.flatMap((item) => {
+        const host = bilibiliApiText(item, "host")
+        return hasBilibiliApiText(host) ? [`wss://${host}/sub`] : []
       })
-    : []
   return {
     token,
     buvid: buvid.buvid3,
@@ -191,53 +233,6 @@ async function fetchDanmuInfo(
     ...(credential ? { authUid: credential.authUid } : {}),
     hosts: hosts.length > 0 ? hosts : ["wss://broadcastlv.chat.bilibili.com/sub"]
   }
-}
-
-async function getBuvid(forceRefresh: boolean, configuration: BilibiliLiveHttpConfiguration, signal?: AbortSignal): Promise<{ buvid3: string; buvid4?: string }> {
-  ensureNotCancelled(signal)
-  if (!forceRefresh && cachedBuvid && cachedBuvid.expiresAt > Date.now()) return cachedBuvid
-  const response = await getBilibiliJson("https://api.bilibili.com/x/frontend/finger/spi", {
-    configuration,
-    headers: { Accept: "application/json", Referer: "https://www.bilibili.com/", "User-Agent": configuration.userAgent },
-    ...(signal ? { signal } : {})
-  })
-  if (!response.ok) throw withCode(`Bilibili buvid returned HTTP ${response.status}.`, "BILIBILI_HTTP_ERROR")
-  const root = await response.json() as unknown
-  const data = record(record(root).data)
-  const buvid3 = text(data.b_3)
-  const buvid4 = text(data.b_4)
-  if (!buvid3) throw withCode("Bilibili buvid response missing data.b_3.", "BILIBILI_PARSE_ERROR")
-  cachedBuvid = { buvid3, ...(buvid4 ? { buvid4 } : {}), expiresAt: Date.now() + 43_200_000 }
-  return cachedBuvid
-}
-
-async function getWbiKeys(
-  forceRefresh: boolean,
-  configuration: BilibiliLiveHttpConfiguration,
-  cookieHeader?: string,
-  signal?: AbortSignal
-): Promise<{ imgKey: string; subKey: string }> {
-  ensureNotCancelled(signal)
-  if (!forceRefresh && cachedWbiKeys && cachedWbiKeys.expiresAt > Date.now()) return cachedWbiKeys
-  const response = await getBilibiliJson("https://api.bilibili.com/x/web-interface/nav", {
-    configuration,
-    headers: {
-      Accept: "application/json",
-      Referer: "https://www.bilibili.com/",
-      "User-Agent": configuration.userAgent,
-      ...(cookieHeader ? { Cookie: cookieHeader } : {})
-    },
-    ...(signal ? { signal } : {})
-  })
-  if (!response.ok) throw withCode(`Bilibili WBI nav returned HTTP ${response.status}.`, "BILIBILI_HTTP_ERROR")
-  const root = await response.json() as unknown
-  const data = record(record(root).data)
-  const wbi = record(data.wbi_img)
-  const imgKey = keyFromUrl(text(wbi.img_url))
-  const subKey = keyFromUrl(text(wbi.sub_url))
-  if (!imgKey || !subKey) throw withCode("Bilibili WBI response missing keys.", "BILIBILI_PARSE_ERROR")
-  cachedWbiKeys = { imgKey, subKey, expiresAt: Date.now() + 3_600_000 }
-  return cachedWbiKeys
 }
 
 export function signWbiParams(
@@ -262,12 +257,14 @@ export function signWbiParams(
 }
 
 async function authenticateSocket(input: {
+  attempt: number
   connectHost: string
   roomId: string
   protocolVersion: number
   info: DanmuInfo
   connectTimeoutMs: number
   heartbeatSeconds: number
+  clientVersion: string
   signal: AbortSignal | undefined
   onEvent: (event: BilibiliDanmakuConnectionEvent) => void
 }): Promise<WebSocket> {
@@ -275,44 +272,77 @@ async function authenticateSocket(input: {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(input.connectHost, { handshakeTimeout: input.connectTimeoutMs })
     let authenticated = false
-    let completed = false
+    let started = false
+    let ended = false
     let heartbeat: NodeJS.Timeout | undefined
     const timeout = setTimeout(() => {
-      if (!authenticated) {
-        completed = true
-        socket.terminate()
-        reject(withCode("Bilibili danmaku authentication timed out.", "BILIBILI_DANMAKU_AUTH_TIMEOUT"))
-      }
+      fail(withCode("Bilibili danmaku handshake timed out.", "BILIBILI_DANMAKU_CONNECT_TIMEOUT"))
     }, input.connectTimeoutMs)
+    const cleanup = () => {
+      clearTimeout(timeout)
+      if (heartbeat) clearTimeout(heartbeat)
+      input.signal?.removeEventListener("abort", onAbort)
+    }
     const fail = (error: unknown): void => {
-      if (!completed) {
-        completed = true
-        clearTimeout(timeout)
+      if (ended) return
+      ended = true
+      cleanup()
+      if (!started) {
         reject(error)
-      } else if (authenticated) {
+      } else if (!input.signal?.aborted) {
         input.onEvent({
           type: "error",
+          attempt: input.attempt,
           receivedAt: new Date().toISOString(),
-          errorType: "BILIBILI_DANMAKU_TRANSPORT_ERROR",
+          errorType: errorCode(error) ?? "BILIBILI_DANMAKU_TRANSPORT_ERROR",
           message: error instanceof Error ? error.message : String(error)
         })
       }
+      socket.terminate()
     }
-    const onAbort = () => { fail(danmakuCancelled()); socket.terminate() }
+    const onAbort = () => { fail(danmakuCancelled()) }
     input.signal?.addEventListener("abort", onAbort, { once: true })
     socket.once("open", () => {
-      if (completed || input.signal?.aborted) return
-      socket.send(buildBilibiliDanmakuAuthPacket({
+      if (ended || input.signal?.aborted) return
+      try {
+        socket.send(buildBilibiliDanmakuAuthPacket({
         roomId: input.roomId,
         uid: input.info.authUid,
         token: input.info.token,
         buvid: input.info.buvid,
-        clientVersion: "1.14.3",
+        clientVersion: input.clientVersion,
         protocolVersion: input.protocolVersion
-      }))
+        }), error => { if (error) fail(error) })
+        if (ended) return
+        started = true
+        clearTimeout(timeout)
+        const periodMs = input.heartbeatSeconds * 1_000
+        let nextHeartbeatAt = performance.now() + periodMs
+        const scheduleHeartbeat = (): void => {
+          heartbeat = setTimeout(sendHeartbeat, Math.min(2_147_483_647, Math.max(0, nextHeartbeatAt - performance.now())))
+          heartbeat.unref()
+        }
+        const sendHeartbeat = (): void => {
+          if (ended || input.signal?.aborted) return
+          if (performance.now() < nextHeartbeatAt) { scheduleHeartbeat(); return }
+          try {
+            if (socket.readyState !== WebSocket.OPEN) throw new Error("Bilibili danmaku socket is not open.")
+            socket.send(buildBilibiliDanmakuHeartbeatPacket(), error => {
+              if (error) fail(error)
+              else if (!ended && !input.signal?.aborted) input.onEvent({ type: "heartbeat-sent", attempt: input.attempt, receivedAt: new Date().toISOString() })
+            })
+          } catch (error) { fail(error) }
+          if (!ended && !input.signal?.aborted) {
+            nextHeartbeatAt += periodMs
+            scheduleHeartbeat()
+          }
+        }
+        scheduleHeartbeat()
+        resolve(socket)
+      } catch (error) { fail(error) }
     })
     socket.on("message", (raw, isBinary) => {
-      if (input.signal?.aborted || (completed && !authenticated)) return
+      if (input.signal?.aborted || ended) return
       const receivedAt = new Date().toISOString()
       const bytes = rawDataBuffer(raw)
       const packets: ParsedBilibiliDanmakuPacket[] = isBinary === false
@@ -323,43 +353,37 @@ async function authenticateSocket(input: {
         if (packet.operation === BILIBILI_DANMAKU_OPERATION.AUTH_REPLY) {
           if (!successfulAuthReply(packet.bodyText)) {
             fail(withCode("Bilibili danmaku authentication failed.", "BILIBILI_DANMAKU_AUTH_FAILED"))
-            socket.close(1000, "authentication failed")
             return
           }
           if (!authenticated) {
             authenticated = true
-            completed = true
-            clearTimeout(timeout)
-            heartbeat = setInterval(() => {
-              if (socket.readyState === WebSocket.OPEN) socket.send(buildBilibiliDanmakuHeartbeatPacket())
-            }, input.heartbeatSeconds * 1_000)
-            heartbeat.unref()
-            resolve(socket)
+            input.onEvent({ type: "connected", attempt: input.attempt, receivedAt })
           }
           continue
         }
         if (packet.operation === BILIBILI_DANMAKU_OPERATION.HEARTBEAT_REPLY && packet.popularity !== undefined) {
-          input.onEvent({ type: "heartbeat", popularity: packet.popularity, receivedAt })
+          input.onEvent({ type: "heartbeat", attempt: input.attempt, popularity: packet.popularity, receivedAt })
           continue
         }
         if (packet.operation !== BILIBILI_DANMAKU_OPERATION.COMMAND || !packet.bodyText) continue
         for (const event of parseBilibiliDanmakuEvents(packet.bodyText, receivedAt)) {
-          input.onEvent({ type: "command", event, receivedAt })
+          input.onEvent({ type: "command", attempt: input.attempt, event, receivedAt })
         }
       }
     })
     socket.once("error", fail)
     socket.once("close", (code, reason) => {
-      input.signal?.removeEventListener("abort", onAbort)
-      clearTimeout(timeout)
-      if (heartbeat) clearInterval(heartbeat)
-      if (!authenticated) {
-        fail(withCode(`Bilibili danmaku socket closed before authentication (${code}).`, "BILIBILI_DANMAKU_CLOSED"))
+      if (ended) return
+      if (!started) {
+        fail(withCode(`Bilibili danmaku socket closed before AUTH (${code}).`, "BILIBILI_DANMAKU_CLOSED"))
         return
       }
+      ended = true
+      cleanup()
       if (input.signal?.aborted) return
       input.onEvent({
         type: "closed",
+        attempt: input.attempt,
         receivedAt: new Date().toISOString(),
         code,
         reason: reason.toString("utf8")
@@ -389,22 +413,24 @@ function rawDataBuffer(raw: RawData): Buffer {
 function successfulAuthReply(bodyText?: string): boolean {
   if (!bodyText) return false
   try {
-    const parsed = JSON.parse(bodyText) as unknown
-    return isRecord(parsed) && typeof parsed.code === "number" && parsed.code === 0
+    const tokens = new WeakMap<object, string | undefined>()
+    const parsed = JSON.parse(bodyText, function (this: object, key: string, value: unknown, context?: { source?: string }) {
+      if (key === "code") tokens.set(this, context?.source)
+      return value
+    }) as unknown
+    return isRecord(parsed) && parsed.code === 0 && /^-?0$/u.test(tokens.get(parsed) ?? "")
   } catch {
     return false
   }
 }
 
-function protocolCandidates(requested?: number): number[] {
+function protocolCandidates(requested?: number, preferred = 3): number[] {
   if (requested !== undefined && Number.isInteger(requested) && requested >= 0 && requested <= 3) {
     return [requested]
   }
-  return [3, 2, 1, 0]
-}
-
-function keyFromUrl(value?: string): string | undefined {
-  return value?.match(/\/([^/]+)\.png(?:\?.*)?$/)?.[1]
+  return Number.isInteger(preferred) && preferred >= 0 && preferred <= 3
+    ? [preferred, ...[3, 2, 1, 0].filter(version => version !== preferred)]
+    : [3, 2, 1, 0]
 }
 
 function mergeCookies(primary?: string, secondary?: string): string {
@@ -413,10 +439,16 @@ function mergeCookies(primary?: string, secondary?: string): string {
 
 function isCredentialFallbackError(error: unknown): boolean {
   return isRiskError(error) || errorCode(error) === "BILIBILI_AUTH_EXPIRED"
+    || [65530, -403, -412].includes(errorBiliCode(error) ?? Number.NaN)
 }
 
 function isRiskError(error: unknown): boolean {
-  return errorCode(error) === "BILIBILI_RISK_CONTROL"
+  return errorCode(error) === "BILIBILI_RISK_CONTROL" || errorBiliCode(error) === -352
+}
+
+function errorBiliCode(error: unknown): number | undefined {
+  return typeof error === "object" && error !== null && "biliCode" in error
+    && typeof error.biliCode === "number" ? error.biliCode : undefined
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -426,12 +458,6 @@ function errorCode(error: unknown): string | undefined {
 
 function withCode(message: string, code: string): Error & { code: string; retryable: boolean } {
   return Object.assign(new Error(message), { code, retryable: true })
-}
-
-function text(value: unknown): string | undefined {
-  if (typeof value !== "string" && typeof value !== "number") return undefined
-  const normalized = String(value).trim()
-  return normalized || undefined
 }
 
 function record(value: unknown): Record<string, unknown> {

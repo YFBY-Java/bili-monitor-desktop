@@ -3,17 +3,46 @@
 import asyncio
 import os
 import sys
+import time
 from pathlib import Path
 
+from first_read_probe import observe_first_read
+
+probe_started = time.monotonic()
+probe_count = 0
+probe_enabled = Path(os.environ.get("BMD_DATA_DIR", "")).name.startswith(
+    "bmd-long64-worker-bridge-"
+)
+
+
+def probe(stage):
+    global probe_count
+    if probe_enabled and probe_count < 10:
+        probe_count += 1
+        print(
+            f"BMD_TEST_WAIT:{stage}:{int((time.monotonic() - probe_started) * 1000)}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+probe("fixture:enter")
 import httpx
 
+probe("fixture:httpx-ready")
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 original_client = httpx.AsyncClient
 
 
 async def replay(request):
+    probe("replay:enter")
     directory = Path(os.environ["BMD_DATA_DIR"])
-    (directory / "http-started").write_text("started", encoding="utf-8")
+    try:
+        (directory / "http-started").write_text("started", encoding="utf-8")
+    except OSError:
+        probe("marker:write-error")
+        raise
+    probe("marker:write-ok")
     complete = False
     try:
         identifier = request.url.params.get(
@@ -51,3 +80,5 @@ async def replay(request):
 httpx.AsyncClient = lambda **kwargs: original_client(
     **kwargs, transport=httpx.MockTransport(replay)
 )
+sys.stdin = observe_first_read(sys.stdin, probe_enabled, probe)
+probe("fixture:patch-ready")

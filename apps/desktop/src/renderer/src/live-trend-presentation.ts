@@ -1,12 +1,12 @@
-import type { BilibiliLiveRoom, BilibiliLiveTrendPoint } from "@bmd/contracts"
+import type { BilibiliLiveRoomV2, BilibiliLiveTrendPointV2 } from "@bmd/contracts"
 
 export interface LiveChartSamples {
-  points: readonly Pick<BilibiliLiveTrendPoint, "capturedAt" | "onlineCount">[]
+  points: readonly Pick<BilibiliLiveTrendPointV2, "capturedAt" | "onlineCount">[]
   source: "history" | "recent" | "current" | "empty"
   provisionalTime: boolean
 }
 
-export function liveChartSamples(room: BilibiliLiveRoom, fetched: readonly BilibiliLiveTrendPoint[] | undefined, now: number): LiveChartSamples {
+export function liveChartSamples(room: BilibiliLiveRoomV2, fetched: readonly BilibiliLiveTrendPointV2[] | undefined, now: number): LiveChartSamples {
   if (fetched?.length) return { points: fetched, source: "history", provisionalTime: false }
   if (room.recentTrend.length) return { points: room.recentTrend, source: "recent", provisionalTime: false }
   if (room.onlineCount === undefined) return { points: [], source: "empty", provisionalTime: false }
@@ -34,3 +34,5 @@ export function formatLiveTrendTime(time: number, span?: number): string {
     hour: "2-digit", minute: "2-digit", ...(span === undefined || span < 120_000 ? { second: "2-digit" } : {}), hour12: false
   }).format(new Date(time))
 }
+export { followerValueBounds as liveValueBounds, followerValueRatio as liveValueRatio,
+  followerValueTicks as liveValueTicks } from "./follower-trend-presentation"

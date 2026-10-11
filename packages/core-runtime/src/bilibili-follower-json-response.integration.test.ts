@@ -113,15 +113,24 @@ describe("original follower JSON business through actual Python, NDJSON, Core an
     } finally { await f.close() }
   })
 
-  it.each(["206", "213"])("persists the accepted first object/last duplicate value %s", async mid => {
+  it.each(["206", "213"])("keeps first-root parsing distinct from complete JSONB storage %s", async mid => {
     const f = await fixture()
     try {
       const user = await f.service.addUser({ mid })
-      expect(await f.service.refreshNow(user.id)).toMatchObject({ success: true, followerCount: 24,
-        sourceEndpoint: "x/web-interface/card" })
+      const history = f.service.trend(user.id).points
+      if (mid === "206") {
+        await expect(f.service.refreshNow(user.id)).rejects.toThrow("Bilibili follower snapshot JSONB input rejected: INVALID_JSON.")
+        expect(f.service.listUsers().items[0]).toMatchObject({ currentFollowerCount: 24 })
+        expect(f.service.trend(user.id).points).toStrictEqual(history)
+        expect(f.service.listUsers().items[0]?.lastErrorType).toBeUndefined()
+      } else {
+        expect(await f.service.refreshNow(user.id)).toMatchObject({ success: true, followerCount: 24,
+          sourceEndpoint: "x/web-interface/card" })
+        expect(f.service.trend(user.id).points.at(-1)?.followerCount).toBe(24)
+      }
       expect(f.calls()).toHaveLength(2)
       expect(f.calls().every(call => call.category === null)).toBe(true)
-      expect(f.service.trend(user.id).points.at(-1)?.followerCount).toBe(24)
+      expect(f.waits).toEqual([])
       if (mid === "206") {
         const refs = f.artifacts()
         expect(refs).toHaveLength(2)

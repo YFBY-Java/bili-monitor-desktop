@@ -2,6 +2,7 @@ import {
   businessCapabilities,
   findProductPage,
   navigationGroups,
+  type NavigationGroup,
   type PageId,
   type Tone
 } from "./product-model"
@@ -16,13 +17,15 @@ export interface WorkspaceSearchResult {
   score: number
 }
 
-const implementedPageIds = navigationGroups.flatMap((group) => group.items.map((item) => item.pageId))
-const validPageIds = new Set<PageId>(implementedPageIds)
 const defaultPageIds: PageId[] = ["bilibili-subjects", "bilibili-followers", "bilibili-live", "douyin-auth"]
 
-export function resolvePageId(value: string): PageId {
-  const candidate = value.replace(/^#\/?/, "") as PageId
-  return validPageIds.has(candidate) ? candidate : "bilibili-followers"
+export function resolvePageId(value: string, groups: readonly NavigationGroup[] = navigationGroups): PageId {
+  const candidate = value.replace(/^#\/?/, "")
+  for (const group of groups) {
+    const item = group.items.find((entry) => entry.pageId === candidate)
+    if (item) return item.pageId
+  }
+  return "bilibili-followers"
 }
 
 function normalize(value: string): string {
@@ -54,7 +57,7 @@ export function searchWorkspace(value: string): WorkspaceSearchResult[] {
 
   const results: WorkspaceSearchResult[] = []
 
-  for (const pageId of implementedPageIds) {
+  for (const pageId of navigationGroups.flatMap((group) => group.items.map((item) => item.pageId))) {
     const page = findProductPage(pageId)
     if (!page) continue
     const featureText = page.features

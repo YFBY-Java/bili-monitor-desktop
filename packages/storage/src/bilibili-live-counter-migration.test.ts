@@ -64,7 +64,9 @@ describe("v13 original signed live counters", () => {
         raw.exec(`DROP TABLE ${table}; ALTER TABLE ${table}_v12_fixture RENAME TO ${table};`)
         for (const index of indexes) raw.exec(String(index.sql))
       }
-      raw.exec(`DELETE FROM schema_migration WHERE version>=13; PRAGMA user_version=12; COMMIT; PRAGMA foreign_keys=ON;
+      raw.exec(`ALTER TABLE bilibili_api_call DROP COLUMN request_meta_json;
+        ALTER TABLE bilibili_api_call DROP COLUMN response_meta_json;
+        DELETE FROM schema_migration WHERE version>=13; PRAGMA user_version=12; COMMIT; PRAGMA foreign_keys=ON;
         INSERT INTO object_artifact(object_id, relative_path, media_type, size_bytes, sha256, created_at)
         VALUES ('${artifactId}', 'objects/synthetic.json', 'application/json', 2, '${"a".repeat(64)}', '2026-09-13T00:00:00Z');
         INSERT INTO bilibili_live_room_monitor(rowid, monitor_id, uid, room_id, uname, live_status, online_count, attention_count,
@@ -84,19 +86,27 @@ describe("v13 original signed live counters", () => {
         "bilibili_live_danmaku_recent", "object_artifact"].map(table => [table, raw.prepare(`SELECT rowid, * FROM ${table}`).all()]))
       raw.close()
       const upgraded = await ControlDatabase.open(directory)
-      try { expect(upgraded.status().schemaVersion).toBe(14) } finally { upgraded.close() }
+      try {
+        expect(upgraded.status().schemaVersion).toBe(18)
+        expect(upgraded.findBilibiliLiveRoomById("old-room")).toMatchObject({ onlineCount: 7n, attentionCount: 8n })
+        expect(upgraded.listBilibiliLiveStatusEvents(10)[0]).toMatchObject({ eventId: "old-event", monitorId: "old-room", onlineCount: null })
+      } finally { upgraded.close() }
       const verify = new DatabaseSync(path)
       try {
         for (const [table, rows] of Object.entries(before)) expect(verify.prepare(`SELECT rowid, * FROM ${table}`).all()).toEqual(rows)
         expect(verify.prepare("PRAGMA foreign_key_check").all()).toEqual([])
-        verify.exec("PRAGMA foreign_keys=ON; UPDATE bilibili_live_room_monitor SET online_count=-1, attention_count=-2; UPDATE bilibili_live_room_snapshot SET online_count=-3, attention_count=-4;")
+        verify.exec("PRAGMA foreign_keys=ON; UPDATE bilibili_live_room_monitor SET online_count=9007199254740993, attention_count=-9223372036854775808; UPDATE bilibili_live_room_snapshot SET online_count=9007199254740992, attention_count=NULL;")
         expect(() => verify.exec("UPDATE bilibili_live_room_monitor SET uid='bad'")).toThrow(/CHECK/)
         expect(verify.prepare("SELECT name FROM sqlite_schema WHERE type='index' AND name='idx_bilibili_live_snapshot_monitor_time'").get()).toBeTruthy()
       } finally { verify.close() }
       const reopened = await ControlDatabase.open(directory)
       try {
-        expect(reopened.findBilibiliLiveRoomById("old-room")).toMatchObject({ onlineCount: -1, attentionCount: -2 })
-        expect(reopened.findBilibiliLiveRoomSnapshots("old-room", { limit: 10 })[0]).toMatchObject({ onlineCount: -3, attentionCount: -4 })
+        expect(reopened.findBilibiliLiveRoomById("old-room")).toMatchObject({ onlineCount: 9007199254740993n, attentionCount: -9223372036854775808n })
+        expect(reopened.findBilibiliLiveRoomByUid("118")?.onlineCount).toBe(9007199254740993n)
+        expect(reopened.findBilibiliLiveRoomByRoomId("218")?.onlineCount).toBe(9007199254740993n)
+        expect(reopened.findDueBilibiliLiveRooms("2026-10-07T00:00:00Z", 10)[0]?.onlineCount).toBe(9007199254740993n)
+        expect(reopened.findBilibiliLiveRoomSnapshots("old-room", { limit: 10 })[0]).toMatchObject({ onlineCount: 9007199254740992n, attentionCount: null })
+        expect(reopened.listBilibiliLiveStatusEvents(10)[0]).toMatchObject({ eventId: "old-event", monitorId: "old-room", onlineCount: null })
       } finally { reopened.close() }
     } finally {
       if (raw.isOpen) raw.close()

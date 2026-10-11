@@ -1,11 +1,11 @@
-import type { BilibiliFollowerTrendV2, DesktopBridge } from "@bmd/contracts"
+import type { BilibiliFollowerMonitorV2, BilibiliFollowerTrendV2, DesktopBridge } from "@bmd/contracts"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
 
 export type FollowerTrendIndicator = "idle" | "refreshing" | "done" | "error"
 
 /** Local history only. Core remains the sole owner of platform collection. */
-export function useFollowerTrends(bridge: DesktopBridge, userIds: string[], listUpdatedAt: number) {
+export function useFollowerTrends(bridge: DesktopBridge, userIds: string[], monitors: readonly BilibiliFollowerMonitorV2[] | undefined) {
   const client = useQueryClient()
   const instance = useId()
   const queryKey = useMemo(() => ["bilibili-follower-trends-v2", "workspace", instance], [instance])
@@ -85,12 +85,13 @@ export function useFollowerTrends(bridge: DesktopBridge, userIds: string[], list
   const selectionKey = userIds.join(",")
   useEffect(() => { queue.current(180) }, [selectionKey])
   useEffect(() => {
-    if (!listUpdatedAt) return
+    if (monitors === undefined) return
     client.setQueryData<BilibiliFollowerTrendV2[]>(queryKey, current => current?.filter(trend => latest.current.userIds.includes(trend.user.id)))
     queue.current(0)
-  }, [client, queryKey, listUpdatedAt])
+  }, [client, queryKey, monitors])
   const visibleIndicator: FollowerTrendIndicator = userIds.length ? indicator : "idle"
   return { ...query, indicator: visibleIndicator,
     currentError: failedKey.current === selectionKey ? query.error?.message : undefined,
+    removeUser: (userId: string) => client.setQueryData<BilibiliFollowerTrendV2[]>(queryKey, current => current?.filter(trend => trend.user.id !== userId)),
     reload: () => queue.current(0) }
 }

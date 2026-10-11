@@ -1,7 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { createInterface } from "node:readline"
-import { RealtimeRequestAliveSchema } from "@bmd/contracts"
+import { RealtimeRequestAliveSchema, RealtimeCredentialRequestSchema, BilibiliDanmakuCredentialSchema,
+  RealtimeWorkerErrorSchema,
+  type BilibiliDanmakuCredential } from "@bmd/contracts"
 
 import { safeWorkerEnvironment } from "./worker-environment"
 
@@ -9,12 +11,15 @@ interface PendingRequest {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
   timeout: NodeJS.Timeout
-  type: "start" | "stop" | "stopAll"
+  type: RealtimeRequestType
   connectionId: string | undefined
+  cleanup?: () => void
 }
 
+type RealtimeRequestType = "start" | "stop" | "stopAll" | "getWbiKeys"
+
 export interface RealtimeWorkerTransport {
-  request: (type: "start" | "stop" | "stopAll", payload: Record<string, unknown>) => Promise<unknown>
+  request: (type: RealtimeRequestType, payload: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<unknown>
   subscribe: (connectionId: string, listener: (event: unknown) => void) => () => void
   stop: () => Promise<void>
 }
@@ -24,6 +29,7 @@ export interface NdjsonRealtimeWorkerTransportOptions {
   workerEntry: string
   dataDirectory: string
   requestTimeoutMs?: number
+  credentialProvider?: () => Promise<BilibiliDanmakuCredential | undefined>
 }
 
 export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
@@ -37,11 +43,13 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
   constructor(private readonly options: NdjsonRealtimeWorkerTransportOptions) {}
 
   async request(
-    type: "start" | "stop" | "stopAll",
-    payload: Record<string, unknown>
+    type: RealtimeRequestType,
+    payload: Record<string, unknown>,
+    options?: { signal?: AbortSignal }
   ): Promise<unknown> {
+    if (options?.signal?.aborted) throw stoppedError()
     // Reserve a bounded control lane; a saturated start queue must still be stoppable.
-    if (this.pending.size >= (type === "start" ? 100 : 120)) throw Object.assign(new Error("Realtime Worker request queue is full."),
+    if (this.pending.size >= (type === "start" || type === "getWbiKeys" ? 100 : 120)) throw Object.assign(new Error("Realtime Worker request queue is full."),
       { code: "REALTIME_WORKER_BUSY", retryable: true })
     const child = this.ensureStarted()
     const id = randomUUID()
@@ -52,9 +60,25 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
           { code: "REALTIME_WORKER_TIMEOUT", retryable: true }))
         child.kill()
       }, timeoutMs)
+      const signal = options?.signal
+      const cancel = () => {
+        const pending = this.pending.get(id)
+        if (!pending) return
+        clearTimeout(pending.timeout)
+        pending.cleanup?.()
+        this.pending.delete(id)
+        reject(stoppedError())
+        if (type === "getWbiKeys" && this.child === child && !child.stdin.destroyed) {
+          child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "cancelWbiKeys", payload: { requestId: id } })}\n`)
+        }
+      }
       this.pending.set(id, { resolve, reject, timeout, type,
-        connectionId: typeof payload.connectionId === "string" ? payload.connectionId : undefined })
-      child.stdin.write(`${JSON.stringify({ id, type, payload, ...(type === "start" ? { keepAlive: true } : {}) })}\n`)
+        connectionId: typeof payload.connectionId === "string" ? payload.connectionId : undefined,
+        ...(signal ? { cleanup: () => signal.removeEventListener("abort", cancel) } : {}) })
+      signal?.addEventListener("abort", cancel, { once: true })
+      child.stdin.write(`${JSON.stringify({ id, type, payload,
+        ...(type === "start" || type === "getWbiKeys" ? { keepAlive: true } : {}) })}\n`)
+      if (signal?.aborted) cancel()
     })
   }
 
@@ -75,6 +99,7 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
     this.child = undefined
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout)
+      pending.cleanup?.()
       pending.reject(stoppedError())
     }
     this.pending.clear()
@@ -133,11 +158,17 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
       return
     }
     if (!isRecord(value)) return
+    if (value.type === "credential-request") {
+      const parsed = RealtimeCredentialRequestSchema.safeParse(value)
+      if (parsed.success) void this.respondCredential(parsed.data)
+      return
+    }
     if (value.type === "request-alive") {
       const parsed = RealtimeRequestAliveSchema.safeParse(value)
       if (!parsed.success) return
       const pending = this.pending.get(parsed.data.id)
-      if (pending?.type === "start" && pending.connectionId === parsed.data.connectionId) pending.timeout.refresh()
+      if (pending?.type === parsed.data.requestType &&
+        (parsed.data.requestType === "getWbiKeys" || pending.connectionId === parsed.data.connectionId)) pending.timeout.refresh()
       return
     }
     if (value.type === "event" && typeof value.connectionId === "string") {
@@ -148,18 +179,18 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
     const pending = this.pending.get(value.id)
     if (!pending) return
     clearTimeout(pending.timeout)
+    pending.cleanup?.()
     this.pending.delete(value.id)
     if (value.ok) {
       pending.resolve(value.result)
       return
     }
-    const error = isRecord(value.error) ? value.error : {}
+    const parsedError = RealtimeWorkerErrorSchema.safeParse(value.error)
+    const error = parsedError.success ? parsedError.data
+      : { code: "REALTIME_WORKER_FAILED", message: "Realtime Worker returned an invalid error.", retryable: true }
+    const { message, retryable, ...details } = error
     pending.reject(Object.assign(
-      new Error(typeof error.message === "string" ? error.message : "Realtime Worker failed."),
-      {
-        code: typeof error.code === "string" ? error.code : "REALTIME_WORKER_FAILED",
-        retryable: true
-      }
+      new Error(message), { ...details, retryable: retryable ?? true }
     ))
   }
 
@@ -174,6 +205,7 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
       : Object.assign(new Error(`Realtime Worker exited with code ${code}.`), { code: "REALTIME_WORKER_EXITED", retryable: true })
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout)
+      pending.cleanup?.()
       pending.reject(error)
     }
     this.pending.clear()
@@ -189,6 +221,21 @@ export class NdjsonRealtimeWorkerTransport implements RealtimeWorkerTransport {
       }
     }
     this.listeners.clear()
+  }
+
+  private async respondCredential(request: { id: string; startRequestId: string; connectionId: string }): Promise<void> {
+    const pending = this.pending.get(request.startRequestId)
+    const child = this.child
+    if (!child || pending?.type !== "start" || pending.connectionId !== request.connectionId) return
+    let credential: BilibiliDanmakuCredential | null = null
+    try {
+      const current = await this.options.credentialProvider?.()
+      if (current !== undefined) credential = BilibiliDanmakuCredentialSchema.parse(current)
+    } catch {
+      // Credential payloads and errors must never enter worker logs.
+    }
+    if (this.stopped || this.child !== child || this.pending.get(request.startRequestId) !== pending || child.stdin.destroyed) return
+    child.stdin.write(`${JSON.stringify({ id: request.id, type: "credential-response", credential })}\n`)
   }
 }
 

@@ -2,8 +2,8 @@
   {
     "name": "zero IDs and preserved Chinese profile",
     "method": "status", "request": {"uids": ["101"]},
-    "body": {"code": 0, "data": {"101": {"uid": 101, "room_id": 201, "short_id": 0, "area_v2_id": 0, "area_id": 86, "area_v2_parent_id": 0, "parent_area_id": 2, "uname": " 合成直播主播 ", "title": " 中文直播标题 ", "live_status": 1, "online": 0, "watched_show": {"num": 99}, "attention": 123, "live_time": "2026-09-13 11:00:00"}}},
-    "result": [{"uid": "101", "roomId": "201", "shortId": "0", "areaId": "0", "parentAreaId": "0", "uname": " 合成直播主播 ", "title": " 中文直播标题 ", "liveStatus": 1, "onlineCount": 0, "attentionCount": 123, "liveTime": "2026-09-13T03:00:00Z"}]
+    "body": {"code": 0, "data": {"101": {"uid": 101, "room_id": 201, "short_id": 0, "area_v2_id": 0, "area_id": 86, "area_v2_parent_id": 0, "parent_area_id": 2, "uname": " 合成直播主播 ", "face": " //example.test/avatar.png ", "cover_from_user": " relative/cover.png ", "keyframe": "not-a-url", "title": " 中文直播标题 ", "live_status": 1, "online": 0, "watched_show": {"num": 99}, "attention": 123, "live_time": "2026-09-13 11:00:00"}}},
+    "result": [{"uid": "101", "roomId": "201", "shortId": "0", "areaId": "0", "parentAreaId": "0", "uname": " 合成直播主播 ", "faceUrl": " //example.test/avatar.png ", "coverUrl": " relative/cover.png ", "keyframeUrl": "not-a-url", "title": " 中文直播标题 ", "liveStatus": 1, "onlineCount": 0, "attentionCount": 123, "liveTime": "2026-09-13T03:00:00Z"}]
   },
   {
     "name": "blank nickname fallback and scalar text only",

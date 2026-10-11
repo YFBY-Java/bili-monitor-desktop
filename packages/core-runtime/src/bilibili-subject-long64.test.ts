@@ -37,10 +37,22 @@ async function fixture() {
     idFactory: randomUUID, liveDanmaku: { status: () => { throw new Error("disabled danmaku") }, recent: () => [] } })
   const monitorId = randomUUID()
   const subjectId = randomUUID()
-  function seed(count: bigint, capturedAt: string, mode: "add" | "collect" = "collect") {
+  const liveMonitorId = randomUUID()
+  function seedLive(onlineCount: bigint | null, capturedAt: string, id = liveMonitorId) {
+    database.applyBilibiliLiveRoomSnapshot({ monitor: {
+      monitorId: id, uid: id === liveMonitorId ? "22" : "23", roomId: id === liveMonitorId ? "122" : "123", shortId: null, uname: "精确直播",
+      faceUrl: null, title: null, coverUrl: null, keyframeUrl: null, areaId: null, areaName: null,
+      parentAreaId: null, parentAreaName: null, liveStatus: 1, liveTime: null, onlineCount,
+      attentionCount: null, intervalSeconds: 300, nextCollectAt: capturedAt, capturedAt,
+      sourceEndpoint: "room/v1/Room/get_info" },
+      snapshot: { snapshotId: randomUUID(), capturedBucket: capturedAt },
+      artifact: { ...evidence, createdAt: capturedAt },
+      outbox: { messageId: randomUUID(), topic: "fixture.live", envelopeJson: "{}", createdAt: capturedAt } })
+  }
+  function seed(count: bigint, capturedAt: string, mode: "add" | "collect" = "collect", following = minimum) {
     database.upsertBilibiliFollowerMonitorSnapshot({ mode, monitor: { monitorId, mid: "22",
       nickname: "合成长整数用户", avatarUrl: null, profileUrl: "https://space.bilibili.com/22",
-      followerCount: count, followingCount: minimum, intervalSeconds: 3600,
+      followerCount: count, followingCount: following, intervalSeconds: 3600,
       nextCollectAt: "2026-10-05T13:00:00.000Z", capturedAt, sourceEndpoint: "x/web-interface/card" },
       snapshot: { snapshotId: randomUUID(), capturedBucket: capturedAt },
       artifact: { ...evidence, createdAt: capturedAt },
@@ -51,16 +63,73 @@ async function fixture() {
       remark: null, tags: [], monitorStatus: "ACTIVE", healthScore: null, lastSuccessAt: null,
       lastEventAt: null, version: 1, createdAt: now, updatedAt: now },
       binding: { bindingId: randomUUID(), subjectId, bilibiliUserMonitorId: monitorId,
-        bilibiliLiveRoomMonitorId: null, mid: "22", roomId: null, enabledCapabilities: ["follower"],
+        bilibiliLiveRoomMonitorId: database.findBilibiliLiveRoomById(liveMonitorId) ? liveMonitorId : null,
+        mid: "22", roomId: database.findBilibiliLiveRoomById(liveMonitorId) ? "122" : null, enabledCapabilities: ["follower"],
         danmuEnabled: false, createdAt: now, updatedAt: now }, layouts: [] },
     { messageId: randomUUID(), topic: "fixture.bind", envelopeJson: "{}", createdAt: now })
   }
-  return { database, followers, subjects, seed, bind, monitorId, subjectId,
+  return { database, followers, live, subjects, seed, seedLive, bind, monitorId, subjectId,
     close: async () => { await followers.stop(); await live.stop(); database.close();
       await rm(directory, { recursive: true, force: true }) } }
 }
 
 describe("Subject follower Long64 propagation", () => {
+  it("preserves arbitrary layout JSON while projecting only declared live counters", async () => {
+    const f = await fixture()
+    try {
+      f.seed(1n, now, "add", 1n)
+      f.seedLive(9n, now)
+      f.bind()
+      const input = { widgetKey: "summary" as const, enabled: true,
+        position: { onlineCount: "auto", nested: { onlineCount: "1" } },
+        settings: { onlineDelta: 1.25, onlineCount: "auto", nested: { onlineCount: "1" } } }
+      f.subjects.updateLayout({ subjectId: f.subjectId, items: [input] })
+      for (const view of [f.subjects.workbench(f.subjectId), f.subjects.workbenchV2(f.subjectId), f.subjects.workbenchV3(f.subjectId)]) {
+        expect(view.layout).toEqual([input])
+        expect(JSON.stringify(view.layout)).toBe(JSON.stringify([input]))
+      }
+      expect(f.subjects.workbenchV2(f.subjectId).summary.onlineCount).toBe(9)
+      expect(f.subjects.workbenchV3(f.subjectId).summary.onlineCount).toBe("9")
+      f.seedLive(maximum, "2026-10-05T12:01:00.000Z")
+      expect(() => f.subjects.workbenchV2(f.subjectId)).toThrow(/LONG64_LEGACY_PRECISION_UNSUPPORTED/)
+      expect(f.subjects.workbenchV3(f.subjectId).layout).toEqual([input])
+    } finally { await f.close() }
+  })
+  it("uses only valid history for the live peak before falling back to current", async () => {
+    const f = await fixture()
+    try {
+      f.seed(1n, now, "add")
+      f.seedLive(5n, "2026-10-05T11:00:00.000Z")
+      f.seedLive(9n, "2026-10-05T13:00:00.000Z")
+      f.bind()
+      expect(f.subjects.workbenchV2(f.subjectId).summary.onlinePeak24h).toBe(5)
+      expect(f.subjects.workbenchV3(f.subjectId).summary).toMatchObject({ onlineCount: "9", onlinePeak24h: "5", onlineDelta24h: "4" })
+    } finally { await f.close() }
+  })
+  it("wraps Live totals and deltas, omits null, and falls back only without valid history", async () => {
+    const f = await fixture()
+    try {
+      f.seed(1n, now, "add")
+      f.seedLive(maximum, "2026-10-05T11:00:00.000Z")
+      f.seedLive(1n, now, randomUUID())
+      expect(f.live.summaryV2().totalOnlineCount).toBe(minimum.toString())
+      f.seedLive(minimum, now)
+      expect(f.live.listRoomsV2().items.find(room => room.uid === "22")?.onlineDelta).toBe("1")
+      f.bind()
+      expect(f.subjects.workbenchV3(f.subjectId).summary.onlineDelta24h).toBe("1")
+      f.seedLive(null, "2026-10-05T12:01:00.000Z")
+      expect(f.live.listRoomsV2().items.find(room => room.uid === "22")?.onlineCount).toBeUndefined()
+      expect(f.live.summaryV2().totalOnlineCount).toBe("1")
+    } finally { await f.close() }
+    const empty = await fixture()
+    try {
+      empty.seed(1n, now, "add")
+      empty.seedLive(9n, "2026-10-04T11:59:59.000Z")
+      empty.bind()
+      expect(empty.subjects.workbenchV3(empty.subjectId).summary).toMatchObject({ onlineCount: "9", onlinePeak24h: "9" })
+      expect(empty.subjects.workbenchV3(empty.subjectId).summary.onlineDelta24h).toBeUndefined()
+    } finally { await empty.close() }
+  })
   it("uses the first of the latest 2000 in-window snapshots rather than the unbounded window baseline", async () => {
     const f = await fixture()
     try {

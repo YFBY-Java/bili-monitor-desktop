@@ -8,21 +8,32 @@ function gate() {
   return { pending, release }
 }
 function connection() {
-  return { connectHost: "wss://example.test/sub", protocolVersion: 3, authMode: "ANONYMOUS" as const, stop: vi.fn(async () => {}) }
+  return { status: "AUTHENTICATING" as const, attempt: 1, connectHost: "wss://example.test/sub", protocolVersion: 3, authMode: "ANONYMOUS" as const, stop: vi.fn(async () => {}) }
 }
 describe("realtime in-flight connection ownership", () => {
   it("aborts pending HTTP when stopped and closes a late connection without registering it", async () => {
     const g = gate(), socket = connection()
     let signal: AbortSignal | undefined
-    const manager = new RealtimeSessionManager(async input => { signal = input.signal; return g.pending })
-    const pending = manager.start({ connectionId: "one", roomId: "33" }, () => {}).catch(error => error)
-    await Promise.resolve()
-    await manager.stop("one")
-    expect(signal?.aborted).toBe(true)
-    g.release(socket)
-    expect(await pending).toMatchObject({ code: "BILIBILI_DANMAKU_CANCELLED" })
-    expect(socket.stop).toHaveBeenCalledOnce()
-    await manager.shutdown()
+    let captured: BilibiliDanmakuConnectionInput | undefined
+    const connectionConfiguration = { heartbeatSeconds: 7, connectTimeoutMs: 1234,
+      useLoginCredential: false, webLocation: " location! ", clientVersion: " version " }
+    const cacheConfiguration = { wbiCacheSeconds: 350, buvidCacheSeconds: -8 }
+    const manager = new RealtimeSessionManager(async input => { captured = input; signal = input.signal; return g.pending })
+    const pending = manager.start({ connectionId: "one", roomId: "33", preferredProtocolVersion: 2, connectionConfiguration, cacheConfiguration }, () => {}).catch(error => error)
+    try {
+      await Promise.resolve()
+      expect(captured).toMatchObject({ preferredProtocolVersion: 2, connectionConfiguration, cacheConfiguration })
+      await manager.stop("one")
+      expect(signal?.aborted).toBe(true)
+      g.release(socket)
+      expect(await pending).toMatchObject({ code: "BILIBILI_DANMAKU_CANCELLED" })
+      expect(socket.stop).toHaveBeenCalledOnce()
+    } finally {
+      await manager.stop("one")
+      g.release(socket)
+      await pending
+      await manager.shutdown()
+    }
   })
   it("does not let a replaced start remove or emit events for its newer connection", async () => {
     const first = gate(), second = gate(), a = connection(), b = connection(), events = vi.fn()
@@ -37,11 +48,14 @@ describe("realtime in-flight connection ownership", () => {
     const newer = manager.start({ connectionId: "one", roomId: "33" }, events)
     await Promise.resolve()
     expect(inputs[0]?.signal?.aborted).toBe(true)
+    callbacks[0]!({ type: "heartbeat", popularity: 42, receivedAt: new Date().toISOString() })
+    expect(events).not.toHaveBeenCalled()
+    callbacks[1]!({ type: "error", errorType: "BILIBILI_DANMAKU_AUTH_FAILED", message: "fixture early refusal", receivedAt: new Date().toISOString() })
     first.release(a); second.release(b)
     expect(await older).toMatchObject({ code: "BILIBILI_DANMAKU_CANCELLED" })
     expect(await newer).toBe(b)
     callbacks[0]!({ type: "heartbeat", popularity: 42, receivedAt: new Date().toISOString() })
-    expect(events).not.toHaveBeenCalled()
+    expect(events).toHaveBeenCalledOnce()
     await manager.stop("one")
     expect(b.stop).toHaveBeenCalledOnce()
   })

@@ -23,6 +23,7 @@ import {
 } from "@bmd/contracts"
 import type {
   ControlDatabase,
+  NewStoredDouyinAuthCredential,
   StoredDouyinAuthCredential,
   StoredDouyinAuthSession
 } from "@bmd/storage"
@@ -63,6 +64,8 @@ const TERMINAL = new Set(["SUCCESS", "EXPIRED", "FAILED"])
 export class DouyinAuthService {
   private readonly qrExpireSeconds: number
   private readonly pollIntervalMs: number
+  private readonly webPolls = new Map<string, Promise<DouyinQrLoginStatus>>()
+  private readonly oauthRefreshes = new Map<string, Promise<DouyinCredential>>()
 
   constructor(private readonly options: DouyinAuthServiceOptions) {
     this.qrExpireSeconds = Math.min(1_800, Math.max(30, options.qrExpireSeconds ?? 180))
@@ -106,8 +109,10 @@ export class DouyinAuthService {
       createdAt: now.toISOString(),
       updatedAt: now.toISOString()
     })
+    let workerSessionId: string | null = null
     try {
       const started = await this.options.browser.start(this.qrExpireSeconds)
+      workerSessionId = started.workerSessionId
       this.options.database.attachDouyinWorkerSession(
         loginId,
         started.workerSessionId,
@@ -125,12 +130,25 @@ export class DouyinAuthService {
         expiresAt
       })
     } catch (error) {
+      await this.safeDelete(workerSessionId)
       this.failSession(loginId, "WORKER_UNAVAILABLE", error)
       throw this.applicationError("DOUYIN_BROWSER_WORKER_UNAVAILABLE", error)
     }
   }
 
   async pollWebQr(loginId: string): Promise<DouyinQrLoginStatus> {
+    const pending = this.webPolls.get(loginId)
+    if (pending) return pending
+    const operation = this.pollWebQrSession(loginId)
+    this.webPolls.set(loginId, operation)
+    try {
+      return await operation
+    } finally {
+      this.webPolls.delete(loginId)
+    }
+  }
+
+  private async pollWebQrSession(loginId: string): Promise<DouyinQrLoginStatus> {
     const session = this.requireSession(loginId, "WEB_QR")
     if (new Date(session.expiresAt).getTime() <= this.options.now().getTime() && session.status !== "SUCCESS") {
       this.updateSession(session, "EXPIRED", { expiredAt: this.options.now().toISOString() })
@@ -158,6 +176,7 @@ export class DouyinAuthService {
         await this.safeDelete(workerSessionId)
       } else {
         this.updateSession(session, observed.status, { observed })
+        if (observed.status === "EXPIRED") await this.safeDelete(workerSessionId)
       }
       const imageDataUrl = ["STARTING", "WAITING", "SCANNED"].includes(observed.status)
         ? await this.options.browser.qr(workerSessionId).catch(() => undefined)
@@ -166,20 +185,27 @@ export class DouyinAuthService {
     }
     try {
       const bundle = await this.options.browser.consume(workerSessionId)
-      if (bundle.authType !== undefined && bundle.authType !== WEB_AUTH) {
-        throw new Error(`Unexpected Douyin Web auth type: ${String(bundle.authType)}`)
-      }
-      const credential = this.saveCredential(WEB_AUTH, bundle, webExpiration(bundle))
-      this.options.database.updateDouyinAuthSession({
+      this.requireWebBundle(bundle)
+      const timestamp = this.options.now().toISOString()
+      const credential = this.options.database.completeDouyinWebLogin({
         loginId,
-        status: "SUCCESS",
-        rawResultJson: JSON.stringify({ credentialId: credential.credentialId, observed }),
-        completedAt: this.options.now().toISOString(),
-        updatedAt: this.options.now().toISOString()
+        credential: {
+          credentialId: this.options.idFactory(),
+          authType: WEB_AUTH,
+          encryptedPayload: this.options.cipher.encrypt(bundle),
+          expiresAt: webExpiration(bundle) ?? null,
+          createdAt: timestamp,
+          updatedAt: timestamp
+        },
+        rawResult: { observed }
       })
+      if (!credential) {
+        throw new CoreApplicationError("DOUYIN_WEB_SESSION_NOT_COMPLETABLE", "当前抖音 Web 登录会话已不能完成。")
+      }
       await this.safeDelete(workerSessionId)
       return this.qrStatus(session, "SUCCESS", observed.message || "抖音 Web 登录态已保存")
     } catch (error) {
+      await this.safeDelete(workerSessionId)
       this.failSession(loginId, "WEB_SESSION_CAPTURE_FAILED", error)
       throw this.applicationError("DOUYIN_WEB_SESSION_CAPTURE_FAILED", error)
     }
@@ -193,7 +219,8 @@ export class DouyinAuthService {
       this.options.database.markDouyinCredentialStatus(stored.credentialId, "INVALID", this.options.now().toISOString())
       return DouyinValidationResultSchema.parse({ valid: false, message: validation.message, details: validation.details })
     }
-    const validatedPayload = validation.bundle ?? payload
+    const validatedPayload = validation.bundle
+    this.requireWebBundle(validatedPayload)
     const credential = this.replaceCredentialIfCurrent(
       stored.credentialId,
       WEB_AUTH,
@@ -298,8 +325,8 @@ export class DouyinAuthService {
         "抖音 OAuth 会话正在处理，不能重复完成。"
       )
     }
-    const source = this.requireOAuthSource()
     try {
+      const source = this.requireOAuthSource()
       const response = await source.exchangeCode({ clientKey: config.clientKey, clientSecret: config.clientSecret, code: parsed.code })
       const token = successfulData(response, "抖音 OAuth 换取 token 失败")
       const accessToken = requiredText(token.access_token, "OAuth 响应缺少 access_token")
@@ -328,15 +355,15 @@ export class DouyinAuthService {
         authorizedAt: this.options.now().toISOString(),
         lastRefreshedAt: null
       }
-      const credential = this.saveCredential(OAUTH_AUTH, payload, expiresAt)
-      this.options.database.updateDouyinAuthSession({
+      const credential = this.options.database.completeDouyinOAuthLogin({
         loginId: session.loginId,
-        status: "SUCCESS",
-        rawResultJson: JSON.stringify({ credentialId: credential.credentialId }),
-        completedAt: this.options.now().toISOString(),
-        updatedAt: this.options.now().toISOString()
+        credential: this.encryptedCredential(OAUTH_AUTH, payload, expiresAt),
+        rawResult: {}
       })
-      return credential
+      if (!credential) {
+        throw new CoreApplicationError("DOUYIN_OAUTH_SESSION_NOT_COMPLETABLE", "当前抖音 OAuth 会话已不能完成。")
+      }
+      return this.toCredential(credential)
     } catch (error) {
       const latest = this.options.database.findDouyinAuthSessionById(session.loginId)
       if (latest?.status !== "SUCCESS") {
@@ -350,36 +377,71 @@ export class DouyinAuthService {
     const config = this.liveOAuthConfig()
     const source = this.requireOAuthSource()
     const active = this.requireActiveStored(OAUTH_AUTH)
-    const payload = this.decrypt(active)
-    const refreshToken = requiredText(payload.refreshToken, "当前抖音 OAuth 凭据没有 refreshToken。")
-    const response = await source.refreshAccessToken({ clientKey: config.clientKey, refreshToken })
-    const token = successfulData(response, "抖音 OAuth 刷新失败")
-    const now = this.options.now()
-    const next = {
-      ...payload,
-      accessToken: requiredText(token.access_token, "OAuth 刷新响应缺少 access_token"),
-      refreshToken: optionalText(token.refresh_token) ?? refreshToken,
-      openId: optionalText(token.open_id) ?? payload.openId,
-      scope: token.scope === undefined ? payload.scope : parseScope(token.scope),
-      expiresAt: expiration(now, token.expires_in),
-      refreshExpiresAt: expiration(now, token.refresh_expires_in),
-      lastRefreshedAt: now.toISOString(),
-      refreshedFromCredentialId: active.credentialId,
-      rawRefreshResponse: response
+    const pending = this.oauthRefreshes.get(active.credentialId)
+    if (pending) return pending
+    const operation = this.refreshOAuthCredential(active, config.clientKey, source)
+    this.oauthRefreshes.set(active.credentialId, operation)
+    try {
+      return await operation
+    } finally {
+      this.oauthRefreshes.delete(active.credentialId)
     }
-    const stored = this.replaceCredentialIfCurrent(
-      active.credentialId,
-      OAUTH_AUTH,
-      next,
-      optionalText(next.expiresAt)
-    )
-    if (stored) return stored
-    const current = this.options.database.findActiveDouyinCredential(OAUTH_AUTH)
-    if (current) return this.toCredential(current)
-    throw new CoreApplicationError(
-      "DOUYIN_OAUTH_CREDENTIAL_CHANGED",
-      "抖音 OAuth 登录态在刷新期间变化，且当前已无可用凭据。"
-    )
+  }
+
+  private async refreshOAuthCredential(
+    active: StoredDouyinAuthCredential,
+    clientKey: string,
+    source: DouyinOAuthSource
+  ): Promise<DouyinCredential> {
+    const now = this.options.now()
+    const loginId = this.options.idFactory()
+    this.options.database.createDouyinAuthSession({
+      loginId,
+      flowType: "OAUTH_REFRESH",
+      providerMode: "live",
+      workerSessionId: null,
+      state: null,
+      status: "VALIDATING",
+      expiresAt: new Date(now.getTime() + this.qrExpireSeconds * 1_000).toISOString(),
+      completedAt: null,
+      errorCode: null,
+      errorMessage: null,
+      rawResultJson: JSON.stringify({ sourceCredentialId: active.credentialId }),
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    })
+    try {
+      const payload = this.decrypt(active)
+      const refreshToken = requiredText(payload.refreshToken, "当前抖音 OAuth 凭据没有 refreshToken。")
+      const response = await source.refreshAccessToken({ clientKey, refreshToken })
+      const token = successfulData(response, "抖音 OAuth 刷新失败")
+      const refreshedAt = this.options.now()
+      const next = {
+        ...payload,
+        accessToken: requiredText(token.access_token, "OAuth 刷新响应缺少 access_token"),
+        refreshToken: optionalText(token.refresh_token) ?? refreshToken,
+        openId: optionalText(token.open_id) ?? payload.openId,
+        scope: token.scope === undefined ? payload.scope : parseScope(token.scope),
+        expiresAt: expiration(refreshedAt, token.expires_in),
+        refreshExpiresAt: expiration(refreshedAt, token.refresh_expires_in),
+        lastRefreshedAt: refreshedAt.toISOString(),
+        refreshedFromCredentialId: active.credentialId,
+        rawRefreshResponse: response
+      }
+      const stored = this.options.database.completeDouyinOAuthRefresh({
+        loginId,
+        expectedCredentialId: active.credentialId,
+        credential: this.encryptedCredential(OAUTH_AUTH, next, optionalText(next.expiresAt))
+      })
+      if (stored) return this.toCredential(stored)
+      throw new CoreApplicationError(
+        "DOUYIN_OAUTH_CREDENTIAL_CHANGED",
+        "抖音 OAuth 登录态在刷新期间变化，且当前已无可用凭据。"
+      )
+    } catch (error) {
+      this.failSession(loginId, "OAUTH_TOKEN_EXCHANGE_FAILED", error)
+      throw this.applicationError("DOUYIN_OAUTH_TOKEN_REFRESH_FAILED", error)
+    }
   }
 
   credential(kind: DouyinCredentialKind): DouyinCredential {
@@ -456,20 +518,27 @@ export class DouyinAuthService {
     return stored
   }
 
-  private saveCredential(
+  private requireWebBundle(bundle: Record<string, unknown> | undefined): asserts bundle is Record<string, unknown> {
+    if (!bundle || Object.keys(bundle).length === 0
+      || (bundle.authType !== undefined && bundle.authType !== WEB_AUTH)) {
+      throw new CoreApplicationError("DOUYIN_WEB_BUNDLE_INVALID", "抖音 Worker 未返回完整的 Web 登录态 bundle。")
+    }
+  }
+
+  private encryptedCredential(
     authTypeValue: typeof WEB_AUTH | typeof OAUTH_AUTH,
     payload: Record<string, unknown>,
     expiresAt: string | undefined
-  ): DouyinCredential {
+  ): NewStoredDouyinAuthCredential {
     const timestamp = this.options.now().toISOString()
-    return this.toCredential(this.options.database.saveActiveDouyinCredential({
+    return {
       credentialId: this.options.idFactory(),
       authType: authTypeValue,
       encryptedPayload: this.options.cipher.encrypt(payload),
       expiresAt: expiresAt ?? null,
       createdAt: timestamp,
       updatedAt: timestamp
-    }))
+    }
   }
 
   private replaceCredentialIfCurrent(

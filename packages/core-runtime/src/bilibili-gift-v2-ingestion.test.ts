@@ -12,7 +12,7 @@ describe("gift V2 parser to SQLite facts", () => {
     let receive: ((event: unknown) => void) | undefined
     const source = new BilibiliLiveDanmakuWorkerSource({
       subscribe: (_id, listener) => { receive = listener; return () => { receive = undefined } },
-      request: async () => ({ connectHost: "wss://example.test", protocolVersion: 3, authMode: "ANONYMOUS" }),
+      request: async () => ({ connectHost: "wss://example.test", protocolVersion: 3, authMode: "ANONYMOUS", status: "CONNECTED", attempt: 1 }),
       stop: async () => undefined
     })
     try {

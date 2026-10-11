@@ -15,12 +15,15 @@ from .bilibili_follower import (
     _object,
     _write_object_sync,
 )
-from .bilibili_live_contract import PositiveId, PositiveInteger
+from .bilibili_follower_long import canonical_long_string, parse_java_long
+from .bilibili_follower_response_text import bilibili_response_encoding, bilibili_response_text
+from .bilibili_live_contract import PositiveId, PositiveInteger, validate_live_snapshot_data
 from .bilibili_live_http import BilibiliLiveHttpConfiguration, BilibiliLiveHttpRequest
 from .bilibili_live_values import ensure_success as _ensure_success
 from .bilibili_live_values import live_time as _live_time
 from .bilibili_live_values import optional_int as _optional_int
 from .bilibili_live_values import optional_text as _optional_text
+from .postgres_jsonb_input import raw_payload_storage_status
 
 STATUS_BY_UIDS_ENDPOINT = "room/v1/Room/get_status_info_by_uids"
 ROOM_INIT_ENDPOINT = "room/v1/Room/room_init"
@@ -138,11 +141,11 @@ def _status_item(item: dict[str, Any], fallback_uid: str, endpoint: str) -> dict
         result,
         "onlineCount",
         _first(
-            _optional_int(item.get("online")),
-            _optional_int(_object(item.get("watched_show")).get("num")),
+            parse_java_long(item.get("online")),
+            parse_java_long(_object(item.get("watched_show")).get("num")),
         ),
     )
-    _put(result, "attentionCount", _optional_int(item.get("attention")))
+    _put(result, "attentionCount", parse_java_long(item.get("attention")))
     return result
 
 
@@ -222,8 +225,8 @@ def parse_room_info_response(raw: str, fetched_at: str) -> dict[str, object]:
     _put(result, "parentAreaId", _auxiliary_id(data.get("parent_area_id")))
     _put(result, "parentAreaName", _optional_text(data.get("parent_area_name")))
     _put(result, "liveTime", _live_time(data.get("live_time")))
-    _put(result, "onlineCount", _optional_int(data.get("online")))
-    _put(result, "attentionCount", _optional_int(data.get("attention")))
+    _put(result, "onlineCount", parse_java_long(data.get("online")))
+    _put(result, "attentionCount", parse_java_long(data.get("attention")))
     return result
 
 
@@ -252,7 +255,7 @@ def parse_room_info_old_response(raw: str, uid: str, fetched_at: str) -> dict[st
     }
     _put(result, "title", _optional_text(data.get("title")))
     _put(result, "coverUrl", _optional_text(data.get("cover")))
-    _put(result, "onlineCount", _optional_int(data.get("online")))
+    _put(result, "onlineCount", parse_java_long(data.get("online")))
     return result
 
 
@@ -305,6 +308,9 @@ async def fetch_live_endpoint(
         ) from error
 
     duration_ms = int((time.perf_counter() - started) * 1000)
+    # DefaultRestClient resolves MediaType before its status handler; the String
+    # converter only decodes a successful body, not an HTTP error response.
+    codec = bilibili_response_encoding(response)
     if response.status_code >= 400:
         code = (
             "BILIBILI_RATE_LIMITED"
@@ -315,41 +321,35 @@ async def fetch_live_endpoint(
         )
         raise BilibiliCrawlerError(
             code,
-            f"Bilibili HTTP {response.status_code} from {endpoint}",
+            f"Bilibili live HTTP {response.status_code} from {endpoint}",
             retryable=response.status_code == 429 or response.status_code >= 500,
             endpoint=endpoint,
             status_code=response.status_code,
         )
 
     raw_bytes = response.content
-    try:
-        raw = raw_bytes.decode("utf-8")
-    except UnicodeDecodeError as error:
+    raw = bilibili_response_text(raw_bytes, codec)
+    if raw is None:
         raise BilibiliCrawlerError(
             "BILIBILI_PARSE_ERROR",
-            "Unable to decode Bilibili live response as UTF-8.",
+            "Unable to parse an empty Bilibili live response body.",
             retryable=False,
             endpoint=endpoint,
             status_code=response.status_code,
-        ) from error
+        )
     fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    evidence = await asyncio.to_thread(_write_object_sync, data_directory, raw_bytes)
-    common = {
-        "fetchedAt": fetched_at,
-        "sourceEndpoint": endpoint,
-        "evidenceObject": evidence,
-        "statusCode": response.status_code,
-        "durationMs": duration_ms,
-    }
     try:
         if endpoint == STATUS_BY_UIDS_ENDPOINT:
-            return {"snapshots": parse_status_by_uids_response(raw, fetched_at), **common}
-        if endpoint == ROOM_INIT_ENDPOINT:
-            return {**parse_room_init_response(raw, fetched_at), **common}
-        if endpoint == ROOM_INFO_ENDPOINT:
-            return {**parse_room_info_response(raw, fetched_at), **common}
-        snapshot = parse_room_info_old_response(raw, str(payload["uid"]), fetched_at)
-        return {**common, **({"snapshot": snapshot} if snapshot is not None else {})}
+            parsed: dict[str, object] = {
+                "snapshots": parse_status_by_uids_response(raw, fetched_at)
+            }
+        elif endpoint == ROOM_INIT_ENDPOINT:
+            parsed = parse_room_init_response(raw, fetched_at)
+        elif endpoint == ROOM_INFO_ENDPOINT:
+            parsed = parse_room_info_response(raw, fetched_at)
+        else:
+            snapshot = parse_room_info_old_response(raw, str(payload["uid"]), fetched_at)
+            parsed = {"snapshot": snapshot} if snapshot is not None else {}
     except (ValueError, OverflowError, OSError, TypeError, RecursionError) as error:
         # Only parser failures: evidence storage and network failures retain their own meaning.
         raise BilibiliCrawlerError(
@@ -359,3 +359,31 @@ async def fetch_live_endpoint(
             endpoint=endpoint,
             status_code=response.status_code,
         ) from error
+
+    exact = payload.get("_long64") is True
+    snapshots = (
+        parsed.get("snapshots")
+        if endpoint == STATUS_BY_UIDS_ENDPOINT
+        else (
+            [parsed["snapshot"]]
+            if "snapshot" in parsed
+            else [] if endpoint == ROOM_INFO_OLD_ENDPOINT else [parsed]
+        )
+    )
+    if exact and isinstance(snapshots, list):
+        for entry in snapshots:
+            if isinstance(entry, dict):
+                for key in ("onlineCount", "attentionCount"):
+                    if key in entry:
+                        entry[key] = canonical_long_string(str(entry[key]))
+    validate_live_snapshot_data(endpoint, parsed, exact)
+    evidence = await asyncio.to_thread(_write_object_sync, data_directory, raw_bytes)
+    return {
+        **parsed,
+        "fetchedAt": fetched_at,
+        "sourceEndpoint": endpoint,
+        "evidenceObject": evidence,
+        "statusCode": response.status_code,
+        "durationMs": duration_ms,
+        "rawPayloadStorageStatus": raw_payload_storage_status(raw),
+    }

@@ -1,10 +1,10 @@
-import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import react from "@vitejs/plugin-react"
 import { chromium, type Browser, type Page } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { browserFixtureCacheDirectory } from "./__fixtures__/browser-fixture-cache"
 
 // Real React/Query/input events; only the local bridge is a controlled fixture.
 describe("original follower interval input and save ordering", () => {
@@ -19,14 +19,14 @@ describe("original follower interval input and save ordering", () => {
 
   beforeAll(async () => {
     server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
-      cacheDir: resolve("node_modules/.vite-follower-interval-test"), plugins: [react()],
+      cacheDir: browserFixtureCacheDirectory, plugins: [react()],
       server: { host: "127.0.0.1", port: 0 }, logLevel: "error" })
     await server.listen()
     const address = server.httpServer!.address()
     if (!address || typeof address === "string") throw new Error("Missing follower interval fixture port")
     url = `http://127.0.0.1:${address.port}/__fixtures__/follower-workspace.html?interval-flow=1`
     browser = await chromium.launch({ headless: true })
-    // Cold compilation belongs to the startup budget, not a business case.
+    // Page readiness belongs to the startup budget, not a business case.
     const readyPage = await browser.newPage()
     const readyErrors: string[] = []
     const blockedResources: string[] = []

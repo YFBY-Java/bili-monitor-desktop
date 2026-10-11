@@ -26,6 +26,7 @@ __pycache__/
 .local-data/
 .package-smoke-data/
 .tmp/
+.superpowers/sdd/
 .cache/
 data/
 logs/

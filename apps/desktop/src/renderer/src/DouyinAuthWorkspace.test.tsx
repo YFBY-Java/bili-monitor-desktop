@@ -5,7 +5,12 @@ import type {
   DouyinQrLoginStatus
 } from "@bmd/contracts"
 import { renderToStaticMarkup } from "react-dom/server"
+import { fileURLToPath } from "node:url"
+import react from "@vitejs/plugin-react"
+import { chromium } from "playwright"
+import { createServer } from "vite"
 import { describe, expect, it, vi } from "vitest"
+import { browserFixtureCacheDirectory } from "./__fixtures__/browser-fixture-cache"
 
 import {
   DouyinAuthWorkspace,
@@ -87,6 +92,71 @@ const handlers = {
 }
 
 describe("DouyinAuthWorkspace", () => {
+  it("reopens QR login without consuming a closed generation and recovers a failed start", async () => {
+    const server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
+      cacheDir: browserFixtureCacheDirectory,
+      plugins: [react()], server: { host: "127.0.0.1", port: 0 }, logLevel: "error" })
+    let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined
+    try {
+      await server.listen()
+      const address = server.httpServer!.address()
+      if (!address || typeof address === "string") throw new Error("Missing fixture address")
+      browser = await chromium.launch({ headless: true })
+      const page = await browser.newPage()
+      page.setDefaultTimeout(2_000)
+      await page.goto(`http://127.0.0.1:${address.port}/__fixtures__/douyin-auth.html`)
+      const start = page.getByRole("button", { name: /^(开始扫码|重新扫码)$/ })
+      const dialog = page.getByRole("dialog", { name: "抖音 Web 扫码登录", exact: true })
+      await expect.poll(() => start.isEnabled()).toBe(true)
+      await start.click()
+      await expect.poll(() => page.evaluate(() => window.douyinWorkflowFixture.starts)).toBe(1)
+      await dialog.getByRole("button", { name: "关闭", exact: true }).click()
+      expect(await start.isEnabled()).toBe(true)
+      await start.click()
+      await expect.poll(() => page.evaluate(() => window.douyinWorkflowFixture.starts)).toBe(2)
+      await page.evaluate(() => window.douyinWorkflowFixture.resolveStart(1))
+      await expect.poll(() => dialog.getByText("等待扫码", { exact: true }).count()).toBe(1)
+      expect(await dialog.getByRole("button", { name: "刷新二维码图片", exact: true }).count()).toBe(1)
+      await dialog.getByRole("button", { name: "刷新二维码图片", exact: true }).click()
+      await page.evaluate(() => window.douyinWorkflowFixture.resolveStart(0))
+      await expect.poll(() => page.evaluate(() => window.douyinWorkflowFixture.polls.length)).toBe(1)
+      expect(await page.evaluate(() => window.douyinWorkflowFixture.polls[0])).toBe("018f0f39-7b5e-4cc1-862d-9a208b3d0d01")
+      await dialog.getByRole("button", { name: "关闭", exact: true }).click()
+      await start.click()
+      await expect.poll(() => page.evaluate(() => window.douyinWorkflowFixture.starts)).toBe(3)
+      expect(await dialog.getByText("等待扫码", { exact: true }).count()).toBe(0)
+      await page.evaluate(() => window.douyinWorkflowFixture.resolvePoll(0, "SUCCESS"))
+      await page.evaluate(() => window.douyinWorkflowFixture.rejectStart(2))
+      await dialog.getByText("登录失败", { exact: true }).waitFor()
+      await dialog.getByRole("button", { name: "重新生成二维码", exact: true }).click()
+      await expect.poll(() => page.evaluate(() => window.douyinWorkflowFixture.starts)).toBe(4)
+      await page.evaluate(() => window.douyinWorkflowFixture.resolveStart(3))
+      await expect.poll(() => page.evaluate(() => window.douyinWorkflowFixture.polls.length)).toBe(2)
+      await page.evaluate(() => window.douyinWorkflowFixture.resolvePoll(1, "SCANNED"))
+      await dialog.getByText("已扫码", { exact: true }).waitFor()
+      expect(await dialog.locator(".douyin-qr-progress .is-complete").count()).toBe(2)
+      await page.screenshot({ path: fileURLToPath(new URL("../../../../../.tools/temp/bmd-douyin-qr-light.png", import.meta.url)) })
+      await dialog.getByRole("button", { name: "关闭", exact: true }).click()
+      await page.getByRole("button", { name: "查看完整登录态", exact: true }).click()
+      const drawer = page.getByRole("dialog", { name: "完整抖音 Web 登录态", exact: true })
+      await drawer.getByRole("tab", { name: "完整合并 JSON", exact: true }).click()
+      expect(await drawer.getByRole("tabpanel").innerText()).toContain('"credentialId"')
+      await drawer.getByRole("button", { name: "复制当前字段", exact: true }).click()
+      await expect.poll(() => page.evaluate(() => window.douyinWorkflowFixture.copiedTexts.length)).toBe(1)
+      expect(JSON.parse(await page.evaluate(() => window.douyinWorkflowFixture.copiedTexts[0]!)).authType).toBe("DOUYIN_WEB_SESSION")
+      await drawer.getByRole("tab", { name: "账号信息", exact: true }).click()
+      await drawer.getByRole("button", { name: "复制当前字段", exact: true }).click()
+      await expect.poll(() => page.evaluate(() => window.douyinWorkflowFixture.copiedTexts.length)).toBe(2)
+      expect(JSON.parse(await page.evaluate(() => window.douyinWorkflowFixture.copiedTexts[1]!))).toEqual({ nickname: "离线测试账号" })
+      await drawer.getByRole("button", { name: "复制全部 JSON", exact: true }).click()
+      await expect.poll(() => page.evaluate(() => window.douyinWorkflowFixture.copiedTexts.length)).toBe(3)
+      expect(await page.evaluate(() => window.douyinWorkflowFixture.copiedTexts[2])).toBe(await page.evaluate(() => window.douyinWorkflowFixture.copiedTexts[0]))
+      await drawer.getByRole("button", { name: "关闭抖音登录态", exact: true }).click()
+      await page.getByRole("button", { name: "重新加载校验", exact: true }).click()
+      await expect.poll(() => page.locator("[role=alert]").innerText()).toContain("离线登录态不可复用")
+    } finally { await browser?.close(); await server.close() }
+  }, 15_000)
+
   it("renders the original independent Web QR and official OAuth credential flows", () => {
     const html = renderToStaticMarkup(
       <DouyinAuthWorkspace
@@ -161,6 +231,9 @@ describe("DouyinAuthWorkspace", () => {
     expect(html).toContain("storageState")
     expect(html).toContain("浏览器上下文")
     expect(html).toContain("复制全部 JSON")
+    expect(html).toContain("完整合并 JSON")
+    expect(html).toContain('role="tablist"')
+    expect(html).toContain("复制当前字段")
   })
 
   it("does not mistake an existing OAuth credential for completion of a new authorization", () => {

@@ -25,6 +25,7 @@ export type PageId =
   | "live-analytics"
   | "subjects"
   | "douyin-auth"
+  | "platform-collection"
 
 export type IconName =
   | "activity"
@@ -117,18 +118,26 @@ export const navigationGroups: NavigationGroup[] = [
       { pageId: "bilibili-subjects", label: "用户监控", icon: "users" },
       { pageId: "bilibili-followers", label: "粉丝监控", icon: "users" },
       { pageId: "bilibili-live", label: "直播间监控", icon: "radio", badge: "REST" },
-      { pageId: "douyin-auth", label: "抖音登录态", icon: "key" }
+      { pageId: "live-data", label: "数据中心", icon: "database" },
+      { pageId: "live-analytics", label: "分析看板", icon: "chart" },
+      { pageId: "douyin-auth", label: "抖音登录态", icon: "key" },
+      { pageId: "platform-collection", label: "平台采集", icon: "plug" }
     ]
   }
 ]
 
 export const productPages: ProductPage[] = [
   {
+    id: "platform-collection", label: "平台采集", eyebrow: "PLATFORM / LOCAL COLLECTION",
+    title: "平台管理与单次采集", description: "已注册 Adapter、已实现与预留能力，执行原 run-once 账号资料采集。",
+    primaryAction: "刷新 Adapter", tabs: [], metrics: [], features: [], records: []
+  },
+  {
     id: "bilibili-subjects",
     label: "B站用户监控",
     eyebrow: "BILIBILI USER WORKBENCH",
     title: "B站用户监控",
-    description: "输入 B站 UID 自动创建或复用粉丝监控并尝试绑定直播间，聚合粉丝、直播热度、弹幕、健康事件与组件布局。",
+    description: "输入 B站 UID 自动创建或复用粉丝监控并尝试绑定直播间，聚合粉丝、直播热度、弹幕与健康事件。",
     primaryAction: "创建用户工作台",
     tabs: ["监控对象", "用户工作台"],
     metrics: [],
@@ -158,6 +167,30 @@ export const productPages: ProductPage[] = [
       "直播间", "趋势对比", "状态事件", "实时弹幕", "观众榜单",
       "直播场次", "数据中心", "场次分析"
     ],
+    metrics: [],
+    features: [],
+    records: []
+  },
+  {
+    id: "live-data",
+    label: "数据中心",
+    eyebrow: "BILIBILI / LOCAL DATA CENTER",
+    title: "数据中心",
+    description: "查询本地直播场次的事件、用户与采集质量，按条件筛选并导出真实记录。",
+    primaryAction: "添加直播间",
+    tabs: [],
+    metrics: [],
+    features: [],
+    records: []
+  },
+  {
+    id: "live-analytics",
+    label: "分析看板",
+    eyebrow: "BILIBILI / LOCAL ANALYTICS",
+    title: "分析看板",
+    description: "基于已保存的直播场次，查看互动趋势、付费转化、用户结构与采集覆盖情况。",
+    primaryAction: "添加直播间",
+    tabs: [],
     metrics: [],
     features: [],
     records: []

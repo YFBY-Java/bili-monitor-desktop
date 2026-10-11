@@ -11,6 +11,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    StrictBool,
     StrictStr,
     ValidationError,
     field_validator,
@@ -29,6 +30,7 @@ from .bilibili_follower import (
 from .bilibili_follower_http import BilibiliFollowerHttpConfiguration
 from .bilibili_follower_long import MAX_SAFE_INTEGER, canonical_long_string, positive_long_string
 from .bilibili_live_contract import IsoDateTime, UrlString, json_integer
+from .postgres_jsonb_input import RawPayloadStorageStatus
 
 JavaLongString = Annotated[StrictStr, BeforeValidator(canonical_long_string)]
 PositiveJavaLongString = Annotated[StrictStr, BeforeValidator(positive_long_string)]
@@ -39,6 +41,7 @@ PositiveInteger = Annotated[int, BeforeValidator(json_integer), Field(ge=1, le=M
 class BilibiliFollowerFetchRequestV2(BilibiliFollowerFetchRequest):
     mid: PositiveJavaLongString
     attempt: PositiveInteger
+    capture_failure_evidence: StrictBool = Field(default=False, alias="captureFailureEvidence")
 
 
 class BilibiliFollowerProfileV2(BilibiliFollowerProfile):
@@ -70,6 +73,21 @@ class FollowerObjectRefV2(FollowerV2Model):
     media_type: StrictStr = Field(min_length=1)
 
 
+class BilibiliFollowerFetchFailureV2(FollowerV2Model):
+    code: StrictStr = Field(min_length=1)
+    message: StrictStr
+    retryable: StrictBool
+    endpoint: StrictStr | None = None
+    status_code: PositiveInteger | None = None
+    bili_code: (
+        Annotated[
+            int, BeforeValidator(json_integer), Field(ge=-MAX_SAFE_INTEGER, le=MAX_SAFE_INTEGER)
+        ]
+        | None
+    ) = None
+    evidence_object: FollowerObjectRefV2 | None = None
+
+
 class BilibiliFollowerFetchedSnapshotV2(FollowerV2Model):
     mid: JavaLongString
     nickname: StrictStr | None = None
@@ -82,6 +100,7 @@ class BilibiliFollowerFetchedSnapshotV2(FollowerV2Model):
     evidence_object: FollowerObjectRefV2
     status_code: PositiveInteger
     duration_ms: NonnegativeInteger
+    raw_payload_storage_status: RawPayloadStorageStatus | None = None
 
     @field_validator("nickname", "avatar_url")
     @classmethod
@@ -114,7 +133,7 @@ def validate_follower_v2_result(
 async def fetch_follower_profile_v2(
     mid: str, http_configuration: BilibiliFollowerHttpConfiguration | None = None
 ) -> dict[str, Any]:
-    parsed, _, _, _ = await _fetch_follower_response(CARD_ENDPOINT, mid, http_configuration)
+    parsed, _, _, _, _ = await _fetch_follower_response(CARD_ENDPOINT, mid, http_configuration)
     return validate_follower_v2_result(
         CARD_ENDPOINT, {"mid": parsed["mid"], "nickname": parsed["nickname"]}, profile=True
     )
@@ -126,7 +145,7 @@ async def fetch_follower_endpoint_v2(
     data_directory: Path,
     http_configuration: BilibiliFollowerHttpConfiguration | None = None,
 ) -> dict[str, Any]:
-    parsed, raw_bytes, status_code, duration_ms = await _fetch_follower_response(
+    parsed, raw_bytes, status_code, duration_ms, storage_status = await _fetch_follower_response(
         endpoint, mid, http_configuration
     )
     # Conversion happens before NDJSON: no consumer first sees a lossy JSON number.
@@ -142,5 +161,6 @@ async def fetch_follower_endpoint_v2(
             "evidenceObject": evidence,
             "statusCode": status_code,
             "durationMs": duration_ms,
+            "rawPayloadStorageStatus": storage_status,
         },
     )

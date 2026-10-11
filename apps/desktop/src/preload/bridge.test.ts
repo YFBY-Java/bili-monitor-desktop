@@ -27,7 +27,7 @@ describe("createDesktopBridge", () => {
     expect(invoke.mock.calls).toEqual([20, 20, 200, 200].map(limit => ["bilibili-live:sessions", { roomMonitorId, limit }]))
   })
 
-  it("exposes only typed account and subject channels", async () => {
+  it("exposes only typed account, subject and platform collection channels", async () => {
     const timestamp = "2026-08-23T07:00:00.000Z"
     const account = {
       id: "018f0f39-7b5e-7cc1-962d-9a208b3d0184",
@@ -50,7 +50,22 @@ describe("createDesktopBridge", () => {
       updatedAt: timestamp,
       version: 1
     }
+    const adapters = [{
+      platformCode: "bilibili",
+      capabilities: ["ACCOUNT_PROFILE"],
+      implementedDataTypes: ["account"]
+    }]
+    const unsupported = {
+      status: "MANUAL_REVIEW", platformCode: "bilibili", dataType: "contents",
+      fetchResult: {
+        success: false, data: null, rawPayload: null, rawPayloadObject: null, nextCursor: null,
+        rateLimitInfo: { limited: false, remaining: null, resetAt: null, policyKey: "unsupported" },
+        errorType: "UNSUPPORTED", retryable: false, riskLevel: "LOW", message: "Not implemented in the original adapter"
+      }
+    }
     const invoke = vi.fn(async (channel: string) => {
+      if (channel === "platform-collection:adapters-list") return adapters
+      if (channel === "platform-collection:run-once") return unsupported
       if (channel === "platform-accounts:list") return { items: [account], total: 1, snapshotAt: timestamp }
       if (channel === "platform-accounts:create") return account
       if (channel === "subjects:list") return { items: [subject], total: 1, snapshotAt: timestamp }
@@ -71,6 +86,10 @@ describe("createDesktopBridge", () => {
       accountId: "018f0f39-7b5e-7cc1-962d-9a208b3d0184",
       followerIntervalSeconds: 3600
     })
+    expect(bridge).toHaveProperty("platformCollection")
+    expect(await bridge.platformCollection.listAdapters()).toEqual(adapters)
+    expect(await bridge.platformCollection.runOnce({ platformCode: "bilibili", dataType: "contents", externalId: "2" })).toEqual(unsupported)
+    await expect(bridge.platformCollection.runOnce({ platformCode: "", dataType: "account", externalId: "2" })).rejects.toThrow()
 
     expect(invoke.mock.calls).toEqual([
       ["platform-accounts:list", { platform: "bilibili", limit: 20 }],
@@ -85,7 +104,9 @@ describe("createDesktopBridge", () => {
         subjectId: "018f0f39-8b5e-7cc1-962d-9a208b3d0184",
         accountId: "018f0f39-7b5e-7cc1-962d-9a208b3d0184",
         followerIntervalSeconds: 3600
-      }]
+      }],
+      ["platform-collection:adapters-list"],
+      ["platform-collection:run-once", { platformCode: "bilibili", dataType: "contents", externalId: "2" }]
     ])
   })
 
@@ -206,8 +227,12 @@ describe("createDesktopBridge", () => {
     })
     const bridge = createDesktopBridge(invoke)
 
+    await bridge.bilibiliSubjects.list({})
     await bridge.bilibiliSubjects.list({ limit: 100 })
     await bridge.bilibiliSubjects.create({ mid: "22" })
+    await bridge.bilibiliSubjects.create({ displayName: "工作台" })
+    await bridge.bilibiliSubjects.create({ displayName: "工作台", danmuEnabled: false })
+    await bridge.bilibiliSubjects.create({ displayName: "工作台", danmuEnabled: true })
     await bridge.bilibiliSubjects.get({ subjectId })
     await bridge.bilibiliSubjects.update({ subjectId, enabled: false })
     await bridge.bilibiliSubjects.bind({ subjectId, danmuEnabled: false })
@@ -216,9 +241,13 @@ describe("createDesktopBridge", () => {
     await bridge.bilibiliSubjects.updateLayout({ subjectId, items: [] })
     await bridge.bilibiliSubjects.remove({ subjectId })
 
-    expect(invoke.mock.calls).toEqual([
+    expect(invoke.mock.calls).toStrictEqual([
+      ["bilibili-subjects:list", {}],
       ["bilibili-subjects:list", { limit: 100 }],
-      ["bilibili-subjects:create", { mid: "22", tags: [], danmuEnabled: true }],
+      ["bilibili-subjects:create", { mid: "22", tags: [] }],
+      ["bilibili-subjects:create", { displayName: "工作台", tags: [] }],
+      ["bilibili-subjects:create", { displayName: "工作台", tags: [], danmuEnabled: false }],
+      ["bilibili-subjects:create", { displayName: "工作台", tags: [], danmuEnabled: true }],
       ["bilibili-subjects:get", { subjectId }],
       ["bilibili-subjects:update", { subjectId, enabled: false }],
       ["bilibili-subjects:bind", { subjectId, danmuEnabled: false }],
@@ -462,7 +491,6 @@ describe("createDesktopBridge", () => {
         roomMonitorId,
         families: [],
         types: ["contribution_rank"],
-        maxPages: 1,
         force: false
       }],
       ["bilibili-live:danmaku-start", { roomMonitorId, protocolVersion: 3 }],

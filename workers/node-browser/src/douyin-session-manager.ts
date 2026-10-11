@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto"
 
+const SESSION_CLEANUP_DELAY_MS = 60_000
+const TERMINAL_STATUSES = new Set(["SUCCESS", "EXPIRED", "FAILED"])
+
 export interface DouyinBrowserBundle extends Record<string, unknown> {
   authType: "DOUYIN_WEB_SESSION"
 }
@@ -35,6 +38,8 @@ interface ManagedSession {
   expiresAt: number
   closed: boolean
   expiryTimer?: NodeJS.Timeout
+  cleanupTimer?: NodeJS.Timeout
+  closePromise?: Promise<void>
 }
 
 export class DouyinWorkerError extends Error {
@@ -68,9 +73,14 @@ export class DouyinSessionManager {
     session.expiryTimer = setTimeout(() => {
       if (session.closed || session.status.status === "SUCCESS") return
       session.status = { status: "EXPIRED", message: "Login session has expired" }
-      void this.closeSession(session)
+      this.closeAfterTimeout(workerSessionId, session)
     }, ttl * 1_000)
     session.expiryTimer.unref()
+    session.cleanupTimer = setTimeout(() => {
+      this.forgetSession(workerSessionId, session)
+      this.closeAfterTimeout(workerSessionId, session)
+    }, ttl * 1_000 + SESSION_CLEANUP_DELAY_MS)
+    session.cleanupTimer.unref()
     void this.driver.createSession({ workerSessionId }).then(async (handle) => {
       if (session.closed) return handle.close()
       session.handle = handle
@@ -91,10 +101,14 @@ export class DouyinSessionManager {
 
   async status(workerSessionId: string): Promise<DouyinBrowserStatus> {
     const session = this.require(workerSessionId)
-    if (await this.expire(session)) return session.status
-    if (["SUCCESS", "EXPIRED", "FAILED"].includes(session.status.status)) return session.status
+    await this.expire(session)
+    const settled = this.settledStatus(workerSessionId, session)
+    if (settled) return settled
     if (!session.handle) return session.status
     const observed = await session.handle.status()
+    await this.expire(session)
+    const settledAfterObservation = this.settledStatus(workerSessionId, session)
+    if (settledAfterObservation) return settledAfterObservation
     if (observed.status !== "SUCCESS") {
       session.status = observed
       if (observed.status === "EXPIRED" || observed.status === "FAILED") await this.closeSession(session)
@@ -106,6 +120,9 @@ export class DouyinSessionManager {
       return session.status
     }
     const validation = await this.driver.validateBundle(observed.bundle)
+    await this.expire(session)
+    const settledAfterValidation = this.settledStatus(workerSessionId, session)
+    if (settledAfterValidation) return settledAfterValidation
     if (!validation.valid) {
       session.status = { status: "FAILED", message: validation.message ?? "Captured login state is invalid" }
       await this.closeSession(session)
@@ -135,14 +152,14 @@ export class DouyinSessionManager {
 
   async remove(workerSessionId: string): Promise<void> {
     const session = this.require(workerSessionId)
+    this.forgetSession(workerSessionId, session)
     await this.closeSession(session)
-    this.sessions.delete(workerSessionId)
   }
 
   async closeAll(): Promise<void> {
-    const sessions = [...this.sessions.values()]
-    this.sessions.clear()
-    await Promise.allSettled(sessions.map((session) => this.closeSession(session)))
+    const sessions = [...this.sessions.entries()]
+    for (const [workerSessionId, session] of sessions) this.forgetSession(workerSessionId, session)
+    await Promise.allSettled(sessions.map(([, session]) => this.closeSession(session)))
     await this.driver.close?.()
   }
 
@@ -165,11 +182,37 @@ export class DouyinSessionManager {
     return true
   }
 
+  private settledStatus(id: string, session: ManagedSession): DouyinBrowserStatus | undefined {
+    if (this.sessions.get(id) !== session) {
+      throw new DouyinWorkerError("SESSION_NOT_FOUND", "Login session does not exist")
+    }
+    if (TERMINAL_STATUSES.has(session.status.status)) return session.status
+    return undefined
+  }
+
+  private forgetSession(id: string, session: ManagedSession): void {
+    if (this.sessions.get(id) === session) this.sessions.delete(id)
+    if (session.cleanupTimer) clearTimeout(session.cleanupTimer)
+    delete session.cleanupTimer
+    delete session.bundle
+  }
+
+  private closeAfterTimeout(id: string, session: ManagedSession): void {
+    void this.closeSession(session).catch(() => {
+      process.stderr.write(`${JSON.stringify({
+        event: "douyin.session.cleanup.failed",
+        correlationId: id,
+        code: "BROWSER_CONTEXT_CLOSE_FAILED"
+      })}\n`)
+    })
+  }
+
   private async closeSession(session: ManagedSession): Promise<void> {
-    if (session.closed) return
+    if (session.closePromise) return session.closePromise
     session.closed = true
     if (session.expiryTimer) clearTimeout(session.expiryTimer)
     delete session.expiryTimer
-    await session.handle?.close()
+    session.closePromise = Promise.resolve().then(() => session.handle?.close())
+    return session.closePromise
   }
 }

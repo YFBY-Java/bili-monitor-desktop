@@ -3,15 +3,20 @@ import { z } from "zod"
 export const RUNTIME_PROTOCOL_VERSION = 1 as const
 export const REQUEST_KEEP_ALIVE_INTERVAL_MS = 5_000
 export const LIVE_HTTP_WORKER_REQUESTS = ["bilibili.live.fetch-room-init", "bilibili.live.fetch-room-info",
-  "bilibili.live.fetch-room-info-old", "bilibili.live.fetch-status-by-uids", "bilibili.live.rank.fetch"] as const
-export const LIVE_HTTP_CORE_REQUESTS = ["bilibili-live.rooms.add", "bilibili-live.rooms.refresh",
-  "bilibili-subjects.create", "bilibili-subjects.bind", "bilibili-live.ranks.refresh", "bilibili-live.danmaku.start"] as const
+  "bilibili.live.fetch-room-info-old", "bilibili.live.fetch-status-by-uids", "bilibili.live.rank.fetch", "bilibili.live.rank.fetch.v2",
+  "bilibili.live.fetch-room-init.v2", "bilibili.live.fetch-room-info.v2",
+  "bilibili.live.fetch-room-info-old.v2", "bilibili.live.fetch-status-by-uids.v2"] as const
+export const LIVE_HTTP_CORE_REQUESTS = ["bilibili-live.rooms.add.v2", "bilibili-live.rooms.refresh.v2","bilibili-live.rooms.add", "bilibili-live.rooms.refresh",
+  "bilibili-subjects.create", "bilibili-subjects.bind", "bilibili-live.ranks.refresh", "bilibili-live.ranks.refresh.v2", "bilibili-live.danmaku.start"] as const
 export const HTTP_WORKER_REQUESTS = [...LIVE_HTTP_WORKER_REQUESTS,
   "bilibili.follower.fetch-card", "bilibili.follower.fetch-relation-stat", "bilibili.follower.fetch-profile",
-  "bilibili.follower.fetch-card.v2", "bilibili.follower.fetch-relation-stat.v2", "bilibili.follower.fetch-profile.v2"] as const
+  "bilibili.follower.fetch-card.v2", "bilibili.follower.fetch-relation-stat.v2", "bilibili.follower.fetch-profile.v2",
+  "bilibili.platform.fetch-account.v1"] as const
 export const HTTP_CORE_REQUESTS = [...LIVE_HTTP_CORE_REQUESTS,
+  "platform.collection.run-once",
   "bilibili-followers.add", "bilibili-followers.refresh",
   "bilibili-followers.add.v2", "bilibili-followers.refresh.v2"] as const
+export const CORE_KEEP_ALIVE_REQUESTS = [...HTTP_CORE_REQUESTS, "bilibili-live.session.export"] as const
 export const RequestKeepAliveSchema = z.object({ requestType: z.string().min(1) }).strict()
 
 export const CoreStatusSchema = z.object({

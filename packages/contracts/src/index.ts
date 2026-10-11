@@ -10,11 +10,14 @@ export * from "./bilibili-danmaku-worker"
 export * from "./bilibili-live-danmaku"
 export * from "./bilibili-live-session"
 export * from "./bilibili-live-rank"
+export * from "./bilibili-live-rank-configuration"
+export * from "./bilibili-live-rank-v2"
 export * from "./bilibili-subject"
 export * from "./subject-monitor-configuration"
 export * from "./bilibili-follower-configuration"
 export * from "./douyin-auth"
 export * from "./runtime-protocol"
+export * from "./platform-collection"
 export * from "./java-long"
 export * from "./bilibili-follower-v2"
 export * from "./bilibili-subject-v2"
@@ -121,11 +124,16 @@ import type {
   DouyinValidationResult,
   ExportDouyinCredentialResult
 } from "./douyin-auth"
+import type { PlatformAdapterList, RunPlatformCollectionInput, PlatformCollectionExecution } from "./platform-collection"
 
 export interface DesktopBridge {
   core: {
     bootstrap: () => Promise<BootstrapResponse>
     restart: () => Promise<BootstrapResponse>
+  }
+  platformCollection: {
+    listAdapters: () => Promise<PlatformAdapterList>
+    runOnce: (input: RunPlatformCollectionInput) => Promise<PlatformCollectionExecution>
   }
   douyinAuth: {
     status: () => Promise<DouyinAuthStatus>
@@ -160,6 +168,8 @@ export interface DesktopBridge {
     bind: (input: UpdateBilibiliSubjectBindingInput) => Promise<BilibiliSubjectBinding>
     workbench: (input: { subjectId: string }) => Promise<BilibiliSubjectWorkbench>
     trends: (input: QueryBilibiliSubjectTrendsInput) => Promise<BilibiliSubjectTrend>
+    workbenchV3: (input: { subjectId: string }) => Promise<import("./bilibili-subject-v3").BilibiliSubjectWorkbenchV3>
+    trendsV3: (input: QueryBilibiliSubjectTrendsInput) => Promise<import("./bilibili-subject-v3").BilibiliSubjectTrendV3>
     workbenchV2: (input: { subjectId: string }) => Promise<import("./bilibili-subject-v2").BilibiliSubjectWorkbenchV2>
     trendsV2: (input: QueryBilibiliSubjectTrendsInput) => Promise<import("./bilibili-subject-v2").BilibiliSubjectTrendV2>
     updateLayout: (
@@ -193,6 +203,23 @@ export interface DesktopBridge {
     refresh: () => Promise<BilibiliAuthRefreshResult>
     credential: () => Promise<BilibiliCredential>
     revoke: () => Promise<RevokeBilibiliAuthResult>
+  }
+  bilibiliLiveRankV2: {
+    summary: (input: { roomMonitorId: string }) => Promise<import("./bilibili-live-rank-v2").BilibiliLiveRankSummaryV2>
+    latest: (input: BilibiliLiveRankLatestInput) => Promise<import("./bilibili-live-rank-v2").BilibiliLiveRankSnapshotV2>
+    refresh: (input: BilibiliLiveRankRefreshInput) => Promise<import("./bilibili-live-rank-v2").BilibiliLiveRankRefreshResultV2>
+  }
+  bilibiliLiveV2: {
+    list: (input?: ListBilibiliLiveRoomsInput) => Promise<import("./bilibili-live-v2").BilibiliLiveRoomListV2>
+    add: (input: AddBilibiliLiveRoomInput) => Promise<import("./bilibili-live-v2").BilibiliLiveRoomV2>
+    updateStatus: (input: UpdateBilibiliLiveRoomStatusInput) => Promise<import("./bilibili-live-v2").BilibiliLiveRoomV2>
+    updateSettings: (input: UpdateBilibiliLiveRoomSettingsInput) => Promise<import("./bilibili-live-v2").BilibiliLiveRoomV2>
+    refresh: (input: { roomMonitorId: string }) => Promise<import("./bilibili-live-v2").BilibiliLiveCollectResultV2>
+    remove: (input: { roomMonitorId: string }) => Promise<DeleteBilibiliLiveRoomResult>
+    summary: () => Promise<import("./bilibili-live-v2").BilibiliLiveSummaryV2>
+    trend: (input: QueryBilibiliLiveTrendInput) => Promise<import("./bilibili-live-v2").BilibiliLiveRoomTrendV2>
+    trends: (input: QueryBilibiliLiveTrendsInput) => Promise<import("./bilibili-live-v2").BilibiliLiveRoomTrendV2[]>
+    events: (input?: QueryBilibiliLiveEventsInput) => Promise<import("./bilibili-live-v2").BilibiliLiveStatusEventV2[]>
   }
   bilibiliLive: {
     list: (input?: ListBilibiliLiveRoomsInput) => Promise<BilibiliLiveRoomList>
@@ -233,3 +260,6 @@ export interface DesktopBridge {
     ) => Promise<BilibiliLiveSessionExportResult>
   }
 }
+export * from "./bilibili-live-danmaku-configuration"
+export * from "./bilibili-live-v2"
+export * from "./bilibili-subject-v3"

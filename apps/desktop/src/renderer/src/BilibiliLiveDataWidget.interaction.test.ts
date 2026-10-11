@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react"
 import { chromium, type Browser, type Page, type Request } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { createBrowserStartupObserver, type BrowserStartupObserver } from "./__fixtures__/browser-startup-observer"
 
 type SetupProbe = {
   startedAt: number
@@ -13,7 +14,10 @@ type SetupProbe = {
   pendingResourceCount: number
   resourceFailures: { kind: "requestfailed" | "response"; pathname: string; status?: number }[]
   failureCount: number
+  maxLag: number
+  lagSamples: number[]
 }
+const documentPath = "/__fixtures__/live-data-widget.html"
 
 function recordSetupPhase(probe: SetupProbe, phase: string): void {
   if (probe.phases.length < 100) probe.phases.push({ phase, ms: Math.round(performance.now() - probe.startedAt) })
@@ -21,10 +25,12 @@ function recordSetupPhase(probe: SetupProbe, phase: string): void {
 
 function watchSetupResources(setupPage: Page, probe: SetupProbe): void {
   setupPage.on("request", request => {
+    if (new URL(request.url()).pathname === documentPath) recordSetupPhase(probe, "DOCUMENT_REQUEST")
     probe.pendingResourceCount++
     if (probe.pendingResources.size < 100) probe.pendingResources.set(request, new URL(request.url()).pathname.slice(0, 256))
   })
   setupPage.on("requestfinished", request => {
+    if (new URL(request.url()).pathname === documentPath) recordSetupPhase(probe, "DOCUMENT_FINISHED")
     probe.pendingResourceCount--
     probe.pendingResources.delete(request)
   })
@@ -38,6 +44,7 @@ function watchSetupResources(setupPage: Page, probe: SetupProbe): void {
   })
   setupPage.on("response", response => {
     const status = response.status()
+    if (new URL(response.url()).pathname === documentPath) recordSetupPhase(probe, `DOCUMENT_RESPONSE_${status}`)
     if (status < 400) return
     probe.failureCount++
     if (probe.resourceFailures.length < 100) probe.resourceFailures.push({
@@ -48,26 +55,54 @@ function watchSetupResources(setupPage: Page, probe: SetupProbe): void {
 
 describe("shared original live data widget in real desktop pages", () => {
   let server: ViteDevServer, browser: Browser, page: Page, url: string
+  let suiteStartup: BrowserStartupObserver, pageStartup: BrowserStartupObserver
   let setupProbe: SetupProbe
+  let navigationSampler: ReturnType<typeof setInterval> | undefined
+  const stopNavigationSampler = () => { clearInterval(navigationSampler); navigationSampler = undefined }
   beforeAll(async () => {
-    server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
-      cacheDir: resolve("node_modules/.vite-widget-test"), plugins: [react()],
-      server: { host: "127.0.0.1", port: 0 }, logLevel: "error" })
-    await server.listen()
+    const startup = createBrowserStartupObserver("widget", "beforeAll")
+    suiteStartup = startup
+    server = await startup.run("server.create", () => createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
+      cacheDir: resolve("node_modules/.vite-widget-test"), plugins: [react(), {
+        name: "test-document-boundary",
+        configureServer(vite) {
+          vite.middlewares.use((request, response, next) => {
+            if (request.url?.split("?")[0] === documentPath && setupProbe) {
+              const probe = setupProbe
+              recordSetupPhase(probe, "DOCUMENT_SERVER_ENTER")
+              response.once("finish", () => recordSetupPhase(probe, "DOCUMENT_SERVER_FINISH"))
+              response.once("close", () => recordSetupPhase(probe, "DOCUMENT_SERVER_CLOSE"))
+            }
+            next()
+          })
+        }
+      }],
+      server: { host: "127.0.0.1", port: 0 }, logLevel: "error" }))
+    await startup.run("server.listen", () => server.listen())
     const address = server.httpServer!.address()
     if (!address || typeof address === "string") throw new Error("Missing fixture port")
     url = `http://127.0.0.1:${address.port}/__fixtures__/live-data-widget.html`
-    browser = await chromium.launch({ headless: true })
+    browser = await startup.run("browser.launch", () => chromium.launch({ headless: true }))
   }, 30000)
-  afterAll(async () => { await browser?.close(); await server?.close() })
+  afterAll(async () => {
+    const startup = suiteStartup; startup?.stop()
+    try { stopNavigationSampler(); await startup.run("browser.close", () => browser?.close()); await startup.run("server.close", () => server?.close()) }
+    finally { startup?.finish() }
+  })
   beforeEach(async () => {
+    const startup = createBrowserStartupObserver("widget", "beforeEach")
+    pageStartup = startup
     const probe: SetupProbe = {
       startedAt: performance.now(), finished: false, phases: [], pendingResources: new Map(), pendingResourceCount: 0,
-      resourceFailures: [], failureCount: 0
+      resourceFailures: [], failureCount: 0, maxLag: 0, lagSamples: []
     }
     setupProbe = probe
     recordSetupPhase(probe, "page:create")
-    const setupPage = await browser.newPage({ viewport: { width: 1500, height: 1100 } })
+    const setupPage = await startup.run("page.create", () => browser.newPage({ viewport: { width: 1500, height: 1100 } }))
+    if (!startup.attachPage(setupPage)) {
+      try { await startup.run("page.close", () => setupPage.close()) } finally { startup.finish() }
+      return
+    }
     page = setupPage
     recordSetupPhase(probe, "page:created")
     if (probe.finished) console.warn("Late live data widget setup page created", { phases: probe.phases })
@@ -75,36 +110,55 @@ describe("shared original live data widget in real desktop pages", () => {
     page.setDefaultTimeout(2500)
     // Synthetic rank avatars must never escape the local fixture server.
     recordSetupPhase(probe, "route:start")
-    await page.route("**/*", route => new URL(route.request().url()).origin === new URL(url).origin
-      ? route.continue() : route.abort())
+    await startup.run("page.route", () => page.route("**/*", async route => {
+      const document = new URL(route.request().url()).pathname === documentPath
+      if (document) recordSetupPhase(probe, "DOCUMENT_ROUTE_ENTER")
+      if (new URL(route.request().url()).origin === new URL(url).origin) {
+        await route.continue()
+        if (document) recordSetupPhase(probe, "DOCUMENT_ROUTE_CONTINUED")
+      } else await route.abort()
+    }))
     recordSetupPhase(probe, "route:ready")
     recordSetupPhase(probe, "clock:start")
-    await page.clock.install()
+    await startup.run("page.clock", () => page.clock.install())
     recordSetupPhase(probe, "clock:ready")
     // Vite may still be optimizing local modules; the heading below is the UI readiness signal.
     recordSetupPhase(probe, "navigate:start")
-    await page.goto(url, { waitUntil: "commit" })
+    let previousSample = performance.now()
+    navigationSampler = setInterval(() => {
+      const now = performance.now(), lag = Math.max(0, now - previousSample - 100)
+      previousSample = now
+      probe.maxLag = Math.max(probe.maxLag, Math.round(lag))
+      if (lag > 100 && probe.lagSamples.length < 16) probe.lagSamples.push(Math.round(lag))
+    }, 100)
+    try { await startup.run("page.goto", () => page.goto(url, { waitUntil: "commit" })) } finally { stopNavigationSampler() }
     recordSetupPhase(probe, "navigate:committed")
-    await page.getByRole("heading", { name: "合成工作台", exact: true }).waitFor({ timeout: 15000 })
+    await startup.run("page.visible", () => page.getByRole("heading", { name: "合成工作台", exact: true }).waitFor({ timeout: 15000 }))
     recordSetupPhase(probe, "heading-ready")
   })
   afterEach(async ({ task }) => {
+    const startup = pageStartup; startup?.stop()
+    try {
+    stopNavigationSampler()
     setupProbe.finished = true
     if (task.result?.state === "fail") console.warn("Live data widget fixture setup", {
       phases: setupProbe.phases, pendingResourceCount: setupProbe.pendingResourceCount,
       pendingResources: [...setupProbe.pendingResources.values()], failureCount: setupProbe.failureCount,
-      resourceFailures: setupProbe.resourceFailures
+      resourceFailures: setupProbe.resourceFailures, maxLag: setupProbe.maxLag, lagSamples: setupProbe.lagSamples
     })
-    await page?.close()
+    await startup.run("page.close", () => page?.close())
+    } finally { startup?.finish() }
   })
 
   it("offers the 505th live room in the actual subject binding drawer", async () => {
     await page.evaluate(() => window.widgetFixture.expandRoomList())
     await page.getByRole("button", { name: "绑定资源", exact: true }).click()
-    const selector = page.getByRole("dialog", { name: "绑定 B站监控资源" }).getByRole("combobox", { name: "直播间监控", exact: true })
-    await expect.poll(() => selector.locator("option").count()).toBe(506)
-    await selector.selectOption({ label: "合成房间505 · 房间 537" })
-    expect(await selector.inputValue()).toBe("018f0f39-7b5e-4cc1-862d-000000000504")
+    const dialog = page.getByRole("dialog", { name: "绑定 B站监控资源" })
+    const selector = dialog.getByRole("combobox", { name: "直播间监控", exact: true })
+    await selector.click()
+    await expect.poll(() => dialog.getByRole("listbox", { name: "直播间监控", exact: true }).getByRole("option").count()).toBe(506)
+    await dialog.getByRole("option", { name: "合成房间505 · 房间 537", exact: true }).click()
+    expect(await selector.inputValue()).toBe("合成房间505 · 房间 537")
   })
 
   it("polls 60 real messages with sender UID, watched count and preserves them across metadata refresh", async () => {
@@ -140,6 +194,13 @@ describe("shared original live data widget in real desktop pages", () => {
     })
     await page.evaluate(() => window.widgetFixture.metadata())
     expect(await page.getByRole("tab", { name: "日榜", exact: true }).getAttribute("aria-selected")).toBe("true")
+    await page.evaluate(async () => { window.widgetFixture.preciseRanks = true; await window.widgetFixture.reload() })
+    await expect.poll(() => page.locator(".subject-rank-list > div").count()).toBe(2)
+    expect(await page.locator(".subject-rank-list > div").first().innerText()).toContain("低贡献")
+    expect(await page.locator(".subject-rank-list > div").first().locator("b").getAttribute("title")).toBe("9,007,199,254,740,992")
+    await page.getByRole("button", { name: "升序", exact: true }).click()
+    expect(await page.locator(".subject-rank-list > div").first().innerText()).toContain("高贡献")
+    expect(await page.locator(".subject-rank-list > div").first().locator("b").getAttribute("title")).toBe("9,007,199,254,740,993")
   })
 
   it("shows offline listening and awaits explicit protocol start and stop without duplicate actions", async () => {

@@ -55,10 +55,12 @@ describe("persisted live collection configuration in real local Core", () => {
     const danmakuScan = vi.spyOn(BilibiliLiveDanmakuService.prototype, "syncAutoConnections")
     let core = await f.start()
     const room = core.listBilibiliLiveRooms().items[0]!
+    await vi.advanceTimersByTimeAsync(0)
+    expect(danmakuScan).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(5000)
     expect(f.calls).toEqual([])
     expect(followerScan).toHaveBeenCalledTimes(6) // Startup scan plus five completed fixed-delay periods.
-    expect(danmakuScan).toHaveBeenCalledTimes(1)
+    expect(danmakuScan).toHaveBeenCalledTimes(2)
     expect(await core.refreshBilibiliLiveRoom(room.id)).toMatchObject({ success: true })
     core.updateBilibiliLiveRoomSettings(room.id, 120)
     expect(core.listBilibiliLiveRooms().items[0]?.intervalSeconds).toBe(120)
@@ -104,9 +106,10 @@ describe("persisted live collection configuration in real local Core", () => {
   it("keeps original batch clamping and lets original environment variables override disk", async () => {
     const f = await prepare({ enabled: false, dueBatchSize: 20, statusBatchSize: 30 }, 3)
     vi.stubEnv("SOCIAL_MONITOR_BILIBILI_LIVE_MONITOR_ENABLED", "true")
-    vi.stubEnv("SOCIAL_MONITOR_BILIBILI_LIVE_DUE_BATCH_SIZE", "0")
-    vi.stubEnv("SOCIAL_MONITOR_BILIBILI_LIVE_STATUS_BATCH_SIZE", "-9")
-    vi.stubEnv("SOCIAL_MONITOR_BILIBILI_LIVE_SCHEDULER_DELAY_MS", "250")
+    vi.stubEnv("SOCIAL_MONITOR_BILIBILI_LIVE_DUE_BATCH_SIZE", "3")
+    vi.stubEnv("APP_BILIBILI_LIVEMONITOR_DUEBATCHSIZE", "0")
+    vi.stubEnv("APP_BILIBILI_LIVEMONITOR_STATUSBATCHSIZE", "-9")
+    vi.stubEnv("APP_BILIBILI_LIVEMONITOR_SCHEDULERDELAYMS", "250")
     const scan = vi.spyOn(ControlDatabase.prototype, "findDueBilibiliLiveRooms")
     await f.start(); await vi.advanceTimersByTimeAsync(0)
     expect(f.calls.map(call => call.ids)).toEqual([["1"]])

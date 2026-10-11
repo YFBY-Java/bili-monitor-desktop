@@ -1,0 +1,63 @@
+{
+  "adapterList": [
+    {
+      "platformCode": "bilibili",
+      "capabilities": [
+        "ACCOUNT_PROFILE",
+        "CONTENT_LIST",
+        "CONTENT_DETAIL",
+        "COMMENT_LIST",
+        "DANMAKU_LIST",
+        "INTERACTION_METRIC",
+        "FOLLOWER_SNAPSHOT",
+        "TREND_TOPIC"
+      ],
+      "implementedDataTypes": [
+        "account"
+      ]
+    }
+  ],
+  "input": {
+    "platformCode": "bilibili",
+    "dataType": "account",
+    "externalId": "+09007199254740993"
+  },
+  "execution": {
+    "status": "SUCCESS",
+    "platformCode": "bilibili",
+    "dataType": "account",
+    "fetchResult": {
+      "success": true,
+      "data": {
+        "platform": "bilibili",
+        "externalAccountId": "9007199254740993",
+        "displayName": " 采集账号 ",
+        "avatarUrl": "",
+        "profileUrl": "https://space.bilibili.com/9007199254740993",
+        "followerCount": "9007199254740995",
+        "followingCount": "0",
+        "fetchedAt": "2026-10-06T01:00:00.000Z",
+        "sourceEndpoint": "x/web-interface/card"
+      },
+      "rawPayload": null,
+      "rawPayloadObject": {
+        "objectId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "relativePath": "objects/aa/card.json",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sizeBytes": 20,
+        "mediaType": "application/json"
+      },
+      "nextCursor": null,
+      "rateLimitInfo": {
+        "limited": false,
+        "remaining": null,
+        "resetAt": null,
+        "policyKey": "default"
+      },
+      "errorType": "NONE",
+      "retryable": false,
+      "riskLevel": "LOW",
+      "message": "ok"
+    }
+  }
+}

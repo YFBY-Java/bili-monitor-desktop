@@ -1,0 +1,113 @@
+[
+  { "name": "connection raw signed bounds and strings", "input": { "heartbeatSeconds": 2147483647, "connectTimeoutMs": -2147483648, "useLoginCredential": false, "webLocation": "", "clientVersion": " version ", "wbiCacheSeconds": 2147483647, "buvidCacheSeconds": -2147483648, "bucketSeconds": 2147483647, "listenProbeSeconds": -2147483648 }, "valid": true },
+  { "name": "connection heartbeat overflow", "input": { "heartbeatSeconds": 2147483648, "wbiCacheSeconds": 2147483648 }, "valid": false },
+  { "name": "connection null string", "input": { "clientVersion": null, "buvidCacheSeconds": null }, "valid": false },
+  {
+    "name": "defaults",
+    "input": {},
+    "valid": true
+  },
+  {
+    "name": "disabled",
+    "input": {
+      "enabled": false,
+      "autoStartEnabled": false
+    },
+    "valid": true
+  },
+  {
+    "name": "signed -2147483648",
+    "input": {
+      "schedulerDelayMs": -2147483648,
+      "maxConnections": -2147483648
+    },
+    "valid": true
+  },
+  {
+    "name": "signed 2147483647",
+    "input": {
+      "schedulerDelayMs": 2147483647,
+      "maxConnections": 2147483647
+    },
+    "valid": true
+  },
+  {
+    "name": "signed 0",
+    "input": {
+      "schedulerDelayMs": 0,
+      "maxConnections": 0
+    },
+    "valid": true
+  },
+  {
+    "name": "signed -1",
+    "input": {
+      "schedulerDelayMs": -1,
+      "maxConnections": -1
+    },
+    "valid": true
+  },
+  { "name": "recent raw MIN", "input": { "recentMessageLimitPerRoom": -2147483648 }, "valid": true },
+  { "name": "recent raw MAX", "input": { "recentMessageLimitPerRoom": 2147483647 }, "valid": true },
+  { "name": "recent raw 0", "input": { "recentMessageLimitPerRoom": 0 }, "valid": true },
+  { "name": "recent raw 19", "input": { "recentMessageLimitPerRoom": 19 }, "valid": true },
+  { "name": "recent raw 20", "input": { "recentMessageLimitPerRoom": 20 }, "valid": true },
+  { "name": "recent raw 501", "input": { "recentMessageLimitPerRoom": 501 }, "valid": true },
+  { "name": "recent fraction", "input": { "recentMessageLimitPerRoom": 1.5 }, "valid": false },
+  { "name": "recent overflow", "input": { "recentMessageLimitPerRoom": 2147483648 }, "valid": false },
+  { "name": "recent underflow", "input": { "recentMessageLimitPerRoom": -2147483649 }, "valid": false },
+  { "name": "recent string", "input": { "recentMessageLimitPerRoom": "25" }, "valid": false },
+  { "name": "recent null", "input": { "recentMessageLimitPerRoom": null }, "valid": false },
+  { "name": "protocol zero", "input": { "protocolVersion": 0 }, "valid": true },
+  { "name": "protocol raw outside candidates", "input": { "protocolVersion": 4 }, "valid": true },
+  { "name": "protocol overflow", "input": { "protocolVersion": 2147483648 }, "valid": false },
+  {
+    "name": "invalid 0",
+    "input": {
+      "enabled": "false"
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid 1",
+    "input": {
+      "autoStartEnabled": null
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid 2",
+    "input": {
+      "schedulerDelayMs": "5000"
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid 3",
+    "input": {
+      "maxConnections": 1.5
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid 4",
+    "input": {
+      "maxConnections": 2147483648
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid 5",
+    "input": {
+      "schedulerDelayMs": -2147483649
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid 6",
+    "input": {
+      "unknown": true
+    },
+    "valid": false
+  }
+]

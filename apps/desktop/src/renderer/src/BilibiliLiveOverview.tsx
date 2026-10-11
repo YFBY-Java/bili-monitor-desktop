@@ -1,30 +1,32 @@
-import type { BilibiliLiveRoom, BilibiliLiveStatusEvent, BilibiliLiveSummary } from "@bmd/contracts"
+import type { BilibiliLiveRoomV2, BilibiliLiveStatusEventV2, BilibiliLiveSummaryV2 } from "@bmd/contracts"
 import { Clock3, Radio, TrendingUp, UsersRound } from "lucide-react"
 import { formatLiveDateTime, formatLiveShortCount } from "./live-monitor-presentation"
 import { liveEventName, liveRelativeTime } from "./live-overview-presentation"
 import "./live-overview.css"
 
 export function LiveOverviewSummary({ summary, rooms, events, now, available, pending }: {
-  summary: BilibiliLiveSummary | undefined; rooms: BilibiliLiveRoom[]; events: BilibiliLiveStatusEvent[]
+  summary: BilibiliLiveSummaryV2 | undefined; rooms: BilibiliLiveRoomV2[]; events: BilibiliLiveStatusEventV2[]
   now: number; available: boolean; pending: boolean
 }) {
   const live = rooms.filter(room => room.liveStatus === 1), latest = summary?.latestEvent ?? events[0]
+  const total = summary?.totalOnlineCount ?? BigInt.asIntN(64, live.reduce((sum, room) => sum + BigInt(room.onlineCount ?? "0"), 0n)).toString()
   const values = [
     ["直播中房间", summary?.liveRooms ?? live.length, Radio],
-    ["总在线/热度", formatLiveShortCount(summary?.totalOnlineCount ?? live.reduce((sum, room) => sum + (room.onlineCount ?? 0), 0)), UsersRound],
+    ["总在线/热度", formatLiveShortCount(total), UsersRound],
     ["今日开播次数", summary?.todayLiveStarts ?? 0, TrendingUp],
     ["最近状态变化", latest ? liveRelativeTime(latest.occurredAt, now) : "24 小时内无变化", Clock3]
   ] as const
   return <section className="live-summary-grid live-overview-summary" aria-label="直播监控汇总" aria-busy={pending}>
     {values.map(([label, value, Icon]) => <article className="live-summary-card" key={label}>
       <Icon size={17} aria-hidden="true" /><span>{label}</span>
-      <strong title={available && label === "最近状态变化" && latest ? formatLiveDateTime(latest.occurredAt) : undefined}>{available ? value : "—"}</strong>
+      <strong title={available && label === "总在线/热度" ? total : available && label === "最近状态变化" && latest ? formatLiveDateTime(latest.occurredAt) : undefined}
+        aria-label={available && label === "总在线/热度" ? `总在线/热度 ${total}` : undefined}>{available ? value : "—"}</strong>
     </article>)}
   </section>
 }
 
 export function LiveStatusEvents({ events, rooms, now, available, pending }: {
-  events: BilibiliLiveStatusEvent[]; rooms: BilibiliLiveRoom[]; now: number; available: boolean; pending: boolean
+  events: BilibiliLiveStatusEventV2[]; rooms: BilibiliLiveRoomV2[]; now: number; available: boolean; pending: boolean
 }) {
   return <section className="live-event-panel live-overview-events" aria-label="最近状态事件" aria-busy={pending}>
     <header><h2>最近状态事件</h2><p>记录开播、下播、轮播、标题变化和采集异常。</p></header>

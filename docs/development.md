@@ -62,6 +62,19 @@ release/                安装包
 
 示例见 [直播配置](../config/bilibili-live-collection.example.json) 和 [工作台配置](../config/subject-monitor.example.json)；原业务依据与验证边界见 [直播存储审计](implementation/2026-09-25-live-storage-audit.md)。粉丝使用以下独立配置。
 
+## 直播榜单启动配置
+
+在实际数据目录的 `config/bilibili-live-rank.json` 配置；模板见[榜单配置示例](../config/bilibili-live-rank.example.json)。只在启动时读取，修改后重启，不修改文件或删除已有榜单历史。
+
+- `enabled=true`：独立控制榜单服务；false关闭查询和刷新但不影响直播REST、弹幕及场次。关闭时返回`BILIBILI_LIVE_RANK_DISABLED`，启用后可读取原历史。
+- `pageSize=50`、`guardPageSize=30`：观众榜实际1–100，大航海实际1–30，在线备用API最多50。
+- `maxPages=1`：请求未指定页数时使用该值并限制1–5；页面/调用显式指定页数时优先请求。
+- `requestMinIntervalMs=1500`：榜单共享请求许可间隔，实际至少0；`webLocation="444.8"`是观众榜WBI参数，不是弹幕模块配置。
+- 支持原别名`SOCIAL_MONITOR_BILIBILI_LIVE_RANK_ENABLED/PAGE_SIZE/GUARD_PAGE_SIZE/MAX_PAGES/REQUEST_MIN_INTERVAL_MS/WEB_LOCATION`，以及规范名`APP_BILIBILI_LIVEMONITOR_RANK_ENABLED/PAGESIZE/GUARDPAGESIZE/MAXPAGES/REQUESTMININTERVALMS/WEBLOCATION`。规范名优先别名，环境优先文件。int字段为signed int32，夹值在消费端进行；文件要求JSON boolean/string/integer。
+- 非法配置在开库前返回`BILIBILI_LIVE_RANK_CONFIG_INVALID`，只显示安全固定错误。不要删除数据库排错。原Spring的raw开关条件仅不trim等于false关闭；使用明确`true/false`避免有空白或其他布尔写法的条件差异。
+
+本轮迁移和验证范围见[榜单配置审计](implementation/2026-10-11-feature-gap-and-rank-configuration.md)。
+
 ## 粉丝监控启动配置
 
 实际数据目录下的 `config/bilibili-follower-collection.json` 支持原粉丝监控16项设置，[完整示例](../config/bilibili-follower-collection.example.json)可作参考。文件只读、启动生效；缺少文件使用默认值，不自动创建或写回。

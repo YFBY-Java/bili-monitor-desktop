@@ -15,5 +15,5 @@
   {"name": "string is not a count", "patch": {"onlineCount": "1"}, "valid": false},
   {"name": "fraction is not a count", "patch": {"onlineCount": 1.5}, "valid": false},
   {"name": "large UID stays text", "patch": {"uid": "9223372036854775807"}, "valid": true},
-  {"name": "invalid URL", "patch": {"coverUrl": "not-a-url"}, "valid": false}
+  {"name": "original media fields are raw text", "patch": {"faceUrl": " //example.test/avatar.png ", "coverUrl": " relative/cover.png ", "keyframeUrl": "not-a-url"}, "valid": true}
 ]

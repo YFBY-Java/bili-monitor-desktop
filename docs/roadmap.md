@@ -2,7 +2,7 @@
 
 > 当前路线以 [当前运行时蓝图](architecture/typescript-python-local-runtime.md)、[本地原生业务与技术实现规格](architecture/local-native-business-implementation.md) 和 [ADR-0006](adr/0006-typescript-python-local-runtime.md) 为准。
 
-> 2026-09-13 更新：下文为旧基线的接入和远期路线记录，不是全量业务验收结论。当前原项目为 `fa2faa6`，按 [逐功能迁移台账](implementation/2026-09-13-full-migration-tracker.md) 继续核对真实业务；平台 adapter/run-once 的可执行部分仍在范围内，不能因邻近页面含 Mock 而整体排除。当前本地 schema 为 v12。
+> 2026-10-07 状态同步：下文为旧基线的接入和远期路线记录，不是全量业务验收结论。原项目为 `fa2faa6`，客户端源码schema为v16；用户已恢复全量迁移，当前状态与接续队列见[逐功能迁移台账](implementation/2026-09-13-full-migration-tracker.md)。平台adapter/run-once的可执行部分仍在范围内，不能因邻近页面含Mock而整体排除；旧目录包不代表当前源码验收。
 
 当前进度（2026-08-30）：原 commit `01200f3` 中形成真实闭环的 B站与抖音本人登录态业务已迁移到本地 Contract、Core、SQLite v11、Worker、IPC 和 UI。包括用户工作台、粉丝、B站扫码、直播 REST、实时弹幕、榜单、场次、数据中心、洞察/导出，以及抖音 Web/OAuth 双凭据。B站公开 API 与真实 WebSocket smoke 已通过；B站真人扫码、抖音真人扫码/滑块和官方 OAuth 授权仍待手工验收。AI mock、采集任务 mock、Analytics placeholder 和平台骨架不计为待迁移业务，也不进入导航。
 

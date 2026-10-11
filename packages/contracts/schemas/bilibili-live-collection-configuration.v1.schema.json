@@ -10,7 +10,7 @@
     "referer": {"type":"string","not":{"pattern":"[^\\t\\x20-\\x7e]"},"default":"https://live.bilibili.com/"},
     "enabled": { "type": "boolean", "default": true },
     "storageEnabled": { "type": "boolean", "default": true },
-    "schedulerDelayMs": { "type": "integer", "minimum": 1, "maximum": 2147483647, "default": 1000 },
+    "schedulerDelayMs": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 1000 },
     "dueBatchSize": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 20 },
     "statusBatchSize": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 30 },
     "defaultIntervalSeconds": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 300 },
@@ -21,5 +21,9 @@
     "requestMinIntervalMs": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 1500 },
     "maxAttempts": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 3 },
     "retryBackoffMs": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 1500 }
-  }
+  },
+  "allOf": [{
+    "if": { "properties": { "enabled": { "const": true }, "storageEnabled": { "const": true } } },
+    "then": { "properties": { "schedulerDelayMs": { "minimum": 1 } } }
+  }]
 }

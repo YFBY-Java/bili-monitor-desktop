@@ -3,6 +3,8 @@
 import math
 import re
 
+from .java_scalar_text import java_scalar_text
+
 MIN_CODE = -(2**31)
 MAX_CODE = 2**31 - 1
 JAVA_TRIM = "".join(chr(value) for value in range(33))
@@ -69,10 +71,7 @@ def response_code(value: object) -> int:
 
 def error_message(value: object, code: int) -> str:
     """Keep nonblank source text unchanged; containers are not scalar messages."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (str, int, float)):
-        text = str(value)
-        if not JAVA_BLANK.fullmatch(text):
-            return text
+    text = java_scalar_text(value)
+    if text is not None and not JAVA_BLANK.fullmatch(text):
+        return text
     return f"Bilibili API error: {code}"

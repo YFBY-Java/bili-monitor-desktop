@@ -1,4 +1,4 @@
-import type { BilibiliLiveRoom, BilibiliLiveRoomTrend, BilibiliLiveTrendPoint } from "@bmd/contracts"
+import type { BilibiliLiveRoomV2, BilibiliLiveRoomTrendV2, BilibiliLiveTrendPointV2 } from "@bmd/contracts"
 import { useMemo } from "react"
 import { LiveTrendChart } from "./LiveTrendChart"
 import { formatLiveDelta, formatLiveShortCount } from "./live-monitor-presentation"
@@ -6,7 +6,7 @@ import { liveChartHeight, liveChartSamples, liveTrendHelp } from "./live-trend-p
 import "./live-trend-board.css"
 
 export function BilibiliLiveTrendBoard({ rooms, trends, selectedIds, pending, errorMessage, onReload, onSelectionChange, showSelector }: {
-  rooms: BilibiliLiveRoom[]; trends: BilibiliLiveRoomTrend[]; selectedIds: string[]; pending: boolean
+  rooms: BilibiliLiveRoomV2[]; trends: BilibiliLiveRoomTrendV2[]; selectedIds: string[]; pending: boolean
   errorMessage?: string; onReload?: () => Promise<unknown>; onSelectionChange: (ids: string[]) => void; showSelector: boolean
 }) {
   const selected = selectedIds.flatMap(id => rooms.find(room => room.id === id) ?? [])
@@ -26,13 +26,14 @@ export function BilibiliLiveTrendBoard({ rooms, trends, selectedIds, pending, er
   </section>
 }
 
-function LiveTrendCard({ room, fetched, height, color }: { room: BilibiliLiveRoom; fetched: BilibiliLiveTrendPoint[] | undefined; height: number; color: number }) {
+function LiveTrendCard({ room, fetched, height, color }: { room: BilibiliLiveRoomV2; fetched: BilibiliLiveTrendPointV2[] | undefined; height: number; color: number }) {
   const samples = useMemo(() => liveChartSamples(room, fetched, Date.now()), [room, fetched])
   const sourceLabel = { history: "历史快照", recent: "房间近期快照", current: "当前值参考（非新增历史）", empty: "暂无数据" }[samples.source]
   return <article className={`live-chart-card live-trend-card trend-color-${color}`}>
     <header className="live-chart-heading"><div><h3 aria-label={`${room.uname}的在线趋势`} title={room.uname}>{room.uname}</h3>
       <span>房间 {room.roomId} · {samples.points.length} 个点</span></div><div className="live-chart-current">
-      <strong title={room.onlineCount?.toLocaleString("zh-CN")}>{formatLiveShortCount(room.onlineCount)}</strong><span>较上次 {formatLiveDelta(room.onlineDelta)}</span></div></header>
+      <strong title={room.onlineCount}>{formatLiveShortCount(room.onlineCount)}</strong><span title={room.onlineDelta}
+        aria-label={room.onlineDelta === undefined ? undefined : `较上次 ${room.onlineDelta}`}>较上次 {formatLiveDelta(room.onlineDelta)}</span></div></header>
     <p className="live-chart-source">{sourceLabel}</p>
     <LiveTrendChart roomName={room.uname} samples={samples} height={height} />
     {samples.points.length < 2 && <p className="live-chart-note">至少需要2次采集形成趋势。</p>}

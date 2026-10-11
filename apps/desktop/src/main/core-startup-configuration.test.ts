@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto"
 import { EventEmitter } from "node:events"
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { resolve } from "node:path"
+import { isAbsolute, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Worker } from "node:worker_threads"
 import { build } from "vite"
@@ -11,6 +11,31 @@ import { LocalCoreController } from "./core-client"
 
 const shell = vi.hoisted(() => ({ fork: vi.fn() }))
 vi.mock("electron", () => ({ utilityProcess: { fork: shell.fork } }))
+
+function assertHostTemporaryPath(temp = tmpdir(), target?: string): void {
+  const root = resolve(temp)
+  if (!isAbsolute(temp) || !/^D:/iu.test(root)) throw new Error("Unsafe host configuration TEMP")
+  if (target !== undefined) {
+    const path = resolve(target), child = relative(root, path)
+    if (!isAbsolute(target) || !/^D:/iu.test(path) || !child || child.startsWith("..") || isAbsolute(child)) {
+      throw new Error("Unsafe host configuration cleanup")
+    }
+  }
+}
+
+describe("host configuration fixture path safety", () => {
+  it.each(["C:/synthetic-temp", "relative-temp"])("rejects unsafe TEMP %s without creating it", temp => {
+    expect(() => assertHostTemporaryPath(temp)).toThrow("Unsafe host configuration TEMP")
+  })
+  it.each(["D:/synthetic-temp", "D:/synthetic-temp/../outside", "C:/synthetic-temp/child", "relative-child"])(
+    "rejects cleanup target outside strict TEMP descendant %s", target => {
+      expect(() => assertHostTemporaryPath("D:/synthetic-temp", target)).toThrow("Unsafe host configuration cleanup")
+    })
+  it("allows absolute D TEMP and its strict descendant", () => {
+    expect(() => assertHostTemporaryPath("D:/synthetic-temp")).not.toThrow()
+    expect(() => assertHostTemporaryPath("D:/synthetic-temp", "D:/synthetic-temp/child")).not.toThrow()
+  })
+})
 
 class IsolatedCoreProcess extends EventEmitter {
   pid: number | undefined
@@ -34,6 +59,7 @@ describe("collection configuration across Core entry and desktop host", () => {
   const workers: Worker[] = []
   const messages: Array<{ type: string; id: string; payload: unknown }> = []
   beforeAll(async () => {
+    assertHostTemporaryPath()
     buildDirectory = await mkdtemp(resolve(tmpdir(), "bmd-core-config-entry-"))
     await build({ configFile: false, logLevel: "silent", ssr: { noExternal: true }, build: {
       ssr: fileURLToPath(new URL("./__fixtures__/core-process-worker.ts", import.meta.url)),
@@ -52,17 +78,19 @@ describe("collection configuration across Core entry and desktop host", () => {
     vi.unstubAllEnvs()
     await core?.stop(); core = undefined
     for (const worker of workers.splice(0)) await worker.terminate()
-    if (directory) await rm(directory, { recursive: true, force: true })
+    if (directory) { assertHostTemporaryPath(tmpdir(), directory); await rm(directory, { recursive: true, force: true }) }
   })
-  afterAll(async () => { if (buildDirectory) await rm(buildDirectory, { recursive: true, force: true }) })
+  afterAll(async () => { if (buildDirectory) { assertHostTemporaryPath(tmpdir(), buildDirectory); await rm(buildDirectory, { recursive: true, force: true }) } })
 
   async function setup(contents: string) {
     for (const name of Object.keys(process.env)) {
       if (name.startsWith("APP_BILIBILI_FOLLOWERMONITOR_") || name.startsWith("SOCIAL_MONITOR_BILIBILI_FOLLOWER_")
+        || name.startsWith("APP_BILIBILI_LIVEMONITOR_DANMAKU_") || name.startsWith("SOCIAL_MONITOR_BILIBILI_LIVE_DANMAKU_")
         || name === "SOCIAL_MONITOR_BILIBILI_REQUEST_MIN_INTERVAL_MS") vi.stubEnv(name, undefined)
     }
     vi.stubEnv("APP_SUBJECTMONITOR_ENABLED", undefined)
     vi.stubEnv("SOCIAL_MONITOR_BILIBILI_LIVE_STORAGE_ENABLED", undefined)
+    assertHostTemporaryPath()
     directory = await mkdtemp(resolve(tmpdir(), "bmd-core-config-host-"))
     await mkdir(resolve(directory, "config"))
     const path = resolve(directory, "config", "bilibili-live-collection.json")
@@ -72,6 +100,22 @@ describe("collection configuration across Core entry and desktop host", () => {
       startupTimeoutMs: 10_000, requestTimeoutMs: 10_000 })
     return { controller: core, path }
   }
+  it.each([{ unknown: "synthetic-private-danmaku" }, { schedulerDelayMs: 0 }])(
+    "returns a safe danmaku startup error before SQLite and recovers: %j", async configuration => {
+      const f = await setup('{"enabled":false}')
+      const path = resolve(directory, "config/bilibili-live-danmaku.json")
+      await writeFile(path, JSON.stringify(configuration), "utf8")
+      const error = await f.controller.start().catch((caught: unknown) => caught)
+      expect(error).toBeInstanceOf(Error)
+      expect((error as Error).message).toMatch(/^BILIBILI_DANMAKU_CONFIG_INVALID: /)
+      expect((error as Error).message).not.toMatch(/synthetic-private|core-process|\.mjs|\n|D:\\/u)
+      await expect(access(resolve(directory, "control.db"))).rejects.toMatchObject({ code: "ENOENT" })
+      const corrected = '{"enabled":false}'
+      await writeFile(path, corrected, "utf8")
+      expect((await f.controller.start()).coreStatus.state).toBe("ready")
+      expect(await f.controller.listBilibiliLiveRooms({})).toMatchObject({ total: 0 })
+      expect(await readFile(path, "utf8")).toBe(corrected)
+    }, 30_000)
   it.each([
     { configuration: { unknown: "synthetic-private-follower" }, code: "BILIBILI_FOLLOWER_CONFIG_INVALID" },
     { configuration: { storageEnabled: false }, code: "BILIBILI_FOLLOWER_STORAGE_DEPENDENCY_INVALID" }
@@ -237,6 +281,10 @@ describe("collection configuration across Core entry and desktop host", () => {
     vi.stubEnv("SOCIAL_MONITOR_BILIBILI_LIVE_STORAGE_ENABLED", "false")
     vi.stubEnv("APP_SUBJECTMONITOR_ENABLED", "false")
     expect((await f.controller.start()).coreStatus.state).toBe("ready")
+    expect(shell.fork.mock.calls.at(-1)?.[2].env).toMatchObject({
+      BMD_MAIN_INSTANCE_ID: expect.stringMatching(/^[0-9a-f-]{36}$/u), BMD_MAIN_PID: String(process.pid),
+      BMD_PYTHON_EXE: process.env.BMD_PYTHON_EXE, BMD_REPOSITORY_ROOT: process.env.BMD_REPOSITORY_ROOT
+    })
     await expect(f.controller.listBilibiliLiveRooms({})).rejects.toMatchObject({ code: "BILIBILI_LIVE_STORAGE_DISABLED" })
     await expect(f.controller.listBilibiliSubjects({})).rejects.toMatchObject({ code: "SUBJECT_MONITOR_DISABLED" })
     expect(await readFile(f.path, "utf8")).toBe('{"storageEnabled":true}')
@@ -253,9 +301,18 @@ describe("collection configuration across Core entry and desktop host", () => {
     expect(messages.find(message => message.type === "bilibili-live.rooms.add.result")?.id).toBe(alive?.id)
   }, 30_000)
   it("emits rank liveness from the actual Core entry and persists the configured Python result", async () => {
+    await build({ configFile: false, logLevel: "silent", ssr: { noExternal: true }, build: {
+      ssr: fileURLToPath(new URL("../../../../packages/core-runtime/src/__fixtures__/shared-materials-worker.mjs", import.meta.url)),
+      outDir: buildDirectory, emptyOutDir: false, target: "node24",
+      rollupOptions: { output: { entryFileNames: "synthetic-realtime-worker.mjs", chunkFileNames: "[name]-[hash].mjs" } }
+    } })
+    vi.stubEnv("BMD_NODE_EXE", process.execPath)
+    vi.stubEnv("BMD_REALTIME_WORKER_ENTRY", resolve(buildDirectory, "synthetic-realtime-worker.mjs"))
     vi.stubEnv("BMD_PYTHON_WORKER_PATH", resolve(process.cwd(), "../../workers/python/tests/fixtures/live_rank_http_configuration"))
     const f = await setup(JSON.stringify({ enabled: false, maxAttempts: 1, connectTimeoutMs: 1250, readTimeoutMs: 0,
       userAgent: "Fixture rank configuration/2", referer: "https://live.bilibili.com/configured-rank" }))
+    await writeFile(resolve(directory, "config/bilibili-live-danmaku.json"),
+      JSON.stringify({ enabled: false, wbiCacheSeconds: -8 }), "utf8")
     await f.controller.start()
     const room = await f.controller.addBilibiliLiveRoom({ uid: "2" })
     messages.length = 0

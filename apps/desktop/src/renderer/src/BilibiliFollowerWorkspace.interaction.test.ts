@@ -5,6 +5,9 @@ import react from "@vitejs/plugin-react"
 import { chromium, type Browser, type Page, type Request } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { createBrowserStartupObserver, type BrowserStartupObserver } from "./__fixtures__/browser-startup-observer"
+import { browserFixtureCacheDirectory } from "./__fixtures__/browser-fixture-cache"
+import { createUidInputAwaitObserver, type UidInputAwaitObserver } from "./__fixtures__/uid-input-await-observer"
 
 // Browser integration with deterministic IPC responses; never calls Bilibili or opens the user's DB.
 describe("follower workflow in the renderer", () => {
@@ -12,23 +15,40 @@ describe("follower workflow in the renderer", () => {
   let browser: Browser
   let page: Page
   let url: string
+  let suiteStartup: BrowserStartupObserver, pageStartup: BrowserStartupObserver
+  let uidInputObserver: UidInputAwaitObserver | undefined
   let setupProbe: { startedAt: number; phases: { phase: string; ms: number }[]; pending: Map<Request, string>; pendingCount: number; failed: string[]; failureCount: number; finished: boolean }
   beforeAll(async () => {
-    server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
-      plugins: [react()], server: { host: "127.0.0.1", port: 0 }, logLevel: "error" })
-    await server.listen()
+    const startup = createBrowserStartupObserver("workspace", "beforeAll")
+    suiteStartup = startup
+    server = await startup.run("server.create", () => createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
+      cacheDir: browserFixtureCacheDirectory,
+      plugins: [react()], server: { host: "127.0.0.1", port: 0 }, logLevel: "error" }))
+    await startup.run("server.listen", () => server.listen())
     const address = server.httpServer!.address()
     if (!address || typeof address === "string") throw new Error("Missing test fixture port")
     url = `http://127.0.0.1:${address.port}/__fixtures__/follower-workspace.html`
-    browser = await chromium.launch({ headless: true })
+    browser = await startup.run("browser.launch", () => chromium.launch({ headless: true }))
   }, 30_000)
-  afterAll(async () => { await browser?.close(); await server?.close() })
+  afterAll(async () => {
+    const startup = suiteStartup; startup?.stop()
+    try { await startup.run("browser.close", () => browser?.close()); await startup.run("server.close", () => server?.close()) }
+    finally { startup?.finish() }
+  })
   beforeEach(async () => {
+    uidInputObserver = undefined
+    const startup = createBrowserStartupObserver("workspace", "beforeEach")
+    pageStartup = startup
     const probe = { startedAt: performance.now(), phases: [] as { phase: string; ms: number }[], pending: new Map<Request, string>(), pendingCount: 0, failed: [] as string[], failureCount: 0, finished: false }
     setupProbe = probe
     const phase = (name: string) => { if (probe.phases.length < 100) probe.phases.push({ phase: name, ms: Math.round(performance.now() - probe.startedAt) }) }
     phase("page:create")
-    page = await browser.newPage()
+    const setupPage = await startup.run("page.create", () => browser.newPage())
+    if (!startup.attachPage(setupPage)) {
+      try { await startup.run("page.close", () => setupPage.close()) } finally { startup.finish() }
+      return
+    }
+    page = setupPage
     phase("page:created")
     if (probe.finished) console.warn("Follower workspace page created after teardown", { phases: probe.phases })
     page.on("request", request => {
@@ -50,17 +70,21 @@ describe("follower workflow in the renderer", () => {
       }
     })
     phase("fixture:navigate")
-    await page.goto(url)
+    await startup.run("page.goto", () => page.goto(url))
     phase("fixture:loaded")
-    await page.getByText("测试用户1", { exact: true }).waitFor()
+    await startup.run("page.visible", () => page.getByText("测试用户1", { exact: true }).waitFor())
     phase("fixture:ready")
   })
   afterEach(async ({ task }) => {
+    const uidObserver = uidInputObserver; uidInputObserver = undefined; uidObserver?.stop()
+    const startup = pageStartup; startup?.stop()
+    try {
     setupProbe.finished = true
     if (task.result?.state === "fail") console.warn("Follower workspace setup phases", {
       phases: setupProbe.phases, pendingCount: setupProbe.pendingCount, pending: [...setupProbe.pending.values()], failureCount: setupProbe.failureCount, failed: setupProbe.failed
     })
-    await page?.close()
+    await startup.run("page.close", () => page?.close())
+    } finally { try { uidObserver?.finish() } finally { startup?.finish() } }
   })
 
   it("displays exact Long64 totals, detail values, negative changes and keyboard tooltips", async () => {
@@ -105,25 +129,29 @@ describe("follower workflow in the renderer", () => {
   })
 
   it("normalizes original integer input forms without rounding the UID", async () => {
+    const observer = createUidInputAwaitObserver()
+    uidInputObserver = observer
     const inputs = [
       [" 0002 ", "2"], ["+2", "2"], ["2.0", "2"], ["2.", "2"],
       ["20e-1", "2"], [".2e1", "2"], ["0x10", "16"], ["0b10", "2"], ["0o10", "8"],
       ["\uFEFF\u30002\u00A0", "2"], ["9007199254740993", "9007199254740993"],
       ["9.223372036854775807e18", "9223372036854775807"]
     ]
-    for (const [raw, canonical] of inputs) {
-      await page.getByRole("button", { name: "添加用户", exact: true }).click()
+    for (const [index, [raw, canonical]] of inputs.entries()) {
+      const round = index + 1
+      await observer.run(round, "open", () => page.getByRole("button", { name: "添加用户", exact: true }).click())
       const dialog = page.getByRole("dialog", { name: "添加 B站监控用户" })
       const input = dialog.getByRole("textbox")
-      await input.fill(raw!)
+      await observer.run(round, "fill", () => input.fill(raw!))
       // Native pattern validation must not prevent our precise parser from running.
-      expect(await input.evaluate(element => (element as HTMLInputElement).checkValidity()), raw).toBe(true)
-      await dialog.getByRole("button", { name: "添加监控", exact: true }).click()
-      await dialog.waitFor({ state: "detached" })
-      expect(await page.evaluate(() => window.followerFixture.addRequests.at(-1)?.mid), raw).toBe(canonical)
+      await observer.run(round, "validity", async () => { expect(await input.evaluate(element => (element as HTMLInputElement).checkValidity()), raw).toBe(true) })
+      await observer.run(round, "submit", () => dialog.getByRole("button", { name: "添加监控", exact: true }).click())
+      await observer.run(round, "detached", () => dialog.waitFor({ state: "detached" }))
+      await observer.run(round, "uid", async () => { expect(await page.evaluate(() => window.followerFixture.addRequests.at(-1)?.mid), raw).toBe(canonical) })
     }
-    expect(await page.evaluate(() => window.followerFixture.legacyCalls)).toEqual([])
-    expect(await page.evaluate(() => window.followerFixture.addRequests.length)).toBe(inputs.length)
+    await observer.run(0, "legacy", async () => { expect(await page.evaluate(() => window.followerFixture.legacyCalls)).toEqual([]) })
+    await observer.run(0, "count", async () => { expect(await page.evaluate(() => window.followerFixture.addRequests.length)).toBe(inputs.length) })
+    observer.finish()
   })
 
   it("shows a UID validation error for blank, fractional, overflow and invalid text without calling IPC", async () => {

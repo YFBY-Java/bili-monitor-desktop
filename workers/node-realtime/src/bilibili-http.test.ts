@@ -134,6 +134,13 @@ describe("Bilibili HTTPS phase deadlines", () => {
     await expect((await pending).json()).rejects.toMatchObject({ code: "BILIBILI_PARSE_ERROR",
       message: "Bilibili HTTP response is not valid JSON." })
   })
+  it("keeps balanced hexadecimal quality on original String responses", async () => {
+    const pending = getBilibiliJson(url, { configuration, headers: {}, responseText: "spring-string" })
+    socket.emit("secureConnect")
+    response.headers["content-type"] = `text/plain;q="0x1${"0".repeat(256)}p-1024"`
+    reply(); response.end(Buffer.from('{"data":"café"}', "latin1"))
+    expect(await (await pending).json()).toEqual({ data: "café" })
+  })
   it("keeps fetch-compatible UTF-8 BOM handling", async () => {
     const pending = begin(); socket.emit("secureConnect"); reply(); response.end('\uFEFF{"code":0}')
     expect(await (await pending).json()).toEqual({ code: 0 })

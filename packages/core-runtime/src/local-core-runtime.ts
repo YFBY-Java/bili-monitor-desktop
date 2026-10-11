@@ -12,6 +12,9 @@ import type {
   ListSubjectsInput,
   PlatformAccount,
   PlatformAccountList,
+  PlatformAdapterList,
+  PlatformCollectionExecution,
+  RunPlatformCollectionInput,
   BilibiliFollowerCollectResult,
   BilibiliFollowerCollectResultV2,
   BilibiliFollowerHttpConfiguration,
@@ -71,6 +74,7 @@ import type {
   SubjectList,
   SubjectSummary
 } from "@bmd/contracts"
+import { BilibiliWbiKeysSchema, UpdateBilibiliSubjectLayoutInputSchema } from "@bmd/contracts"
 import { ControlDatabase } from "@bmd/storage"
 
 import { AccountSubjectService } from "./account-subject-service"
@@ -81,8 +85,10 @@ import {
   type BilibiliFollowerSource
 } from "./bilibili-follower-service"
 import { BilibiliFollowerWorkerSource } from "./bilibili-follower-worker-source"
+import { PlatformCollectionService } from "./platform-collection-service"
 import {
   BilibiliLiveMonitorService,
+  type BilibiliLiveMonitorServiceOptions,
   type BilibiliLiveSource
 } from "./bilibili-live-service"
 import { BilibiliLiveWorkerSource } from "./bilibili-live-worker-source"
@@ -100,11 +106,18 @@ import {
 import { BilibiliLiveDanmakuWorkerSource } from "./bilibili-live-danmaku-worker-source"
 import { BilibiliLiveSessionService } from "./bilibili-live-session-service"
 import { BilibiliLiveSessionExportService } from "./bilibili-live-session-export-service"
+import { recoverExportSnapshotWorkspaces } from "./export-snapshot-workspace"
+import {
+  recoverExportPreparedWorkspaces, resolvePreparedExportMainContext, validatePreparedExportCredentialKey,
+  type PreparedExportMainContext
+} from "./export-prepared-workspace"
 import { BilibiliSubjectService } from "./bilibili-subject-service"
 import { legacyFollowerResponse } from "./legacy-follower-response"
 import { BILIBILI_LIVE_STORAGE_DEPENDENCY_ERROR_MESSAGE, BILIBILI_FOLLOWER_STORAGE_DEPENDENCY_ERROR_MESSAGE } from "@bmd/contracts"
 import { CoreApplicationError } from "./account-subject-service"
 import { loadSubjectMonitorConfiguration } from "./subject-monitor-config"
+import { loadLiveDanmakuConfiguration } from "./bilibili-live-danmaku-config"
+import { loadLiveRankConfiguration } from "./bilibili-live-rank-config"
 import { loadFollowerCollectionConfiguration } from "./bilibili-follower-collection-config"
 import { CredentialCipher } from "./credential-cipher"
 import { DouyinAuthService, type DouyinOAuthSource } from "./douyin-auth-service"
@@ -121,12 +134,13 @@ export interface LocalCoreRuntimeOptions {
   idFactory?: () => string
   followerSource?: BilibiliFollowerSource
   authSource?: BilibiliAuthSource
-  liveSource?: BilibiliLiveSource
+  liveSource?: BilibiliLiveMonitorServiceOptions["source"]
   liveRankSource?: BilibiliLiveRankSource
   liveDanmakuSource?: BilibiliLiveDanmakuSource
   douyinBrowserSource?: DouyinBrowserWorkerSource
   douyinOAuthSource?: DouyinOAuthSource
   credentialKey?: Uint8Array
+  mainContext?: PreparedExportMainContext
   schedulerEnabled?: boolean
   schedulerDelayMs?: number
 }
@@ -140,6 +154,10 @@ interface ResolvedLocalCoreRuntimeOptions {
 
 export class LocalCoreRuntime {
   private stopped = false
+  private stopPromise: Promise<void> | undefined
+  private readonly activeSessionExports = new Set<Promise<PreparedBilibiliLiveSessionExport>>()
+  private readonly sessionExportLifetime = new AbortController()
+  private sharedRealtimeTransport: NdjsonRealtimeWorkerTransport | undefined
 
   private constructor(
     private readonly options: ResolvedLocalCoreRuntimeOptions,
@@ -155,6 +173,7 @@ export class LocalCoreRuntime {
     private readonly liveDanmakuInstance: BilibiliLiveDanmakuService | undefined,
     private readonly bilibiliSubjectsInstance: BilibiliSubjectService | undefined,
     private readonly douyinAuth: DouyinAuthService,
+    private readonly platformCollection: PlatformCollectionService,
     private readonly startedAt: string
   ) {}
 
@@ -163,12 +182,15 @@ export class LocalCoreRuntime {
   private liveDanmakuScheduler: NodeJS.Timeout | undefined
   private schedulerEnabled = true
   private liveSchedulerDelayMs = 1_000
+  private liveDanmakuSchedulerDelayMs = 5_000
   private followerSchedulerDelayMs = 1_000
 
   static async start(options: LocalCoreRuntimeOptions): Promise<LocalCoreRuntime> {
     const liveConfiguration = await loadLiveCollectionConfiguration(options.dataDirectory, process.env)
     const followerConfiguration = await loadFollowerCollectionConfiguration(options.dataDirectory, process.env)
     const subjectConfiguration = await loadSubjectMonitorConfiguration(options.dataDirectory, process.env)
+    const danmakuConfiguration = await loadLiveDanmakuConfiguration(options.dataDirectory, process.env, liveConfiguration.storageEnabled)
+    const rankConfiguration = await loadLiveRankConfiguration(options.dataDirectory, process.env)
     // The original workbench has mandatory live repository/service dependencies.
     // Reject that invalid combination before any database or Worker is opened.
     if (subjectConfiguration.enabled && !liveConfiguration.storageEnabled) {
@@ -183,21 +205,26 @@ export class LocalCoreRuntime {
       now: options.now ?? (() => new Date()),
       idFactory: options.idFactory ?? randomUUID
     }
+    const credentialKey = options.credentialKey ?? credentialKeyFromEnvironment()
+    validatePreparedExportCredentialKey(credentialKey)
+    const mainContext = resolvePreparedExportMainContext(options.mainContext)
+    const exportDirectory = resolve(normalized.dataDirectory, "exports", "temp")
+    await recoverExportPreparedWorkspaces(exportDirectory, credentialKey)
+    await recoverExportSnapshotWorkspaces(exportDirectory)
     const database = await ControlDatabase.open(normalized.dataDirectory)
     const rateLimiter = new LocalRequestRateLimiter(normalized.now)
-    const credentialKey = options.credentialKey ?? credentialKeyFromEnvironment()
     const accountSubjects = new AccountSubjectService({
       database,
       now: normalized.now,
       idFactory: normalized.idFactory
     })
-    // The original public card client also serves live masked-name lookup independently of storage.
+    // The original public card adapter is available independently of monitor storage.
     const followerHttpConfiguration = {
       connectTimeoutMs: followerConfiguration.connectTimeoutMs, readTimeoutMs: followerConfiguration.readTimeoutMs,
       userAgent: followerConfiguration.userAgent, referer: followerConfiguration.referer
     }
-    const followerSource = followerConfiguration.storageEnabled || liveConfiguration.storageEnabled
-      ? options.followerSource ?? LocalCoreRuntime.defaultFollowerSource(normalized, followerHttpConfiguration) : undefined
+    const followerSource = options.followerSource ?? LocalCoreRuntime.defaultFollowerSource(normalized, followerHttpConfiguration)
+    const platformCollection = new PlatformCollectionService({ source: followerSource, idFactory: normalized.idFactory })
     const followers = followerConfiguration.storageEnabled && followerSource ? new BilibiliFollowerMonitorService({
       database,
       rateLimiter,
@@ -235,6 +262,8 @@ export class LocalCoreRuntime {
       database,
       sessions: liveSessions,
       exportDirectory: resolve(normalized.dataDirectory, "exports", "temp"),
+      credentialKey,
+      mainContext,
       now: normalized.now,
       idFactory: normalized.idFactory
     }) : undefined
@@ -242,6 +271,16 @@ export class LocalCoreRuntime {
       connectTimeoutMs: liveConfiguration.connectTimeoutMs, readTimeoutMs: liveConfiguration.readTimeoutMs,
       userAgent: liveConfiguration.userAgent, referer: liveConfiguration.referer
     }
+    const credentialProvider = async () => {
+      try { return auth.connectionCredential() } catch { return undefined }
+    }
+    const sharedRealtimeTransport = liveConfiguration.storageEnabled && ((rankConfiguration.enabled && !options.liveRankSource) || !options.liveDanmakuSource)
+      ? LocalCoreRuntime.defaultRealtimeTransport(normalized, async () => {
+        const current = await credentialProvider()
+        const authUid = current?.account?.mid
+        return current?.cookieHeader && authUid && /^[1-9]\d*$/u.test(authUid)
+          ? { cookieHeader: current.cookieHeader, authUid } : undefined
+      }) : undefined
     const live = liveSessions ? new BilibiliLiveMonitorService({
       database,
       rateLimiter,
@@ -261,16 +300,39 @@ export class LocalCoreRuntime {
       idFactory: normalized.idFactory,
       sessionObserver: liveSessions
     }) : undefined
-    const liveRanks = liveConfiguration.storageEnabled ? new BilibiliLiveRankService({
+    const liveRanks = liveConfiguration.storageEnabled && rankConfiguration.enabled ? new BilibiliLiveRankService({
       database,
       rateLimiter,
-      source: options.liveRankSource ?? LocalCoreRuntime.defaultLiveRankSource(normalized, liveHttpConfiguration),
+      source: options.liveRankSource ?? LocalCoreRuntime.defaultLiveRankSource(normalized, liveHttpConfiguration,
+        danmakuConfiguration.wbiCacheSeconds, sharedRealtimeTransport),
+      pageSize: rankConfiguration.pageSize,
+      guardPageSize: rankConfiguration.guardPageSize,
+      maxPages: rankConfiguration.maxPages,
+      requestMinIntervalMs: rankConfiguration.requestMinIntervalMs,
+      webLocation: rankConfiguration.webLocation,
       now: normalized.now,
       idFactory: normalized.idFactory
     }) : undefined
     const liveDanmaku = liveSessions ? new BilibiliLiveDanmakuService({
       database,
-      source: options.liveDanmakuSource ?? LocalCoreRuntime.defaultLiveDanmakuSource(normalized, liveHttpConfiguration),
+      enabled: danmakuConfiguration.enabled,
+      autoStartEnabled: danmakuConfiguration.autoStartEnabled,
+      maxConnections: danmakuConfiguration.maxConnections,
+      protocolVersion: danmakuConfiguration.protocolVersion,
+      recentMessageLimitPerRoom: danmakuConfiguration.recentMessageLimitPerRoom,
+      bucketSeconds: danmakuConfiguration.bucketSeconds,
+      cacheConfiguration: {
+        wbiCacheSeconds: danmakuConfiguration.wbiCacheSeconds,
+        buvidCacheSeconds: danmakuConfiguration.buvidCacheSeconds
+      },
+      connectionConfiguration: {
+        heartbeatSeconds: danmakuConfiguration.heartbeatSeconds,
+        connectTimeoutMs: danmakuConfiguration.connectTimeoutMs,
+        useLoginCredential: danmakuConfiguration.useLoginCredential,
+        webLocation: danmakuConfiguration.webLocation,
+        clientVersion: danmakuConfiguration.clientVersion
+      },
+      source: options.liveDanmakuSource ?? LocalCoreRuntime.defaultLiveDanmakuSource(sharedRealtimeTransport, liveHttpConfiguration),
       now: normalized.now,
       idFactory: normalized.idFactory,
       sessionSink: liveSessions,
@@ -280,13 +342,7 @@ export class LocalCoreRuntime {
           leaseId: normalized.idFactory(), attempt: 1 })
         return profile?.nickname.trim() || undefined
       },
-      credentialProvider: async () => {
-        try {
-          return auth.connectionCredential()
-        } catch {
-          return undefined
-        }
-      }
+      credentialProvider
     }) : undefined
     const bilibiliSubjects = subjectConfiguration.enabled && followers && live && liveDanmaku ? new BilibiliSubjectService({
       database,
@@ -329,9 +385,12 @@ export class LocalCoreRuntime {
       liveDanmaku,
       bilibiliSubjects,
       douyinAuth,
+      platformCollection,
       normalized.now().toISOString()
     )
+    runtime.sharedRealtimeTransport = sharedRealtimeTransport
     runtime.schedulerEnabled = options.schedulerEnabled ?? true
+    runtime.liveDanmakuSchedulerDelayMs = danmakuConfiguration.schedulerDelayMs
     runtime.liveSchedulerDelayMs = options.schedulerDelayMs === undefined
       ? liveConfiguration.schedulerDelayMs : Math.max(1_000, options.schedulerDelayMs)
     runtime.followerSchedulerDelayMs = options.schedulerDelayMs === undefined
@@ -339,7 +398,7 @@ export class LocalCoreRuntime {
     if (runtime.schedulerEnabled) {
       if (followers && followerConfiguration.enabled) runtime.startFollowerScheduler(0)
       if (live && liveConfiguration.enabled) runtime.startLiveScheduler(0)
-      if (liveDanmaku) runtime.startLiveDanmakuScheduler()
+      if (liveDanmaku) runtime.startLiveDanmakuScheduler(0)
     }
     return runtime
   }
@@ -375,6 +434,16 @@ export class LocalCoreRuntime {
   listPlatformAccounts(input?: ListPlatformAccountsInput): PlatformAccountList {
     this.ensureRunning()
     return this.accountSubjects.listPlatformAccounts(input)
+  }
+
+  listPlatformAdapters(): PlatformAdapterList {
+    this.ensureRunning()
+    return this.platformCollection.listAdapters()
+  }
+
+  runPlatformCollection(input: RunPlatformCollectionInput): Promise<PlatformCollectionExecution> {
+    this.ensureRunning()
+    return this.platformCollection.runOnce(input)
   }
 
   createSubject(input: CreateSubjectInput): SubjectSummary {
@@ -508,6 +577,61 @@ export class LocalCoreRuntime {
     return this.auth.revokeCurrentCredential()
   }
 
+  addBilibiliLiveRoomV2(input: AddBilibiliLiveRoomInput): Promise<import("@bmd/contracts").BilibiliLiveRoomV2> {
+    this.ensureRunning()
+    return this.live.addRoomV2(input)
+  }
+
+  listBilibiliLiveRoomsV2(input?: { limit?: number }): import("@bmd/contracts").BilibiliLiveRoomListV2 {
+    this.ensureRunning()
+    return this.live.listRoomsV2(input)
+  }
+
+  updateBilibiliLiveRoomStatusV2(roomMonitorId: string, enabled: boolean): import("@bmd/contracts").BilibiliLiveRoomV2 {
+    this.ensureRunning()
+    return this.live.updateStatusV2(roomMonitorId, enabled)
+  }
+
+  updateBilibiliLiveRoomSettingsV2(roomMonitorId: string, intervalSeconds: number): import("@bmd/contracts").BilibiliLiveRoomV2 {
+    this.ensureRunning()
+    return this.live.updateIntervalV2(roomMonitorId, intervalSeconds)
+  }
+
+  refreshBilibiliLiveRoomV2(roomMonitorId: string): Promise<import("@bmd/contracts").BilibiliLiveCollectResultV2> {
+    this.ensureRunning()
+    return this.live.refreshNowV2(roomMonitorId)
+  }
+
+  getBilibiliLiveSummaryV2(): import("@bmd/contracts").BilibiliLiveSummaryV2 {
+    this.ensureRunning()
+    return this.live.summaryV2()
+  }
+
+  queryBilibiliLiveTrendV2(input: {
+    roomMonitorId: string
+    from?: string
+    to?: string
+    limit?: number
+  }): import("@bmd/contracts").BilibiliLiveRoomTrendV2 {
+    this.ensureRunning()
+    return this.live.trendV2(input)
+  }
+
+  queryBilibiliLiveTrendsV2(input?: {
+    roomMonitorIds?: string[]
+    from?: string
+    to?: string
+    limitPerRoom?: number
+  }): import("@bmd/contracts").BilibiliLiveRoomTrendV2[] {
+    this.ensureRunning()
+    return this.live.trendsV2(input)
+  }
+
+  listBilibiliLiveEventsV2(input?: { limit?: number }): import("@bmd/contracts").BilibiliLiveStatusEventV2[] {
+    this.ensureRunning()
+    return this.live.eventsV2(input)
+  }
+
   addBilibiliLiveRoom(input: AddBilibiliLiveRoomInput): Promise<BilibiliLiveRoom> {
     this.ensureRunning()
     return this.live.addRoom(input)
@@ -566,6 +690,21 @@ export class LocalCoreRuntime {
   listBilibiliLiveEvents(input?: { limit?: number }): BilibiliLiveStatusEvent[] {
     this.ensureRunning()
     return this.live.events(input)
+  }
+
+  getBilibiliLiveRankSummaryV2(roomMonitorId: string) {
+    this.ensureRunning()
+    return this.liveRanks.summaryV2(roomMonitorId)
+  }
+
+  getLatestBilibiliLiveRankV2(input: BilibiliLiveRankLatestInput) {
+    this.ensureRunning()
+    return this.liveRanks.latestV2(input)
+  }
+
+  refreshBilibiliLiveRanksV2(input: BilibiliLiveRankRefreshInput) {
+    this.ensureRunning()
+    return this.liveRanks.refreshV2(input)
   }
 
   getBilibiliLiveRankSummary(roomMonitorId: string): BilibiliLiveRankSummary {
@@ -649,11 +788,18 @@ export class LocalCoreRuntime {
     return this.liveSessions.insight(input)
   }
 
-  prepareBilibiliLiveSessionExport(
-    input: ExportBilibiliLiveSessionInput
+  async prepareBilibiliLiveSessionExport(
+    input: ExportBilibiliLiveSessionInput,
+    reportProgress?: () => void
   ): Promise<PreparedBilibiliLiveSessionExport> {
     this.ensureRunning()
-    return this.liveSessionExports.prepare(input)
+    const operation = this.liveSessionExports.prepare(input, reportProgress, this.sessionExportLifetime.signal)
+    this.activeSessionExports.add(operation)
+    try {
+      return await operation
+    } finally {
+      this.activeSessionExports.delete(operation)
+    }
   }
 
   createBilibiliSubject(input: CreateBilibiliSubjectInput): Promise<BilibiliSubject> {
@@ -700,6 +846,16 @@ export class LocalCoreRuntime {
     return legacyFollowerResponse(() => this.bilibiliSubjects.trends(input))
   }
 
+  getBilibiliSubjectWorkbenchV3(subjectId: string): import("@bmd/contracts").BilibiliSubjectWorkbenchV3 {
+    this.ensureRunning()
+    return this.bilibiliSubjects.workbenchV3(subjectId)
+  }
+
+  queryBilibiliSubjectTrendsV3(input: QueryBilibiliSubjectTrendsInput): import("@bmd/contracts").BilibiliSubjectTrendV3 {
+    this.ensureRunning()
+    return this.bilibiliSubjects.trendsV3(input)
+  }
+
   getBilibiliSubjectWorkbenchV2(subjectId: string): BilibiliSubjectWorkbenchV2 {
     this.ensureRunning()
     return this.bilibiliSubjects.workbenchV2(subjectId)
@@ -714,7 +870,7 @@ export class LocalCoreRuntime {
     input: UpdateBilibiliSubjectLayoutInput
   ): BilibiliSubjectWidgetLayout[] {
     this.ensureRunning()
-    return this.bilibiliSubjects.updateLayout(input)
+    return this.bilibiliSubjects.updateLayout(UpdateBilibiliSubjectLayoutInputSchema.parse(input))
   }
 
   getDouyinAuthStatus() {
@@ -767,19 +923,29 @@ export class LocalCoreRuntime {
     return this.douyinAuth.revoke(kind)
   }
 
-  async stop(): Promise<void> {
-    if (this.stopped) return
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise
     this.stopped = true
+    this.sessionExportLifetime.abort()
+    this.platformCollection.stop()
     if (this.followerScheduler) clearTimeout(this.followerScheduler)
     if (this.liveScheduler) clearTimeout(this.liveScheduler)
-    if (this.liveDanmakuScheduler) clearInterval(this.liveDanmakuScheduler)
+    if (this.liveDanmakuScheduler) clearTimeout(this.liveDanmakuScheduler)
     this.followerScheduler = undefined
     this.liveScheduler = undefined
     this.liveDanmakuScheduler = undefined
+    this.stopPromise = this.finishStop()
+    return this.stopPromise
+  }
+
+  private async finishStop(): Promise<void> {
     // Disable writes/queued upgrades before waiting for any worker's shutdown.
     await Promise.all([this.followersInstance?.stop(), this.independentProfileSource?.stop?.(), this.auth.stop(), this.liveDanmakuInstance?.stopAll(),
-      this.liveInstance?.stop(), this.liveRanksInstance?.stop()])
+      this.liveInstance?.stop(), this.liveRanksInstance?.stop(), this.sharedRealtimeTransport?.stop()])
     await this.douyinAuth.stop()
+    // In-flight exports can resume their SQLite snapshot after mkdir/mkdtemp yields.
+    // Wait for cancelled output streams and snapshot cleanup before closing the shared database.
+    await Promise.allSettled(this.activeSessionExports)
     this.database.close()
   }
 
@@ -794,7 +960,14 @@ export class LocalCoreRuntime {
     return this.followersInstance
   }
   private get live() { return requireLiveStorageService(this.liveInstance) }
-  private get liveRanks() { return requireLiveStorageService(this.liveRanksInstance) }
+  private get liveRanks(): BilibiliLiveRankService {
+    // Preserve the broader storage-disabled error before reporting a rank-only switch.
+    requireLiveStorageService(this.liveInstance)
+    if (!this.liveRanksInstance) {
+      throw new CoreApplicationError("BILIBILI_LIVE_RANK_DISABLED", "榜单业务已由启动配置关闭。启用后重启客户端可恢复，已有榜单数据不会删除。")
+    }
+    return this.liveRanksInstance
+  }
   private get liveDanmaku() { return requireLiveStorageService(this.liveDanmakuInstance) }
   private get liveSessions() { return requireLiveStorageService(this.liveSessionsInstance) }
   private get liveSessionExports() { return requireLiveStorageService(this.liveSessionExportsInstance) }
@@ -825,7 +998,7 @@ export class LocalCoreRuntime {
     this.liveScheduler = setTimeout(() => {
       this.liveScheduler = undefined
       if (this.stopped) return
-      void this.live.collectDueRooms().catch(() => {
+      void this.live.collectDueRoomsV2().catch(() => {
         if (!this.stopped) console.warn(JSON.stringify({
           event: "bilibili.live.scheduler-failed", code: "BILIBILI_LIVE_SCHEDULER_FAILED"
         }))
@@ -836,11 +1009,18 @@ export class LocalCoreRuntime {
     this.liveScheduler.unref()
   }
 
-  private startLiveDanmakuScheduler(): void {
-    this.liveDanmakuScheduler = setInterval(() => {
+  private startLiveDanmakuScheduler(delayMs = this.liveDanmakuSchedulerDelayMs): void {
+    this.liveDanmakuScheduler = setTimeout(() => {
+      this.liveDanmakuScheduler = undefined
       if (this.stopped) return
-      void this.liveDanmaku.syncAutoConnections()
-    }, 5_000)
+      void this.liveDanmaku.syncAutoConnections().catch(() => {
+        if (!this.stopped) console.warn(JSON.stringify({
+          event: "bilibili.danmaku.scheduler-failed", code: "BILIBILI_DANMAKU_SCHEDULER_FAILED"
+        }))
+      }).finally(() => {
+        if (!this.stopped) this.startLiveDanmakuScheduler()
+      })
+    }, delayMs)
     this.liveDanmakuScheduler.unref()
   }
 
@@ -905,7 +1085,9 @@ export class LocalCoreRuntime {
 
   private static defaultLiveRankSource(
     options: ResolvedLocalCoreRuntimeOptions,
-    httpConfiguration: BilibiliLiveHttpConfiguration
+    httpConfiguration: BilibiliLiveHttpConfiguration,
+    wbiCacheSeconds: number,
+    sharedRealtimeTransport: NdjsonRealtimeWorkerTransport | undefined
   ): BilibiliLiveRankSource {
     const repositoryRoot = process.env.BMD_REPOSITORY_ROOT
     const pythonExecutable = process.env.BMD_PYTHON_EXE
@@ -913,29 +1095,39 @@ export class LocalCoreRuntime {
     const pythonPath = process.env.BMD_PYTHON_WORKER_PATH ?? (repositoryRoot
       ? resolve(repositoryRoot, "workers", "python", "src")
       : resolve(process.cwd(), "workers", "python", "src"))
-    if (!pythonExecutable) return unavailableLiveRankSource()
+    if (!pythonExecutable || !sharedRealtimeTransport) return unavailableLiveRankSource()
     return new BilibiliLiveRankWorkerSource(new NdjsonPythonWorkerTransport({
       pythonExecutable,
       pythonPath,
       dataDirectory: options.dataDirectory,
       role: "crawler",
       standaloneExecutable: process.env.BMD_PYTHON_STANDALONE === "1"
-    }), httpConfiguration)
+    }), httpConfiguration, wbiCacheSeconds, async (forceRefresh, signal) => BilibiliWbiKeysSchema.parse(
+      await sharedRealtimeTransport.request("getWbiKeys", { forceRefresh, wbiCacheSeconds, httpConfiguration }, { signal })
+    ))
   }
 
   private static defaultLiveDanmakuSource(
-    options: ResolvedLocalCoreRuntimeOptions,
+    sharedRealtimeTransport: NdjsonRealtimeWorkerTransport | undefined,
     httpConfiguration: BilibiliLiveHttpConfiguration
   ): BilibiliLiveDanmakuSource {
+    if (!sharedRealtimeTransport) return unavailableLiveDanmakuSource()
+    return new BilibiliLiveDanmakuWorkerSource(sharedRealtimeTransport, httpConfiguration)
+  }
+
+  private static defaultRealtimeTransport(options: ResolvedLocalCoreRuntimeOptions,
+    credentialProvider: () => Promise<{ cookieHeader: string; authUid: string } | undefined>
+  ): NdjsonRealtimeWorkerTransport | undefined {
     const nodeExecutable = process.env.BMD_NODE_EXE?.trim()
     const workerEntry = process.env.BMD_REALTIME_WORKER_ENTRY?.trim()
-    if (!nodeExecutable || !workerEntry) return unavailableLiveDanmakuSource()
-    return new BilibiliLiveDanmakuWorkerSource(new NdjsonRealtimeWorkerTransport({
+    if (!nodeExecutable || !workerEntry) return undefined
+    return new NdjsonRealtimeWorkerTransport({
       nodeExecutable,
       workerEntry,
       dataDirectory: options.dataDirectory,
-      requestTimeoutMs: 30_000
-    }), httpConfiguration)
+      requestTimeoutMs: 30_000,
+      credentialProvider
+    })
   }
 
   private static defaultDouyinBrowserSource(

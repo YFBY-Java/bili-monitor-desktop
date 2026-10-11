@@ -1,0 +1,38 @@
+[
+  {
+    "name": "exact number, emoji and literal escape remain valid",
+    "extra": "{\"emoji\":\"\\ud83c\\udf38\",\"literal\":\"\\\\u0000\",\"exact\":9007199254740993,\"small\":1e-16383,\"large\":1e131071,\"zero\":0e131072}",
+    "trailing": "",
+    "status": "ACCEPTED"
+  },
+  {
+    "name": "overwritten duplicate value still contains NUL",
+    "extra": "{\"duplicate\":\"\\u0000\",\"duplicate\":\"valid\"}",
+    "trailing": "",
+    "status": "NUL"
+  },
+  {
+    "name": "unused object key has an isolated surrogate",
+    "extra": "{\"\\ud800\":\"unused\"}",
+    "trailing": "",
+    "status": "INVALID_UNICODE"
+  },
+  {
+    "name": "unused number exceeds numeric storage weight",
+    "extra": "1e131072",
+    "trailing": "",
+    "status": "NUMBER_OUT_OF_RANGE"
+  },
+  {
+    "name": "unused number exceeds numeric storage scale",
+    "extra": "1e-16384",
+    "trailing": "",
+    "status": "NUMBER_OUT_OF_RANGE"
+  },
+  {
+    "name": "Jackson first root succeeds but JSONB rejects another root",
+    "extra": "null",
+    "trailing": " {}",
+    "status": "INVALID_JSON"
+  }
+]

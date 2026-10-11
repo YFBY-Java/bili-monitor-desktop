@@ -20,6 +20,43 @@ FETCHED = Draft202012Validator({**SCHEMA, "$ref": "#/$defs/BilibiliFollowerFetch
 STORED = Draft202012Validator({**SCHEMA, "$ref": "#/$defs/BilibiliFollowerMonitor"})
 
 
+def test_shared_jdk20_numeric_profile():
+    cases = json.loads((CONTRACTS / "fixtures/java-double-text.json").read_text("utf-8"))
+    for case in cases:
+        token, expected = case["token"], case["text"]
+        raw = (
+            '{"code":0,"data":{"card":{"mid":2,"name":'
+            + token
+            + ',"face":'
+            + token
+            + '},"follower":10}}'
+        )
+        value = parse_card_response(raw, "2026-10-05T00:00:00Z")
+        assert (value["nickname"], value["avatarUrl"]) == (expected, expected), case["name"]
+
+
+def test_shared_jdk20_independent_follower_message():
+    cases = json.loads((CONTRACTS / "fixtures/java-double-text.json").read_text("utf-8"))
+    for case in cases:
+        token, expected = case["token"], case["text"]
+        with pytest.raises(BilibiliCrawlerError) as raised:
+            parse_card_response('{"code":-101,"message":' + token + "}", "2026-10-05T00:00:00Z")
+        assert str(raised.value) == expected, case["name"]
+
+
+def test_numeric_text_keeps_integer_negative_zero_and_rejects_non_json_literals():
+    for token, expected in [("-0", "0"), ("-0e0", "-0.0")]:
+        value = parse_card_response(
+            '{"code":0,"data":{"card":{"mid":2,"name":' + token + '},"follower":10}}',
+            "2026-10-05T00:00:00Z",
+        )
+        assert value["nickname"] == expected
+    for token in ["NaN", "Infinity", "-Infinity"]:
+        with pytest.raises(BilibiliCrawlerError) as raised:
+            parse_card_response('{"code":-101,"message":' + token + "}", "2026-10-05T00:00:00Z")
+        assert raised.value.code == "BILIBILI_PARSE_ERROR"
+
+
 @pytest.mark.parametrize("fixture", TEXTS, ids=[item["name"] for item in TEXTS])
 def test_shared_raw_profile_text(fixture):
     value = fixture["input"]

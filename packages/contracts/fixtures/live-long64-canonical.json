@@ -1,0 +1,14 @@
+[
+  {"name":"zero","value":"0","valid":true},
+  {"name":"ordinary","value":"12345","valid":true},
+  {"name":"negative","value":"-1","valid":true},
+  {"name":"adjacent","value":"9007199254740993","valid":true},
+  {"name":"minimum","value":"-9223372036854775808","valid":true},
+  {"name":"maximum","value":"9223372036854775807","valid":true},
+  {"name":"range","value":"9223372036854775808","valid":false},
+  {"name":"plus","value":"+1","valid":false},
+  {"name":"leading-zero","value":"01","valid":false},
+  {"name":"negative-zero","value":"-0","valid":false},
+  {"name":"number","value":1,"valid":false},
+  {"name":"null","value":null,"valid":false}
+]

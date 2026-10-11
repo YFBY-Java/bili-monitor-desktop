@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["connectHost", "protocolVersion", "authMode", "status", "attempt"],
+  "properties": {
+    "connectHost": { "type": "string", "format": "uri" },
+    "protocolVersion": { "type": "integer", "minimum": 0, "maximum": 3 },
+    "authMode": { "enum": ["ANONYMOUS", "LOGIN"] },
+    "authUid": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+    "status": { "enum": ["AUTHENTICATING", "CONNECTED"] },
+    "attempt": { "type": "integer", "minimum": 1 }
+  }
+}

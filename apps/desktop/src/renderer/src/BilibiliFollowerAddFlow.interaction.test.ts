@@ -1,10 +1,10 @@
 import { fileURLToPath } from "node:url"
-import { resolve } from "node:path"
 
 import react from "@vitejs/plugin-react"
 import { chromium, type Browser, type Page } from "playwright"
 import { createServer, type ViteDevServer } from "vite"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { browserFixtureCacheDirectory } from "./__fixtures__/browser-fixture-cache"
 
 // Only the narrow bridge is simulated; these assertions exercise the real React
 // workspace, Query lifecycle, drawers and original add/list/trend ordering.
@@ -26,7 +26,7 @@ describe("original follower add flow and drawer ownership", () => {
 
   beforeAll(async () => {
     server = await createServer({ configFile: false, root: fileURLToPath(new URL(".", import.meta.url)),
-      cacheDir: resolve("node_modules/.vite-follower-add-flow-test"),
+      cacheDir: browserFixtureCacheDirectory,
       plugins: [react()], server: { host: "127.0.0.1", port: 0 }, logLevel: "error" })
     await server.listen()
     const address = server.httpServer!.address()

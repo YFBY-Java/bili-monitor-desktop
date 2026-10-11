@@ -48,14 +48,7 @@ import {
 } from "lucide-react"
 import type { DesktopBridge } from "@bmd/contracts"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { useEffect, useMemo, useState, type JSX } from "react"
-
-import { ConnectedAccountSubjectWorkspace } from "./AccountSubjectWorkspace"
-import { ConnectedBilibiliAuthPanel } from "./BilibiliAuthPanel"
-import { ConnectedBilibiliFollowerWorkspace } from "./BilibiliFollowerWorkspace"
-import { ConnectedBilibiliLiveWorkspace } from "./BilibiliLiveWorkspace"
-import { ConnectedBilibiliSubjectWorkspace } from "./BilibiliSubjectWorkspace"
-import { ConnectedDouyinAuthWorkspace } from "./DouyinAuthWorkspace"
+import { Component, lazy, Suspense, useEffect, useMemo, useState, type JSX, type ReactNode } from "react"
 import { resolvePageId } from "./navigation-state"
 import {
   findProductPage,
@@ -65,6 +58,32 @@ import {
   type ProductPage,
   type Tone
 } from "./product-model"
+
+// Keep component identities stable, and load only the selected business page.
+const ConnectedAccountSubjectWorkspace = lazy(() => import("./AccountSubjectWorkspace").then(module => ({ default: module.ConnectedAccountSubjectWorkspace })))
+const ConnectedBilibiliAuthPanel = lazy(() => import("./BilibiliAuthPanel").then(module => ({ default: module.ConnectedBilibiliAuthPanel })))
+const ConnectedBilibiliFollowerWorkspace = lazy(() => import("./BilibiliFollowerWorkspace").then(module => ({ default: module.ConnectedBilibiliFollowerWorkspace })))
+const ConnectedBilibiliLiveWorkspace = lazy(() => import("./BilibiliLiveWorkspace").then(module => ({ default: module.ConnectedBilibiliLiveWorkspace })))
+const ConnectedBilibiliSubjectWorkspace = lazy(() => import("./BilibiliSubjectWorkspace").then(module => ({ default: module.ConnectedBilibiliSubjectWorkspace })))
+const ConnectedDouyinAuthWorkspace = lazy(() => import("./DouyinAuthWorkspace").then(module => ({ default: module.ConnectedDouyinAuthWorkspace })))
+const ConnectedPlatformCollectionWorkspace = lazy(() => import("./PlatformCollectionWorkspace").then(module => ({ default: module.ConnectedPlatformCollectionWorkspace })))
+
+class WorkspaceModuleBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true }
+  }
+
+  render(): ReactNode {
+    return this.state.failed ? (
+      <div className="workspace-error" role="alert">
+        <span>页面加载失败，请重新加载。</span>
+        <button className="small-button" type="button" onClick={() => window.location.reload()}>重新加载页面</button>
+      </div>
+    ) : this.props.children
+  }
+}
 
 const iconMap: Record<IconName, LucideIcon> = {
   activity: Activity,
@@ -177,6 +196,7 @@ function Sidebar({
                   key={item.pageId}
                   type="button"
                   title={collapsed ? item.label : undefined}
+                  aria-label={item.label}
                   aria-current={active ? "page" : undefined}
                   onClick={() => onNavigate(item.pageId)}
                 >
@@ -680,7 +700,10 @@ export function DesktopWorkspace({
   const [queryClient] = useState(() => new QueryClient({
     defaultOptions: { queries: { staleTime: 15_000, retry: 1 } }
   }))
-  const [activePageId, setActivePageId] = useState<PageId>(initialPageId)
+  const [requestedPage, setRequestedPage] = useState<string>(() =>
+    typeof window !== "undefined" && window.location.hash ? window.location.hash : initialPageId)
+  // Resolve against the same current menu as Sidebar, even if an older listener survives a hot update.
+  const activePageId = resolvePageId(requestedPage, navigationGroups)
   const [collapsed, setCollapsed] = useState(false)
   const [theme, setTheme] = useState<ThemeMode>("light")
   const page = findProductPage(activePageId) ?? findProductPage("bilibili-followers")
@@ -692,7 +715,7 @@ export function DesktopWorkspace({
     const savedTheme = window.localStorage.getItem("bmd-theme")
     if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme)
 
-    const handleHashChange = (): void => setActivePageId(resolvePageId(window.location.hash))
+    const handleHashChange = (): void => setRequestedPage(window.location.hash)
     window.addEventListener("hashchange", handleHashChange)
     return () => {
       window.removeEventListener("hashchange", handleHashChange)
@@ -703,7 +726,7 @@ export function DesktopWorkspace({
 
   const activeTab = activeTabs[page.id] ?? page.tabs[0] ?? "概览"
   const navigate = (pageId: PageId): void => {
-    setActivePageId(pageId)
+    setRequestedPage(pageId)
     setCreationPageId(undefined)
     if (typeof window !== "undefined") window.location.hash = pageId
   }
@@ -717,10 +740,12 @@ export function DesktopWorkspace({
 
   const businessPageId = page.id === "platform-accounts" || page.id === "subjects" ? page.id : undefined
   const followerPage = page.id === "bilibili-followers"
-  const livePage = page.id === "bilibili-live"
+  const livePage = page.id === "bilibili-live" || page.id === "live-data" || page.id === "live-analytics"
   const subjectPage = page.id === "bilibili-subjects"
   const douyinPage = page.id === "douyin-auth"
-  const originalBusinessPage = subjectPage || followerPage || livePage || douyinPage
+  const platformPage = page.id === "platform-collection"
+  const customHeaderPage = douyinPage || platformPage
+  const originalBusinessPage = subjectPage || followerPage || livePage || customHeaderPage
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -737,7 +762,7 @@ export function DesktopWorkspace({
         {!originalBusinessPage && ((businessPageId && businessBridge) ? <BusinessSignalTape page={page} /> : <SignalTape />)}
         <div className={`workspace-layout ${originalBusinessPage ? "is-single-pane" : ""}`}>
           <main className="workspace-main">
-            {!douyinPage && <WorkspaceHeader
+            {!customHeaderPage && <WorkspaceHeader
               page={page}
               onPrimaryAction={businessPageId
                 ? () => setCreationPageId(businessPageId)
@@ -749,12 +774,20 @@ export function DesktopWorkspace({
                     ? () => setCreationPageId("bilibili-live")
                   : undefined}
             />}
-            {followerPage && businessBridge && <ConnectedBilibiliAuthPanel bridge={businessBridge} />}
-            {!douyinPage && <TabRail
+            {followerPage && businessBridge && (
+              <WorkspaceModuleBoundary key={`auth-${page.id}`}>
+                <Suspense fallback={<p className="workspace-loading" role="status">正在加载登录面板…</p>}>
+                  <ConnectedBilibiliAuthPanel bridge={businessBridge} />
+                </Suspense>
+              </WorkspaceModuleBoundary>
+            )}
+            {!customHeaderPage && page.tabs.length > 0 && <TabRail
               page={page}
               activeTab={activeTab}
               onChange={(tab) => setActiveTabs((tabs) => ({ ...tabs, [page.id]: tab }))}
             />}
+            <WorkspaceModuleBoundary key={`workspace-${livePage ? "bilibili-live" : page.id}`}>
+            <Suspense fallback={<p className="workspace-loading" role="status">正在加载业务页面…</p>}>
             {subjectPage && businessBridge ? (
               <ConnectedBilibiliSubjectWorkspace
                 bridge={businessBridge}
@@ -775,27 +808,33 @@ export function DesktopWorkspace({
               <ConnectedBilibiliLiveWorkspace
                 bridge={businessBridge}
                 view={
-                  activeTab === "趋势对比"
-                    ? "趋势对比"
-                    : activeTab === "状态事件"
-                      ? "状态事件"
-                      : activeTab === "观众榜单"
-                        ? "观众榜单"
-                        : activeTab === "实时弹幕"
-                          ? "实时弹幕"
-                          : activeTab === "直播场次"
-                            ? "直播场次"
-                            : activeTab === "数据中心"
-                              ? "数据中心"
-                              : activeTab === "场次分析"
-                                ? "场次分析"
-                          : "直播间"
+                  page.id === "live-data"
+                    ? "数据中心"
+                    : page.id === "live-analytics"
+                      ? "场次分析"
+                      : activeTab === "趋势对比"
+                        ? "趋势对比"
+                        : activeTab === "状态事件"
+                          ? "状态事件"
+                          : activeTab === "观众榜单"
+                            ? "观众榜单"
+                            : activeTab === "实时弹幕"
+                              ? "实时弹幕"
+                              : activeTab === "直播场次"
+                                ? "直播场次"
+                                : activeTab === "数据中心"
+                                  ? "数据中心"
+                                  : activeTab === "场次分析"
+                                    ? "场次分析"
+                                    : "直播间"
                 }
                 creationOpen={creationPageId === "bilibili-live"}
                 onCloseCreation={() => setCreationPageId(undefined)}
               />
             ) : douyinPage && businessBridge ? (
               <ConnectedDouyinAuthWorkspace bridge={businessBridge} />
+            ) : platformPage && businessBridge ? (
+              <ConnectedPlatformCollectionWorkspace bridge={businessBridge} />
             ) : businessPageId && businessBridge ? (
               <ConnectedAccountSubjectWorkspace
                 bridge={businessBridge}
@@ -809,7 +848,11 @@ export function DesktopWorkspace({
                 {page.id === "command-center" ? <CommandCenterContent page={page} /> : <DomainContent page={page} />}
               </>
             )}
-            {douyinPage && businessBridge ? (
+            </Suspense>
+            </WorkspaceModuleBoundary>
+            {platformPage && businessBridge ? (
+              <footer className="workspace-footer"><span><ToneDot tone="mint" />本地 Adapter 与单次采集</span><span>只有原项目真实能力可执行</span><span>PLATFORM / 1.0</span></footer>
+            ) : douyinPage && businessBridge ? (
               <footer className="workspace-footer">
                 <span><ToneDot tone="mint" />本地抖音登录态 · SQLite v11</span>
                 <span>Web 会话与 OAuth 凭据独立加密保存</span>

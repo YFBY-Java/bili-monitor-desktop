@@ -1,0 +1,9 @@
+[
+  { "name": "authenticating-result", "kind": "result", "valid": true, "input": { "status": "AUTHENTICATING", "attempt": 1, "connectHost": "wss://example.test/sub", "protocolVersion": 3, "authMode": "ANONYMOUS" } },
+  { "name": "connecting", "kind": "event", "valid": true, "input": { "type": "connecting", "attempt": 2, "receivedAt": "2026-10-06T08:00:00.000Z", "connectHost": "wss://example.test/sub", "protocolVersion": 2, "authMode": "LOGIN", "authUid": "7" } },
+  { "name": "attempt-failed", "kind": "event", "valid": true, "input": { "type": "attempt-failed", "attempt": 1, "receivedAt": "2026-10-06T08:00:00.000Z", "code": "BILIBILI_UNKNOWN_ERROR", "message": "" } },
+  { "name": "connected", "kind": "event", "valid": true, "input": { "type": "connected", "attempt": 2, "receivedAt": "2026-10-06T08:00:00.000Z" } },
+  { "name": "heartbeat-sent", "kind": "event", "valid": true, "input": { "type": "heartbeat-sent", "attempt": 2, "receivedAt": "2026-10-06T08:00:00.000Z" } },
+  { "name": "missing-result-status", "kind": "result", "valid": false, "input": { "attempt": 1, "connectHost": "wss://example.test/sub", "protocolVersion": 3, "authMode": "ANONYMOUS" } },
+  { "name": "invalid-attempt", "kind": "event", "valid": false, "input": { "type": "connected", "attempt": 0, "receivedAt": "2026-10-06T08:00:00.000Z" } }
+]

@@ -1,4 +1,13 @@
 import {
+  BilibiliLiveRoomListV2Schema,
+  BilibiliLiveRoomV2Schema,
+  BilibiliLiveCollectResultV2Schema,
+  BilibiliLiveSummaryV2Schema,
+  BilibiliLiveRoomTrendListV2Schema,
+  BilibiliLiveRoomTrendV2Schema,
+  BilibiliLiveStatusEventListV2Schema,
+  BilibiliSubjectTrendV3Schema,
+  BilibiliSubjectWorkbenchV3Schema,
   AddBilibiliFollowerMonitorInputSchema,
   AddBilibiliFollowerMonitorInputV2Schema,
   BilibiliFollowerCollectResultV2Schema,
@@ -15,6 +24,9 @@ import {
   CreatePlatformAccountInputSchema,
   CreateSubjectInputSchema,
   ListPlatformAccountsInputSchema,
+  PlatformAdapterListSchema,
+  PlatformCollectionExecutionSchema,
+  RunPlatformCollectionInputSchema,
   ListSubjectsInputSchema,
   ListBilibiliFollowerMonitorsInputSchema,
   QueryBilibiliFollowerTrendInputSchema,
@@ -65,9 +77,21 @@ export interface BusinessDispatchResult {
 
 export function dispatchBusinessRequest(
   runtime: LocalCoreRuntime,
-  request: RuntimeEnvelope
+  request: RuntimeEnvelope,
+  reportProgress?: () => void
 ): BusinessDispatchResult | Promise<BusinessDispatchResult> {
   switch (request.type) {
+    case "platform.adapters.list":
+      return {
+        responseType: "platform.adapters.list.result",
+        payload: PlatformAdapterListSchema.parse(runtime.listPlatformAdapters())
+      }
+    case "platform.collection.run-once":
+      return runtime.runPlatformCollection(RunPlatformCollectionInputSchema.parse(request.payload))
+        .then((payload) => ({
+          responseType: "platform.collection.run-once.result",
+          payload: PlatformCollectionExecutionSchema.parse(payload)
+        }))
     case "platform-accounts.list":
       return {
         responseType: "platform-accounts.list.result",
@@ -148,6 +172,20 @@ export function dispatchBusinessRequest(
       return {
         responseType: "bilibili-subjects.layout.update.result",
         payload: runtime.updateBilibiliSubjectLayout(input)
+      }
+    }
+    case "bilibili-subjects.workbench.v3": {
+      const input = BilibiliSubjectIdInputSchema.parse(request.payload)
+      return {
+        responseType: "bilibili-subjects.workbench.v3.result",
+        payload: BilibiliSubjectWorkbenchV3Schema.parse(runtime.getBilibiliSubjectWorkbenchV3(input.subjectId))
+      }
+    }
+    case "bilibili-subjects.trends.v3": {
+      const input = QueryBilibiliSubjectTrendsInputSchema.parse(request.payload)
+      return {
+        responseType: "bilibili-subjects.trends.v3.result",
+        payload: BilibiliSubjectTrendV3Schema.parse(runtime.queryBilibiliSubjectTrendsV3(input))
       }
     }
     case "bilibili-subjects.workbench.v2": {
@@ -295,6 +333,59 @@ export function dispatchBusinessRequest(
     case "bilibili-auth.revoke":
       return runtime.revokeBilibiliAuth()
         .then((payload) => ({ responseType: "bilibili-auth.revoke.result", payload }))
+    case "bilibili-live.rooms.list.v2":
+      return {
+        responseType: "bilibili-live.rooms.list.v2.result",
+        payload: runtime.listBilibiliLiveRoomsV2(ListBilibiliLiveRoomsInputSchema.parse(request.payload))
+      }
+    case "bilibili-live.rooms.add.v2":
+      return runtime.addBilibiliLiveRoomV2(AddBilibiliLiveRoomInputSchema.parse(request.payload))
+        .then((payload) => ({ responseType: "bilibili-live.rooms.add.v2.result", payload }))
+    case "bilibili-live.rooms.update-status.v2": {
+      const input = UpdateBilibiliLiveRoomStatusInputSchema.parse(request.payload)
+      return {
+        responseType: "bilibili-live.rooms.update-status.v2.result",
+        payload: runtime.updateBilibiliLiveRoomStatusV2(input.roomMonitorId, input.enabled)
+      }
+    }
+    case "bilibili-live.rooms.update-settings.v2": {
+      const input = UpdateBilibiliLiveRoomSettingsInputSchema.parse(request.payload)
+      return {
+        responseType: "bilibili-live.rooms.update-settings.v2.result",
+        payload: runtime.updateBilibiliLiveRoomSettingsV2(input.roomMonitorId, input.intervalSeconds)
+      }
+    }
+    case "bilibili-live.rooms.refresh.v2": {
+      const input = BilibiliLiveRoomIdInputSchema.parse(request.payload)
+      return runtime.refreshBilibiliLiveRoomV2(input.roomMonitorId)
+        .then((payload) => ({ responseType: "bilibili-live.rooms.refresh.v2.result", payload }))
+    }
+    case "bilibili-live.summary.v2":
+      return {
+        responseType: "bilibili-live.summary.v2.result",
+        payload: runtime.getBilibiliLiveSummaryV2()
+      }
+    case "bilibili-live.trend.v2": {
+      const input = QueryBilibiliLiveTrendInputSchema.parse(request.payload)
+      return {
+        responseType: "bilibili-live.trend.v2.result",
+        payload: runtime.queryBilibiliLiveTrendV2(input)
+      }
+    }
+    case "bilibili-live.trends.v2": {
+      const input = QueryBilibiliLiveTrendsInputSchema.parse(request.payload)
+      return {
+        responseType: "bilibili-live.trends.v2.result",
+        payload: runtime.queryBilibiliLiveTrendsV2(input)
+      }
+    }
+    case "bilibili-live.events.v2": {
+      const input = QueryBilibiliLiveEventsInputSchema.parse(request.payload)
+      return {
+        responseType: "bilibili-live.events.v2.result",
+        payload: runtime.listBilibiliLiveEventsV2(input)
+      }
+    }
     case "bilibili-live.rooms.list":
       return {
         responseType: "bilibili-live.rooms.list.result",
@@ -352,6 +443,20 @@ export function dispatchBusinessRequest(
         responseType: "bilibili-live.events.result",
         payload: runtime.listBilibiliLiveEvents(input)
       }
+    }
+    case "bilibili-live.ranks.summary.v2": {
+      const input = BilibiliLiveRoomIdInputSchema.parse(request.payload)
+      return { responseType: "bilibili-live.ranks.summary.v2.result",
+        payload: runtime.getBilibiliLiveRankSummaryV2(input.roomMonitorId) }
+    }
+    case "bilibili-live.ranks.latest.v2": {
+      const input = BilibiliLiveRankLatestInputSchema.parse(request.payload)
+      return { responseType: "bilibili-live.ranks.latest.v2.result", payload: runtime.getLatestBilibiliLiveRankV2(input) }
+    }
+    case "bilibili-live.ranks.refresh.v2": {
+      const input = BilibiliLiveRankRefreshInputSchema.parse(request.payload)
+      return runtime.refreshBilibiliLiveRanksV2(input)
+        .then(payload => ({ responseType: "bilibili-live.ranks.refresh.v2.result", payload }))
     }
     case "bilibili-live.ranks.summary": {
       const input = BilibiliLiveRoomIdInputSchema.parse(request.payload)
@@ -440,7 +545,7 @@ export function dispatchBusinessRequest(
     }
     case "bilibili-live.session.export": {
       const input = ExportBilibiliLiveSessionInputSchema.parse(request.payload)
-      return runtime.prepareBilibiliLiveSessionExport(input)
+      return runtime.prepareBilibiliLiveSessionExport(input, reportProgress)
         .then((payload) => ({ responseType: "bilibili-live.session.export.result", payload }))
     }
     case "douyin-auth.status":

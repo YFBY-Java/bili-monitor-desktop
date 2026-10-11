@@ -22,7 +22,8 @@ describe("original login-triggered danmaku upgrades", () => {
     const login = await service.start({ roomMonitorId: logged, protocolVersion: 1 })
     source.failRoom = "101"
     await service.reconnectAnonymousConnections()
-    expect(service.status(first)).toMatchObject({ running: false, status: "ERROR" })
+    // The original creates a new session only after DanmuInfo succeeds.
+    expect(service.status(first)).toMatchObject({ running: false, status: "STOPPED", sessionId: initial.sessionId })
     expect(service.status(next)).toMatchObject({ running: true, authMode: "LOGIN", authUid: "99", protocolVersion: 2 })
     expect(service.status(logged).sessionId).toBe(login.sessionId)
     expect(source.starts.slice(3).map(value => [value.roomId, value.protocolVersion])).toEqual([["101", 0], ["102", 2]])

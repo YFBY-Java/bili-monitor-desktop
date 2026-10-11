@@ -1,0 +1,16 @@
+[
+  {
+    "body": {"code": "0", "data": {"info": {"num": 1}, "list": [{"uinfo": {"uid": 91, "base": {"name": "original viewer"}}}]}},
+    "success": true
+  },
+  {
+    "body": {"code": -101, "message": "  expired original  "},
+    "success": false,
+    "error": {"code": "BILIBILI_AUTH_EXPIRED", "message": "  expired original  ", "retryable": false, "biliCode": -101}
+  },
+  {
+    "body": {"code": " -500 ", "message": {"private": "not a scalar"}},
+    "success": false,
+    "error": {"code": "BILIBILI_UNKNOWN_ERROR", "message": "Bilibili live rank API error: -500", "retryable": true, "biliCode": -500}
+  }
+]

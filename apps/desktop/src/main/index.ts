@@ -1,6 +1,9 @@
+import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
-import { copyFile, unlink, writeFile } from "node:fs/promises"
-import { isAbsolute, join, relative, resolve } from "node:path"
+import { writeFile } from "node:fs/promises"
+import { join, resolve } from "node:path"
+
+import type { BilibiliLiveSessionExportResult } from "@bmd/contracts"
 
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electron"
 
@@ -21,7 +24,9 @@ import {
   resolvePreloadEntry,
   resolveRealtimeWorkerEntry
 } from "./runtime-paths"
-import { isAllowedExternalUrl, secureWebPreferences } from "./security"
+import { isAllowedExternalUrl, secureWebPreferences, shouldRegisterProtocolClient } from "./security"
+import { savePreparedSessionExport } from "./session-export-save"
+import { exportErrorCode, SessionExportJournal } from "./session-export-journal"
 
 const dataDirectory = resolveDataDirectory({
   appPath: app.getAppPath(),
@@ -66,10 +71,16 @@ const initialOAuthCallback = findDouyinOAuthCallback(process.argv)
 
 let core: LocalCoreController | undefined
 let coreStart: ReturnType<LocalCoreController["start"]> | undefined
+let coreStartInFlight: ReturnType<LocalCoreController["start"]> | undefined
 let quitAfterCoreStops = false
+let quitDrain: Promise<void> | undefined
 let credentialKeyBase64: string | undefined
+let mainStartupReady: Promise<void> | undefined
+const mainInstanceId = randomUUID()
 let douyinOAuthConfiguration: DouyinOAuthRuntimeConfiguration = { mode: "disabled" }
 const oneTimeExternalUrls = new Set<string>()
+const sessionExportCancellation = new AbortController()
+const sessionExportOperations = new Set<Promise<BilibiliLiveSessionExportResult>>()
 
 function registerProtocolHandler(): void {
   if (process.defaultApp && process.argv[1]) {
@@ -141,17 +152,25 @@ function initializeCore(): LocalCoreController {
     browserWorkerEntry: resolveBrowserWorkerEntry(__dirname),
     dataDirectory,
     credentialKeyBase64,
+    mainInstanceId,
     douyinOAuth: douyinOAuthConfiguration
   })
 }
 
 async function ensureCoreStarted() {
+  if (!ownsPrimaryInstance || sessionExportCancellation.signal.aborted) throw new Error("客户端正在退出，不能启动 Local Core。")
+  // OAuth callbacks can arrive before ready; all Core entry points wait for Main recovery.
+  await mainStartupReady
+  if (sessionExportCancellation.signal.aborted) throw new Error("客户端正在退出，不能启动 Local Core。")
+  // start() awaits forceStop() before it has a child; that is still one shared startup.
+  if (coreStartInFlight) return coreStartInFlight
   if (!core) core = initializeCore()
   if (!coreStart || !core.isRunning()) {
-    coreStart = core.start().catch((error: unknown) => {
-      coreStart = undefined
-      throw error
-    })
+    coreStartInFlight = core.start().then(
+      response => { coreStartInFlight = undefined; return response },
+      (error: unknown) => { coreStartInFlight = undefined; coreStart = undefined; throw error }
+    )
+    coreStart = coreStartInFlight
   }
   return coreStart
 }
@@ -163,7 +182,7 @@ async function getReadyCore(): Promise<LocalCoreController> {
 }
 
 if (ownsPrimaryInstance) {
-  registerProtocolHandler()
+  if (shouldRegisterProtocolClient(process.env)) registerProtocolHandler()
   app.on("second-instance", (_event, argv) => {
     const callback = findDouyinOAuthCallback(argv)
     if (callback) void completeDouyinOAuthCallback(callback)
@@ -179,12 +198,16 @@ if (ownsPrimaryInstance) {
     void completeDouyinOAuthCallback(callback)
   })
 
-  app.whenReady().then(() => {
+  mainStartupReady = app.whenReady().then(async () => {
+    if (sessionExportCancellation.signal.aborted) return
     douyinOAuthConfiguration = loadDouyinOAuthConfiguration(dataDirectory, process.env, safeStorage)
     credentialKeyBase64 = ensureCredentialKey({
       dataDirectory,
       protector: safeStorage
     })
+    await new SessionExportJournal({ dataDirectory, credentialKeyBase64, mainInstanceId,
+      reportCleanupFailure: details => console.warn(JSON.stringify(details)) }).recover()
+    if (sessionExportCancellation.signal.aborted) return
     core = initializeCore()
     ipcMain.handle("core:bootstrap", () => ensureCoreStarted())
     ipcMain.handle("core:restart", async () => {
@@ -220,6 +243,12 @@ if (ownsPrimaryInstance) {
       return { kind, canceled: false, savedPath }
     })
     ipcMain.handle("douyin-auth:revoke", async (_event, input: unknown) => (await getReadyCore()).revokeDouyinCredential(input))
+    ipcMain.handle("platform-collection:adapters-list", async () =>
+      (await getReadyCore()).listPlatformAdapters()
+    )
+    ipcMain.handle("platform-collection:run-once", async (_event, input: unknown) =>
+      (await getReadyCore()).runPlatformCollection(input)
+    )
     ipcMain.handle("platform-accounts:list", async (_event, input: unknown) =>
       (await getReadyCore()).listPlatformAccounts(input)
     )
@@ -258,6 +287,12 @@ if (ownsPrimaryInstance) {
     )
     ipcMain.handle("bilibili-subjects:trends", async (_event, input: unknown) =>
       (await getReadyCore()).queryBilibiliSubjectTrends(input)
+    )
+    ipcMain.handle("bilibili-subjects:workbench.v3", async (_event, input: unknown) =>
+      (await getReadyCore()).getBilibiliSubjectWorkbenchV3(input)
+    )
+    ipcMain.handle("bilibili-subjects:trends.v3", async (_event, input: unknown) =>
+      (await getReadyCore()).queryBilibiliSubjectTrendsV3(input)
     )
     ipcMain.handle("bilibili-subjects:workbench.v2", async (_event, input: unknown) =>
       (await getReadyCore()).getBilibiliSubjectWorkbenchV2(input)
@@ -334,6 +369,33 @@ if (ownsPrimaryInstance) {
     ipcMain.handle("bilibili-auth:revoke", async () =>
       (await getReadyCore()).revokeBilibiliAuth()
     )
+    ipcMain.handle("bilibili-live:rooms-list.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).listBilibiliLiveRoomsV2(input)
+    )
+    ipcMain.handle("bilibili-live:rooms-add.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).addBilibiliLiveRoomV2(input)
+    )
+    ipcMain.handle("bilibili-live:rooms-update-status.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).updateBilibiliLiveRoomStatusV2(input)
+    )
+    ipcMain.handle("bilibili-live:rooms-update-settings.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).updateBilibiliLiveRoomSettingsV2(input)
+    )
+    ipcMain.handle("bilibili-live:rooms-refresh.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).refreshBilibiliLiveRoomV2(input)
+    )
+    ipcMain.handle("bilibili-live:summary.v2", async () =>
+      (await getReadyCore()).getBilibiliLiveSummaryV2()
+    )
+    ipcMain.handle("bilibili-live:trend.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).queryBilibiliLiveTrendV2(input)
+    )
+    ipcMain.handle("bilibili-live:trends.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).queryBilibiliLiveTrendsV2(input)
+    )
+    ipcMain.handle("bilibili-live:events.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).listBilibiliLiveEventsV2(input)
+    )
     ipcMain.handle("bilibili-live:rooms-list", async (_event, input: unknown) =>
       (await getReadyCore()).listBilibiliLiveRooms(input)
     )
@@ -363,6 +425,15 @@ if (ownsPrimaryInstance) {
     )
     ipcMain.handle("bilibili-live:events", async (_event, input: unknown) =>
       (await getReadyCore()).listBilibiliLiveEvents(input)
+    )
+    ipcMain.handle("bilibili-live:ranks-summary.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).getBilibiliLiveRankSummaryV2(input)
+    )
+    ipcMain.handle("bilibili-live:ranks-latest.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).getLatestBilibiliLiveRankV2(input)
+    )
+    ipcMain.handle("bilibili-live:ranks-refresh.v2", async (_event, input: unknown) =>
+      (await getReadyCore()).refreshBilibiliLiveRanksV2(input)
     )
     ipcMain.handle("bilibili-live:ranks-summary", async (_event, input: unknown) =>
       (await getReadyCore()).getBilibiliLiveRankSummary(input)
@@ -404,33 +475,19 @@ if (ownsPrimaryInstance) {
       (await getReadyCore()).getBilibiliLiveSessionInsight(input)
     )
     ipcMain.handle("bilibili-live:session-export", async (_event, input: unknown) => {
-      const prepared = await (await getReadyCore()).prepareBilibiliLiveSessionExport(input)
-      const tempRoot = resolve(dataDirectory, "exports", "temp")
-      const tempPath = resolve(prepared.temporaryPath)
-      const relativeTempPath = relative(tempRoot, tempPath)
-      if (
-        !relativeTempPath
-        || relativeTempPath.startsWith("..")
-        || isAbsolute(relativeTempPath)
-      ) throw new Error("Local Core 返回了无效的临时导出路径。")
+      if (sessionExportCancellation.signal.aborted) throw new Error("客户端正在退出，不能开始新的导出。")
+      const operation = (async () => {
+        const prepared = await (await getReadyCore()).prepareBilibiliLiveSessionExport(input)
+        if (!credentialKeyBase64) throw new Error("Credential encryption key is unavailable.")
+        return savePreparedSessionExport({ dataDirectory, credentialKeyBase64, mainInstanceId, prepared, signal: sessionExportCancellation.signal,
+          select: options => dialog.showSaveDialog(options),
+          reportCleanupFailure: details => console.warn(JSON.stringify(details)) })
+      })()
+      sessionExportOperations.add(operation)
       try {
-        const selection = await dialog.showSaveDialog({
-          title: "导出 B站直播场次",
-          defaultPath: join(dataDirectory, "exports", prepared.suggestedFileName),
-          filters: exportFilters(prepared.category)
-        })
-        if (selection.canceled || !selection.filePath) {
-          return { category: prepared.category, canceled: true }
-        }
-        const savedPath = assertOutsideSystemDrive(selection.filePath)
-        await copyFile(tempPath, savedPath)
-        return {
-          category: prepared.category,
-          canceled: false,
-          savedPath
-        }
+        return await operation
       } finally {
-        await unlink(tempPath).catch(() => undefined)
+        sessionExportOperations.delete(operation)
       }
     })
 
@@ -446,21 +503,22 @@ if (ownsPrimaryInstance) {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
   })
+  void mainStartupReady.catch((error: unknown) => console.error("Main startup failed:", exportErrorCode(error)))
 }
 
 app.on("before-quit", (event) => {
-  if (quitAfterCoreStops || !core) return
+  if (quitAfterCoreStops) return
+  sessionExportCancellation.abort()
+  if (!core && sessionExportOperations.size === 0) return
   event.preventDefault()
-  quitAfterCoreStops = true
-  void core.stop().finally(() => app.quit())
+  if (quitDrain) return
+  quitDrain = Promise.allSettled([core?.stop() ?? Promise.resolve(), ...sessionExportOperations])
+    .then(() => {
+      quitAfterCoreStops = true
+      app.quit()
+    })
 })
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit()
 })
-
-function exportFilters(category: string): Electron.FileFilter[] {
-  if (category === "xlsx") return [{ name: "Excel 工作簿", extensions: ["xlsx"] }]
-  if (category === "all") return [{ name: "ZIP 压缩包", extensions: ["zip"] }]
-  return [{ name: "CSV 文件", extensions: ["csv"] }]
-}

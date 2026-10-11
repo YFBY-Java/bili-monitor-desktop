@@ -27,6 +27,9 @@ describe("browser preview bridge", () => {
       items: [],
       total: 0
     })
+    await expect(bridge.platformCollection.listAdapters()).resolves.toEqual([])
+    await expect(bridge.platformCollection.runOnce({ platformCode: "bilibili", dataType: "account", externalId: "2" }))
+      .rejects.toThrow(/BROWSER_PREVIEW_READ_ONLY/)
     await expect(bridge.bilibiliFollowers.add({ mid: "2" })).rejects.toThrowError(
       /BROWSER_PREVIEW_READ_ONLY/
     )

@@ -1,0 +1,381 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bilimonitor.local/schemas/platform-collection.v1.schema.json",
+  "title": "BiliMonitor local platform adapter collection contracts v1",
+  "description": "Generated from the shared TypeScript Zod contracts; externalId condition explicitly preserves the non-serializable superRefine.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "adapterList",
+    "input",
+    "execution"
+  ],
+  "properties": {
+    "adapterList": {
+      "$ref": "#/$defs/PlatformAdapterList"
+    },
+    "input": {
+      "$ref": "#/$defs/RunPlatformCollectionInput"
+    },
+    "execution": {
+      "$ref": "#/$defs/PlatformCollectionExecution"
+    }
+  },
+  "$defs": {
+    "NonBlankPlatformText": {
+      "type": "string",
+      "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u1680\\u2000-\\u2006\\u2008-\\u200a\\u2028\\u2029\\u205f\\u3000]"
+    },
+    "JavaLongString": {
+      "type": "string",
+      "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|9223372036854775807|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6])|-(?:[1-9][0-9]{0,17}|9223372036854775808|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7]))(?![\\s\\S])"
+    },
+    "IsoDateTime": {
+      "type": "string",
+      "pattern": "^(?:(?:[0-9][0-9][2468][048]|[0-9][0-9][13579][26]|[0-9][0-9]0[48]|[02468][048]00|[13579][26]00)-02-29|[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|(?:02)-(?:0[1-9]|1[0-9]|2[0-8])))T(?:(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\\.[0-9]+)?)?(?:Z))$",
+      "description": "Zod UTC ISO date/time; pattern is authoritative, including optional seconds. ASCII digits match TypeScript and Python."
+    },
+    "ObjectRef": {
+      "type": "object",
+      "properties": {
+        "objectId": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "relativePath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "objectId",
+        "relativePath",
+        "sha256",
+        "sizeBytes",
+        "mediaType"
+      ],
+      "additionalProperties": false
+    },
+    "PlatformAdapterList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "platformCode": {
+            "type": "string",
+            "minLength": 1
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "ACCOUNT_PROFILE",
+                "CONTENT_LIST",
+                "CONTENT_DETAIL",
+                "COMMENT_LIST",
+                "DANMAKU_LIST",
+                "INTERACTION_METRIC",
+                "FOLLOWER_SNAPSHOT",
+                "TREND_TOPIC"
+              ]
+            }
+          },
+          "implementedDataTypes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "account",
+                "contents",
+                "content-detail",
+                "comments",
+                "danmaku",
+                "interactions",
+                "followers",
+                "trends"
+              ]
+            }
+          }
+        },
+        "required": [
+          "platformCode",
+          "capabilities",
+          "implementedDataTypes"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "RunPlatformCollectionInput": {
+      "type": "object",
+      "properties": {
+        "platformCode": {
+          "$ref": "#/$defs/NonBlankPlatformText"
+        },
+        "dataType": {
+          "$ref": "#/$defs/NonBlankPlatformText"
+        },
+        "externalId": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "platformCode",
+        "dataType"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "dataType": {
+                "not": {
+                  "const": "trends"
+                }
+              }
+            },
+            "required": [
+              "dataType"
+            ]
+          },
+          "then": {
+            "required": [
+              "externalId"
+            ],
+            "properties": {
+              "externalId": {
+                "$ref": "#/$defs/NonBlankPlatformText"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "PlatformCollectionAccountData": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string",
+          "const": "bilibili"
+        },
+        "externalAccountId": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "displayName": {
+          "$ref": "#/$defs/NonBlankPlatformText"
+        },
+        "avatarUrl": {
+          "type": "string"
+        },
+        "profileUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "followerCount": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "followingCount": {
+          "$ref": "#/$defs/JavaLongString"
+        },
+        "fetchedAt": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "sourceEndpoint": {
+          "type": "string",
+          "const": "x/web-interface/card"
+        }
+      },
+      "required": [
+        "platform",
+        "externalAccountId",
+        "displayName",
+        "avatarUrl",
+        "profileUrl",
+        "followerCount",
+        "followingCount",
+        "fetchedAt",
+        "sourceEndpoint"
+      ],
+      "additionalProperties": false
+    },
+    "PlatformCollectionRateLimitInfo": {
+      "type": "object",
+      "properties": {
+        "limited": {
+          "type": "boolean"
+        },
+        "remaining": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resetAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IsoDateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policyKey": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "limited",
+        "remaining",
+        "resetAt",
+        "policyKey"
+      ],
+      "additionalProperties": false
+    },
+    "PlatformCollectionFetchResult": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlatformCollectionAccountData"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rawPayload": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rawPayloadObject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rateLimitInfo": {
+          "$ref": "#/$defs/PlatformCollectionRateLimitInfo"
+        },
+        "errorType": {
+          "type": "string",
+          "enum": [
+            "NONE",
+            "AUTH_EXPIRED",
+            "RATE_LIMITED",
+            "RISK_CONTROL",
+            "NETWORK_ERROR",
+            "SERVER_ERROR",
+            "PARSE_ERROR",
+            "UNSUPPORTED",
+            "UNKNOWN"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "riskLevel": {
+          "type": "string",
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "success",
+        "data",
+        "rawPayload",
+        "rawPayloadObject",
+        "nextCursor",
+        "rateLimitInfo",
+        "errorType",
+        "retryable",
+        "riskLevel",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "PlatformCollectionExecution": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "SUCCESS",
+            "MANUAL_REVIEW"
+          ]
+        },
+        "platformCode": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dataType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fetchResult": {
+          "$ref": "#/$defs/PlatformCollectionFetchResult"
+        }
+      },
+      "required": [
+        "status",
+        "platformCode",
+        "dataType",
+        "fetchResult"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

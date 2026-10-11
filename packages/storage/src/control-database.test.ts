@@ -1,11 +1,298 @@
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { resolve } from "node:path"
-import { DatabaseSync } from "node:sqlite"
+import { isAbsolute, relative, resolve } from "node:path"
+import { DatabaseSync, type StatementSync } from "node:sqlite"
+import { randomUUID } from "node:crypto"
 
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ControlDatabase } from "./control-database"
+
+function assertRetentionTempPath(root: string, target?: string): void {
+  if (!isAbsolute(root) || !/^D:/iu.test(resolve(root))) throw new Error("Unsafe retention temporary path")
+  if (target === undefined) return
+  const suffix = relative(resolve(root), resolve(target))
+  if (!isAbsolute(target) || !/^D:/iu.test(resolve(target)) || !suffix || suffix.startsWith("..") || isAbsolute(suffix)) {
+    throw new Error("Unsafe retention temporary path")
+  }
+}
+
+type RetentionDatabase = { close: () => void }
+type RetentionStorageOwner<T extends RetentionDatabase> = {
+  readonly root: string; directory: string | undefined; database: T | undefined; disposed: boolean
+  cleanupPromise: Promise<void> | undefined; cleanupErrors: unknown[]
+}
+const retentionStorageOwner = <T extends RetentionDatabase>(root: string): RetentionStorageOwner<T> => ({
+  root, directory: undefined, database: undefined, disposed: false, cleanupPromise: undefined, cleanupErrors: []
+})
+type RetentionStorageOperations<T extends RetentionDatabase> = {
+  create: () => Promise<string>; open: (directory: string) => Promise<T>; remove: (directory: string) => Promise<void>
+}
+async function releaseRetentionStorage<T extends RetentionDatabase>(root: string, database: T | undefined, directory: string | undefined,
+  remove: RetentionStorageOperations<T>["remove"], errors: unknown[]): Promise<void> {
+  try { database?.close() } catch (error) { errors.push(error) }
+  if (directory) {
+    try { assertRetentionTempPath(root, directory); await remove(directory) } catch (error) { errors.push(error) }
+  }
+}
+function disposeRetentionStorage<T extends RetentionDatabase>(owner: RetentionStorageOwner<T>, remove: RetentionStorageOperations<T>["remove"]): Promise<void> {
+  if (owner.cleanupPromise) return owner.cleanupPromise
+  owner.disposed = true
+  const database = owner.database, directory = owner.directory
+  owner.database = undefined; owner.directory = undefined
+  owner.cleanupPromise = releaseRetentionStorage(owner.root, database, directory, remove, owner.cleanupErrors)
+  return owner.cleanupPromise
+}
+function throwRetentionStorageErrors(errors: unknown[]): void {
+  if (errors.length === 1) throw errors[0]
+  if (errors.length > 1) throw new AggregateError(errors, "Retention storage test and cleanup failed")
+}
+async function teardownRetentionStorage<T extends RetentionDatabase>(owner: RetentionStorageOwner<T>, remove: RetentionStorageOperations<T>["remove"]): Promise<void> {
+  await disposeRetentionStorage(owner, remove)
+  throwRetentionStorageErrors(owner.cleanupErrors)
+}
+async function runRetentionStorage<T extends RetentionDatabase>(owner: RetentionStorageOwner<T>, operations: RetentionStorageOperations<T>,
+  body: (database: T, directory: string) => Promise<void>): Promise<void> {
+  const errors: unknown[] = []
+  let directory: string | undefined, opening = false, acquiredAfterTeardown = false
+  try {
+    assertRetentionTempPath(owner.root)
+    directory = await operations.create()
+    if (owner.disposed) {
+      acquiredAfterTeardown = true
+      await disposeRetentionStorage(owner, operations.remove)
+      await releaseRetentionStorage(owner.root, undefined, directory, operations.remove, errors)
+    } else {
+      owner.directory = directory
+      assertRetentionTempPath(owner.root, directory)
+      opening = true
+      const database = await operations.open(directory)
+      opening = false
+      if (owner.disposed) {
+        acquiredAfterTeardown = true
+        await disposeRetentionStorage(owner, operations.remove)
+        await releaseRetentionStorage(owner.root, database, directory, operations.remove, errors)
+      } else {
+        owner.database = database
+        await body(database, directory)
+      }
+    }
+  } catch (error) { errors.push(error) }
+  if (owner.disposed && opening) {
+    await disposeRetentionStorage(owner, operations.remove)
+    await releaseRetentionStorage(owner.root, undefined, directory, operations.remove, errors)
+  }
+  await disposeRetentionStorage(owner, operations.remove)
+  errors.push(...owner.cleanupErrors)
+  if (acquiredAfterTeardown && errors.length === 0) errors.push(new Error("Retention storage acquired after teardown"))
+  throwRetentionStorageErrors(errors)
+}
+
+describe("retention storage lifecycle fault injection without filesystem access", () => {
+  it("tears down the owned directory during deferred open, disposes late DB and recreated directory, and leaves the next owner intact", async () => {
+    const owner = retentionStorageOwner<RetentionDatabase>("D:/synthetic-root"), next = retentionStorageOwner<RetentionDatabase>("D:/synthetic-root")
+    const calls: string[] = [], nextDatabase = { close: () => { calls.push("next-close") } }
+    next.directory = "D:/synthetic-root/next"; next.database = nextDatabase
+    let release = (_database: RetentionDatabase) => {}, ready = () => {}, entered = false
+    const deferred = new Promise<RetentionDatabase>(resolve => { release = resolve })
+    const opened = new Promise<void>(resolve => { ready = resolve })
+    const operations: RetentionStorageOperations<RetentionDatabase> = {
+      create: async () => "D:/synthetic-root/own", open: async () => { ready(); return deferred },
+      remove: async directory => { expect(owner.directory).toBeUndefined(); calls.push(`remove:${directory}`) }
+    }
+    const running = runRetentionStorage(owner, operations, async () => { entered = true }).catch((caught: unknown) => caught)
+    try {
+      await opened
+      await teardownRetentionStorage(owner, operations.remove)
+      expect(calls).toEqual(["remove:D:/synthetic-root/own"])
+      expect(owner.directory).toBeUndefined()
+    } finally { release({ close: () => { expect(owner.database).toBeUndefined(); calls.push("late-close") } }); await running }
+    expect(entered).toBe(false)
+    expect(calls).toEqual(["remove:D:/synthetic-root/own", "late-close", "remove:D:/synthetic-root/own"])
+    await teardownRetentionStorage(owner, operations.remove)
+    expect(calls).toHaveLength(3)
+    expect(next.directory).toBe("D:/synthetic-root/next")
+    expect(next.database).toBe(nextDatabase)
+  })
+  it("cleans the acquired directory after setup rejection and preserves the single original error", async () => {
+    const failure = new Error("setup"), calls: string[] = [], owner = retentionStorageOwner<RetentionDatabase>("D:/synthetic-root")
+    const error = await runRetentionStorage(owner, {
+      create: async () => "D:/synthetic-root/own", open: async () => { throw failure },
+      remove: async path => { expect(owner.directory).toBeUndefined(); calls.push(path) }
+    }, async () => {}).catch((caught: unknown) => caught)
+    expect(error).toBe(failure)
+    expect(calls).toEqual(["D:/synthetic-root/own"])
+  })
+  it("attempts close and guarded removal after body failure and exposes every original error identity", async () => {
+    const primary = new Error("body"), close = new Error("close"), remove = new Error("remove"), calls: string[] = []
+    const owner = retentionStorageOwner<RetentionDatabase>("D:/synthetic-root")
+    const error = await runRetentionStorage(owner, {
+      create: async () => "D:/synthetic-root/own", open: async () => ({ close: () => { expect(owner.database).toBeUndefined(); calls.push("close"); throw close } }),
+      remove: async () => { calls.push("remove"); throw remove }
+    }, async () => { throw primary }).catch((caught: unknown) => caught)
+    expect(calls).toEqual(["close", "remove"])
+    expect(error).toBeInstanceOf(AggregateError)
+    if (!(error instanceof AggregateError)) throw new Error("Expected all storage cleanup errors")
+    expect(error.errors).toHaveLength(3)
+    expect(error.errors[0]).toBe(primary); expect(error.errors[1]).toBe(close); expect(error.errors[2]).toBe(remove)
+  })
+  it.each(["close", "remove"] as const)("keeps a sole %s error by identity while attempting both cleanup actions", async phase => {
+    const failure = new Error(phase), calls: string[] = [], owner = retentionStorageOwner<RetentionDatabase>("D:/synthetic-root")
+    const error = await runRetentionStorage(owner, {
+      create: async () => "D:/synthetic-root/own", open: async () => ({ close: () => { calls.push("close"); if (phase === "close") throw failure } }),
+      remove: async () => { calls.push("remove"); if (phase === "remove") throw failure }
+    }, async () => {}).catch((caught: unknown) => caught)
+    expect(error).toBe(failure)
+    expect(calls).toEqual(["close", "remove"])
+  })
+  it("cleans a directory created after teardown without opening a DB or entering the body", async () => {
+    const owner = retentionStorageOwner<RetentionDatabase>("D:/synthetic-root"), calls: string[] = []
+    let release = (_directory: string) => {}, entered = false
+    const deferred = new Promise<string>(resolve => { release = resolve })
+    const operations = { create: () => deferred, open: async () => { calls.push("open"); return { close: () => {} } },
+      remove: async (directory: string) => { calls.push(`remove:${directory}`) } }
+    const running = runRetentionStorage(owner, operations, async () => { entered = true }).catch((caught: unknown) => caught)
+    await teardownRetentionStorage(owner, operations.remove)
+    release("D:/synthetic-root/late")
+    const error = await running
+    expect(error).toMatchObject({ message: "Retention storage acquired after teardown" })
+    expect(calls).toEqual(["remove:D:/synthetic-root/late"])
+    expect(owner.directory).toBeUndefined(); expect(owner.database).toBeUndefined(); expect(entered).toBe(false)
+  })
+  it.each(["return", "reject"] as const)("attempts repeated guarded cleanup after late open %s and preserves late error identities", async mode => {
+    const owner = retentionStorageOwner<RetentionDatabase>("D:/synthetic-root"), calls: string[] = []
+    const open = new Error("late open"), close = new Error("late close"), remove = new Error("late remove")
+    let release = (_database: RetentionDatabase) => {}, reject = (_error: Error) => {}, ready = () => {}, removals = 0, entered = false
+    const deferred = new Promise<RetentionDatabase>((resolve, rejectPromise) => { release = resolve; reject = rejectPromise })
+    const started = new Promise<void>(resolve => { ready = resolve })
+    const operations: RetentionStorageOperations<RetentionDatabase> = { create: async () => "D:/synthetic-root/late",
+      open: async () => { ready(); return deferred }, remove: async () => { calls.push("remove"); if (++removals === 2) throw remove } }
+    const running = runRetentionStorage(owner, operations, async () => { entered = true }).catch((caught: unknown) => caught)
+    await started
+    await teardownRetentionStorage(owner, operations.remove)
+    if (mode === "return") release({ close: () => { calls.push("close"); throw close } })
+    else reject(open)
+    const error = await running
+    expect(entered).toBe(false)
+    expect(calls).toEqual(mode === "return" ? ["remove", "close", "remove"] : ["remove", "remove"])
+    expect(error).toBeInstanceOf(AggregateError)
+    if (!(error instanceof AggregateError)) throw new Error("Expected late acquisition cleanup evidence")
+    expect(error.errors).toHaveLength(2)
+    expect(error.errors[0]).toBe(mode === "return" ? close : open)
+    expect(error.errors[1]).toBe(remove)
+    expect(owner.directory).toBeUndefined(); expect(owner.database).toBeUndefined()
+  })
+  it.each(["return", "reject"] as const)("does not let an earlier teardown remove error block late open %s cleanup", async mode => {
+    const owner = retentionStorageOwner<RetentionDatabase>("D:/synthetic-root"), calls: string[] = []
+    const firstRemove = new Error("fallback remove"), open = new Error("late open")
+    let release = (_database: RetentionDatabase) => {}, reject = (_error: Error) => {}, ready = () => {}, removals = 0
+    const deferred = new Promise<RetentionDatabase>((resolve, rejectPromise) => { release = resolve; reject = rejectPromise })
+    const started = new Promise<void>(resolve => { ready = resolve })
+    const operations: RetentionStorageOperations<RetentionDatabase> = { create: async () => "D:/synthetic-root/late",
+      open: async () => { ready(); return deferred }, remove: async () => { calls.push("remove"); if (++removals === 1) throw firstRemove } }
+    const running = runRetentionStorage(owner, operations, async () => { throw new Error("Ended case must not enter body") }).catch((caught: unknown) => caught)
+    await started
+    expect(await teardownRetentionStorage(owner, operations.remove).catch((caught: unknown) => caught)).toBe(firstRemove)
+    if (mode === "return") release({ close: () => { calls.push("close") } })
+    else reject(open)
+    const error = await running
+    expect(calls).toEqual(mode === "return" ? ["remove", "close", "remove"] : ["remove", "remove"])
+    if (mode === "return") expect(error).toBe(firstRemove)
+    else {
+      expect(error).toBeInstanceOf(AggregateError)
+      if (!(error instanceof AggregateError)) throw new Error("Expected setup plus teardown errors")
+      expect(error.errors).toHaveLength(2); expect(error.errors[0]).toBe(open); expect(error.errors[1]).toBe(firstRemove)
+    }
+  })
+})
+
+describe("retention temporary path validation without filesystem access", () => {
+  it.each([["C:/synthetic-temp", undefined], ["relative-temp", undefined],
+    ["D:/synthetic-temp", "D:/synthetic-temp"], ["D:/synthetic-temp", "D:/outside"],
+    ["D:/synthetic-temp", "D:/synthetic-temp/../outside"], ["D:/synthetic-temp", "C:/synthetic-temp/child"]] as const)
+    ("rejects unsafe root %s or target %s", (root, target) => {
+      expect(() => assertRetentionTempPath(root, target)).toThrow("Unsafe retention temporary path")
+    })
+  it("allows only an absolute D root and its strict descendant", () => {
+    expect(() => assertRetentionTempPath("D:/synthetic-temp")).not.toThrow()
+    expect(() => assertRetentionTempPath("D:/synthetic-temp", "D:/synthetic-temp/child")).not.toThrow()
+  })
+})
+
+describe("ControlDatabase recent retention", () => {
+  let activeOwner: RetentionStorageOwner<ControlDatabase> | undefined
+  const removeRetentionDirectory = async (directory: string) => { await rm(directory, { recursive: true, force: true }) }
+  afterEach(async () => {
+    const owner = activeOwner
+    activeOwner = undefined
+    if (owner) await teardownRetentionStorage(owner, removeRetentionDirectory)
+  })
+
+  it("retains more than 500 recent rows per monitor with insertion-order ties, event-time trim and a separate read cap", async () => {
+    const temporaryRoot = tmpdir()
+    assertRetentionTempPath(temporaryRoot)
+    const owner = retentionStorageOwner<ControlDatabase>(temporaryRoot)
+    activeOwner = owner
+    await runRetentionStorage(owner, { create: () => mkdtemp(resolve(temporaryRoot, "bmd-recent-retention-")),
+      open: directory => ControlDatabase.open(directory), remove: removeRetentionDirectory }, async (database, retentionDirectory) => {
+      const store = database
+      const timestamp = new Date().toISOString()
+      const seed = (roomId: string) => {
+        const monitorId = randomUUID()
+        store.applyBilibiliLiveRoomSnapshot({
+          monitor: { monitorId, uid: roomId, roomId, shortId: null, uname: "合成保留主播", faceUrl: null,
+            title: "合成保留房间", coverUrl: null, keyframeUrl: null, areaId: null, areaName: null,
+            parentAreaId: null, parentAreaName: null, liveStatus: 1, liveTime: null, onlineCount: 0,
+            attentionCount: 0, intervalSeconds: 300, nextCollectAt: timestamp, capturedAt: timestamp,
+            sourceEndpoint: "room/v1/Room/get_info" },
+          snapshot: { snapshotId: randomUUID(), capturedBucket: timestamp },
+          artifact: { objectId: `sha256:${"b".repeat(64)}`, sha256: "b".repeat(64), relativePath: "cas/synthetic-retention.json",
+            sizeBytes: 1, mediaType: "application/json", createdAt: timestamp },
+          outbox: { messageId: randomUUID(), topic: "seed", envelopeJson: "{}", createdAt: timestamp }
+        })
+        return monitorId
+      }
+      const a = seed("801"), b = seed("802")
+      const append = (monitorId: string, index: number, recentLimit: number, sentAt = timestamp) => store.recordBilibiliLiveDanmakuEvent({
+        monitorId, sessionId: null, roomId: monitorId === a ? "801" : "802", occurredAt: sentAt,
+        bucketSeconds: 60, danmuDelta: 1, likeCount: null, likeIncrement: 0, watchedCount: null,
+        heartbeatPopularity: null, giftDelta: 0, superChatDelta: 0, rawEventDelta: 1,
+        recent: { senderUid: "123", messageText: `message:${index}`, displayName: null, medalName: null, sentAt }, recentLimit
+      })
+      const originalPrepare = DatabaseSync.prototype.prepare
+      let pruneStatement: StatementSync | undefined
+      const pruneObserver = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (this: DatabaseSync, sql: string) {
+        const statement = originalPrepare.call(this, sql)
+        if (sql.trim().startsWith("DELETE FROM bilibili_live_danmaku_recent") && !pruneStatement) pruneStatement = statement
+        return statement
+      })
+      try { for (let i = 1; i <= 502; i++) append(a, i, 501) }
+      finally { pruneObserver.mockRestore() }
+      for (let i = 1; i <= 27; i++) append(b, i, 25)
+      append(b, 0, 25, new Date(Date.parse(timestamp) - 1000).toISOString())
+      const inspection = new DatabaseSync(resolve(retentionDirectory, "control.db"), { readOnly: true })
+      try {
+        if (!pruneStatement) throw new Error("No production retention delete was observed")
+        // The delete must address only overflow rows, not rescan every retained UUID.
+        const plan = inspection.prepare(`EXPLAIN QUERY PLAN ${pruneStatement.expandedSQL}`).all()
+        expect(plan.filter(row => row.parent === 0).map(row => row.detail))
+          .toContain("SEARCH bilibili_live_danmaku_recent USING INTEGER PRIMARY KEY (rowid=?)")
+        const rows = (monitorId: string) => inspection.prepare("SELECT message_text FROM bilibili_live_danmaku_recent WHERE monitor_id = ? ORDER BY sent_at, rowid").all(monitorId).map(row => row.message_text)
+        expect(rows(a)).toEqual(Array.from({ length: 501 }, (_, i) => `message:${i + 2}`))
+        expect(rows(b)).toEqual(Array.from({ length: 25 }, (_, i) => `message:${i + 3}`))
+        expect(database.findBilibiliLiveDanmakuRecent(a, 999)).toHaveLength(200)
+        expect(database.findBilibiliLiveDanmakuRecent(a, 999)[0]?.messageText).toBe("message:303")
+        expect(database.findBilibiliLiveDanmakuRecent(b, 200).map(row => row.messageText)).toEqual(rows(b))
+        append(b, 28, 0)
+        expect(rows(b)).toEqual(["message:28"]) // Repository's own defensive floor is 1, distinct from the service floor 20.
+        expect(rows(a)).toHaveLength(501)
+        append(b, 29, -1)
+        expect(rows(b)).toEqual(["message:29"])
+        expect(database.findBilibiliLiveDanmakuMetricBuckets(a, new Date(Date.parse(timestamp) - 60_000).toISOString(), new Date(Date.parse(timestamp) + 60_000).toISOString(), 200).reduce((sum, row) => sum + row.danmuCount, 0)).toBe(502)
+      } finally { inspection.close() }
+    })
+  })
+})
 
 describe("ControlDatabase", () => {
   let directory: string | undefined
@@ -22,7 +309,7 @@ describe("ControlDatabase", () => {
       expect(database.status()).toEqual({
         databasePath: resolve(testDirectory, "control.db"),
         journalMode: "wal",
-        schemaVersion: 14
+        schemaVersion: 18
       })
       expect(database.listWorkerStatuses()).toEqual([])
 
@@ -234,6 +521,8 @@ describe("ControlDatabase", () => {
         DROP TABLE douyin_auth_credential;
         DROP TABLE douyin_auth_session;
         DROP TABLE bilibili_live_export_daily_counter;
+        ALTER TABLE bilibili_api_call DROP COLUMN request_meta_json;
+        ALTER TABLE bilibili_api_call DROP COLUMN response_meta_json;
         DELETE FROM schema_migration WHERE version >= 9;
         PRAGMA user_version = 8;
       `)
@@ -243,7 +532,7 @@ describe("ControlDatabase", () => {
 
     const upgraded = await ControlDatabase.open(testDirectory)
     try {
-      expect(upgraded.status().schemaVersion).toBe(14)
+      expect(upgraded.status().schemaVersion).toBe(18)
       expect(upgraded.listBilibiliLiveSessions(monitorId, 10)).toMatchObject([
         {
           state: "OPEN",
@@ -436,7 +725,7 @@ describe("ControlDatabase", () => {
   it("atomically creates a Bilibili follower monitor, its first snapshot, evidence and outbox event", async () => {
     const testDirectory = await mkdtemp(resolve(tmpdir(), "bmd-follower-"))
     directory = testDirectory
-    const database = await ControlDatabase.open(testDirectory)
+    let database = await ControlDatabase.open(testDirectory)
     const store = database as unknown as {
       upsertBilibiliFollowerMonitorSnapshot: (input: Record<string, unknown>) => void
       listBilibiliFollowerMonitors: (limit: number) => Array<Record<string, unknown>>
@@ -527,6 +816,51 @@ describe("ControlDatabase", () => {
         retryable: false,
         evidenceObjectId: `sha256:${"a".repeat(64)}`
       }])
+      const taskId = "018f0f39-7b5e-7cc1-962d-9a208b3d0204"
+      const before = database.listBilibiliApiCalls(taskId)
+      database.close()
+      // Restore the published v15 API-call layout, then upgrade a populated
+      // database. Unknown legacy metadata must not be fabricated.
+      const legacy = new DatabaseSync(resolve(testDirectory, "control.db"))
+      try {
+        legacy.exec(`BEGIN;
+          ALTER TABLE bilibili_api_call DROP COLUMN request_meta_json;
+          ALTER TABLE bilibili_api_call DROP COLUMN response_meta_json;
+          DELETE FROM schema_migration WHERE version>=16;
+          PRAGMA user_version=15;
+          COMMIT;`)
+      } finally { legacy.close() }
+      database = await ControlDatabase.open(testDirectory)
+      expect(database.status().schemaVersion).toBe(18)
+      expect(database.listBilibiliApiCalls(taskId)).toEqual(before)
+      expect(database.listBilibiliFollowerMonitors(100)[0]?.currentFollowerCount).toBe(1_395_836n)
+      database.insertBilibiliApiCall({ ...before[0]!, callId: "metadata-call", attempt: 2,
+        mid: "9007199254740993", errorType: "BILIBILI_AUTH_EXPIRED", evidenceObjectId: null,
+        requestMeta: { mid: "9007199254740993" },
+        responseMeta: { success: false, message: "  合成登录过期  ", biliCode: -101 } })
+      const after = database.listBilibiliApiCalls(taskId)
+      expect(after[1]).toMatchObject({ requestMeta: { mid: "9007199254740993" },
+        responseMeta: { success: false, message: "  合成登录过期  ", biliCode: -101 } })
+      database.insertBilibiliApiCall({ ...after[1]!, callId: "encoded-metadata-call",
+        responseMeta: { success: false, message: "\ud800🙂\\u0000", biliCode: -101 } })
+      const encodedCalls = database.listBilibiliApiCalls(taskId)
+      expect.soft(encodedCalls.find(call => call.callId === "encoded-metadata-call")?.responseMeta)
+        .toEqual({ success: false, message: "?🙂\\u0000", biliCode: -101 })
+      const invalidArtifact = { objectId: `sha256:${"c".repeat(64)}`, sha256: "c".repeat(64),
+        relativePath: "cas/synthetic-invalid-api-meta.json", sizeBytes: 1,
+        mediaType: "application/json", createdAt: "2026-08-29T12:00:00.123Z" }
+      expect.soft(() => database.insertBilibiliApiCall({ ...after[1]!, callId: "invalid-metadata-call",
+        evidenceObjectId: invalidArtifact.objectId,
+        responseMeta: { success: false, message: "synthetic\u0000failure", biliCode: -101 } }, invalidArtifact))
+        .toThrow("Bilibili API log JSON storage contains NUL.")
+      expect.soft(database.listBilibiliApiCalls(taskId)).toEqual(encodedCalls)
+      const inspection = new DatabaseSync(resolve(testDirectory, "control.db"), { readOnly: true })
+      try { expect.soft(inspection.prepare("SELECT COUNT(*) AS total FROM object_artifact WHERE object_id = ?")
+        .get(invalidArtifact.objectId)?.total).toBe(0) }
+      finally { inspection.close() }
+      database.close()
+      database = await ControlDatabase.open(testDirectory)
+      expect(database.listBilibiliApiCalls(taskId)).toEqual(encodedCalls)
     } finally {
       database.close()
     }
@@ -742,7 +1076,7 @@ describe("ControlDatabase", () => {
         roomId: "33",
         title: "new title",
         liveStatus: 1,
-        onlineCount: 200
+        onlineCount: 200n
       })
       expect(database.findBilibiliLiveRoomSnapshots(monitorId, { limit: 30 })).toHaveLength(2)
       expect(database.listBilibiliLiveStatusEvents(20).map((event) => event.eventType)).toEqual([
@@ -975,11 +1309,11 @@ describe("ControlDatabase", () => {
         rankSwitch: "contribution_rank"
       })
       expect(snapshots).toHaveLength(1)
-      expect(snapshots[0]).toMatchObject({ totalCount: 3, pageNo: 1 })
+      expect(snapshots[0]).toMatchObject({ totalCount: "3", pageNo: 1 })
       expect(store.findBilibiliLiveRankEntries(String(snapshots[0]?.snapshotId), 50)).toMatchObject([{
         userUid: null,
         displayName: "匿名观众",
-        score: 120
+        score: "120"
       }])
 
       database.deleteBilibiliLiveRoom(monitorId, {

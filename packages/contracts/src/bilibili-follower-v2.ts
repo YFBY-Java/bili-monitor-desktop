@@ -8,7 +8,8 @@ import {
   BilibiliFollowerMonitorSchema,
   BilibiliFollowerPointSchema,
   BilibiliFollowerProfileSchema,
-  BilibiliFollowerTrendSchema
+  BilibiliFollowerTrendSchema,
+  ObjectRefSchema
 } from "./bilibili-follower"
 import { JavaLongStringSchema, PositiveJavaLongStringSchema, javaLongToLegacyNumber } from "./java-long"
 
@@ -44,8 +45,18 @@ export const BilibiliFollowerFetchedSnapshotV2Schema = BilibiliFollowerFetchedSn
   followingCount: JavaLongStringSchema.optional()
 })
 export const BilibiliFollowerFetchRequestV2Schema = BilibiliFollowerFetchRequestSchema.extend({
-  mid: PositiveJavaLongStringSchema
+  mid: PositiveJavaLongStringSchema,
+  captureFailureEvidence: z.boolean().optional()
 })
+export const BilibiliFollowerFetchFailureV2Schema = z.object({
+  code: z.string().min(1),
+  message: z.string(),
+  retryable: z.boolean(),
+  endpoint: z.string().optional(),
+  statusCode: z.number().int().positive().optional(),
+  biliCode: z.number().int().optional(),
+  evidenceObject: ObjectRefSchema.optional()
+}).strict()
 export const AddBilibiliFollowerMonitorInputV2Schema = AddBilibiliFollowerMonitorInputSchema.extend({
   mid: PositiveJavaLongStringSchema
 })

@@ -17,6 +17,8 @@ from .bilibili_follower_http import BilibiliFollowerHttpConfiguration, BilibiliF
 from .bilibili_follower_json import decode_follower_json
 from .bilibili_follower_long import MAX_SAFE_INTEGER, parse_java_long, positive_long_string
 from .bilibili_follower_response_text import follower_response_text
+from .java_scalar_text import java_scalar_text
+from .postgres_jsonb_input import RawPayloadStorageStatus, raw_payload_storage_status
 
 CARD_ENDPOINT = "x/web-interface/card"
 RELATION_STAT_ENDPOINT = "x/relation/stat"
@@ -67,6 +69,8 @@ class BilibiliCrawlerError(Exception):
         endpoint: str,
         status_code: int | None = None,
         bili_code: int | None = None,
+        raw_bytes: bytes | None = None,
+        raw_media_type: str = "application/octet-stream",
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -74,6 +78,8 @@ class BilibiliCrawlerError(Exception):
         self.endpoint = endpoint
         self.status_code = status_code
         self.bili_code = bili_code
+        self.raw_bytes = raw_bytes
+        self.raw_media_type = raw_media_type
 
 
 def legacy_follower_result(
@@ -107,13 +113,8 @@ def legacy_follower_result(
 def _optional_text(value: object) -> str | None:
     # JsonNode.asText(null) has no object/array representation. isBlank checks
     # presence, not normalization: retain nonblank strings exactly as returned.
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if not isinstance(value, (str, int, float)):
-        return None
-    text = str(value)
-    # Exact Jackson Double.toString formatting remains a separate numeric slice.
-    return None if JAVA_BLANK.fullmatch(text) else text
+    text = java_scalar_text(value)
+    return None if text is None or JAVA_BLANK.fullmatch(text) else text
 
 
 def _optional_int(value: object) -> int | None:
@@ -252,7 +253,9 @@ def parse_relation_stat_response(raw: str, fetched_at: str) -> dict[str, object]
     return result
 
 
-def _write_object_sync(data_directory: Path, raw: bytes) -> dict[str, object]:
+def _write_object_sync(
+    data_directory: Path, raw: bytes, media_type: str = "application/json"
+) -> dict[str, object]:
     digest = hashlib.sha256(raw).hexdigest()
     relative = Path("cas") / "sha256" / digest[:2] / f"{digest}.json"
     target = data_directory / relative
@@ -266,7 +269,7 @@ def _write_object_sync(data_directory: Path, raw: bytes) -> dict[str, object]:
         "relativePath": relative.as_posix(),
         "sha256": digest,
         "sizeBytes": len(raw),
-        "mediaType": "application/json",
+        "mediaType": media_type,
     }
 
 
@@ -274,7 +277,7 @@ async def _fetch_follower_response(
     endpoint: str,
     mid: str,
     http_configuration: BilibiliFollowerHttpConfiguration | None = None,
-) -> tuple[dict[str, object], bytes, int, int]:
+) -> tuple[dict[str, object], bytes, int, int, RawPayloadStorageStatus]:
     if endpoint == CARD_ENDPOINT:
         url = CARD_URL
         parameters = {"mid": mid, "photo": "true"}
@@ -306,18 +309,9 @@ async def _fetch_follower_response(
         ) from error
 
     duration_ms = int((time.perf_counter() - started) * 1000)
-    try:
-        raw = follower_response_text(response)
-    except LookupError as error:
-        # A charset conversion failure is not malformed JSON and must never
-        # trigger relation fallback. Keep the Worker alive with a safe error.
-        raise BilibiliCrawlerError(
-            "BILIBILI_UNKNOWN_ERROR",
-            "Unsupported Bilibili response charset.",
-            retryable=False,
-            endpoint=endpoint,
-            status_code=response.status_code,
-        ) from error
+    raw = follower_response_text(response)
+    content_types = response.headers.get_list("content-type")
+    raw_media_type = (content_types[0] if content_types else "") or "application/octet-stream"
     if response.status_code >= 400:
         if response.status_code == 429:
             code = "BILIBILI_RATE_LIMITED"
@@ -334,6 +328,8 @@ async def _fetch_follower_response(
             retryable=retryable,
             endpoint=endpoint,
             status_code=response.status_code,
+            raw_bytes=response.content,
+            raw_media_type=raw_media_type,
         )
 
     raw_bytes = response.content
@@ -346,18 +342,25 @@ async def _fetch_follower_response(
             status_code=200,
         )
     fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    parsed = (
-        parse_card_response(raw, fetched_at)
-        if endpoint == CARD_ENDPOINT
-        else parse_relation_stat_response(raw, fetched_at)
-    )
-    return parsed, raw_bytes, response.status_code, duration_ms
+    try:
+        parsed = (
+            parse_card_response(raw, fetched_at)
+            if endpoint == CARD_ENDPOINT
+            else parse_relation_stat_response(raw, fetched_at)
+        )
+    except BilibiliCrawlerError as error:
+        # Retain bytes internally only. Opt-in callers may archive them; normal
+        # monitoring and read-only profiles keep their existing failure path.
+        error.raw_bytes = raw_bytes
+        error.raw_media_type = raw_media_type
+        raise
+    return parsed, raw_bytes, response.status_code, duration_ms, raw_payload_storage_status(raw)
 
 
 async def fetch_follower_profile(
     mid: str, http_configuration: BilibiliFollowerHttpConfiguration | None = None
 ) -> dict[str, Any]:
-    parsed, _, _, _ = await _fetch_follower_response(CARD_ENDPOINT, mid, http_configuration)
+    parsed, _, _, _, _ = await _fetch_follower_response(CARD_ENDPOINT, mid, http_configuration)
     # Live name lookup is ephemeral, not a follower snapshot/evidence collection operation.
     legacy_follower_result(parsed, CARD_ENDPOINT, profile=True)
     return BilibiliFollowerProfile.model_validate(
@@ -371,7 +374,7 @@ async def fetch_follower_endpoint(
     data_directory: Path,
     http_configuration: BilibiliFollowerHttpConfiguration | None = None,
 ) -> dict[str, Any]:
-    parsed, raw_bytes, status_code, duration_ms = await _fetch_follower_response(
+    parsed, raw_bytes, status_code, duration_ms, storage_status = await _fetch_follower_response(
         endpoint, mid, http_configuration
     )
     legacy_follower_result(parsed, endpoint)
@@ -381,4 +384,5 @@ async def fetch_follower_endpoint(
         "evidenceObject": evidence,
         "statusCode": status_code,
         "durationMs": duration_ms,
+        "rawPayloadStorageStatus": storage_status,
     }

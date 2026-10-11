@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .bilibili_follower import BilibiliCrawlerError
+from .java_scalar_text import java_scalar_text
 
 CHINA_TIMEZONE = timezone(timedelta(hours=8))
 JAVA_BLANK = re.compile(
@@ -14,13 +15,8 @@ JAVA_BLANK = re.compile(
 
 
 def optional_text(value: object) -> str | None:
-    if isinstance(value, bool):
-        text = "true" if value else "false"
-    elif isinstance(value, (str, int, float)):
-        text = str(value)
-    else:
-        return None
-    return None if JAVA_BLANK.fullmatch(text) else text
+    text = java_scalar_text(value)
+    return None if text is None or JAVA_BLANK.fullmatch(text) else text
 
 
 def optional_int(value: object) -> int | None:

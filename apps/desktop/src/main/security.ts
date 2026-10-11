@@ -1,5 +1,9 @@
 import type { WebPreferences } from "electron"
 
+export function shouldRegisterProtocolClient(environment: NodeJS.ProcessEnv): boolean {
+  return environment.BMD_E2E_HEADLESS !== "1"
+}
+
 export function isAllowedExternalUrl(value: string): boolean {
   try {
     const url = new URL(value)

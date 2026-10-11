@@ -1,11 +1,23 @@
-import { renderToStaticMarkup } from "react-dom/server"
+import { renderToReadableStream } from "react-dom/server"
+import type { ReactNode } from "react"
 import { describe, expect, it } from "vitest"
 import type { DesktopBridge } from "@bmd/contracts"
 
 import { DesktopWorkspace } from "./DesktopWorkspace"
 
+async function renderWorkspace(workspace: ReactNode): Promise<string> {
+  const stream = await renderToReadableStream(workspace)
+  await stream.allReady
+  return new Response(stream).text()
+}
+
 describe("DesktopWorkspace", () => {
   const bridge: DesktopBridge = {
+    bilibiliLiveRankV2: {
+      summary: async () => { throw new Error("not used during server render") },
+      latest: async () => { throw new Error("not used during server render") },
+      refresh: async () => { throw new Error("not used during server render") }
+    },
     core: {
       bootstrap: async () => { throw new Error("not used during server render") },
       restart: async () => { throw new Error("not used during server render") }
@@ -27,6 +39,10 @@ describe("DesktopWorkspace", () => {
       list: async () => ({ items: [], total: 0, snapshotAt: "2026-08-23T08:00:00.000Z" }),
       create: async () => { throw new Error("not used during server render") }
     },
+    platformCollection: {
+      listAdapters: async () => [],
+      runOnce: async () => { throw new Error("not used during server render") }
+    },
     subjects: {
       list: async () => ({ items: [], total: 0, snapshotAt: "2026-08-23T08:00:00.000Z" }),
       create: async () => { throw new Error("not used during server render") },
@@ -41,6 +57,8 @@ describe("DesktopWorkspace", () => {
       bind: async () => { throw new Error("not used during server render") },
       workbench: async () => { throw new Error("not used during server render") },
       trends: async () => { throw new Error("not used during server render") },
+      workbenchV3: async () => { throw new Error("preview unavailable") },
+      trendsV3: async () => { throw new Error("preview unavailable") },
       workbenchV2: async () => { throw new Error("not used during server render") },
       trendsV2: async () => { throw new Error("not used during server render") },
       updateLayout: async () => []
@@ -72,6 +90,27 @@ describe("DesktopWorkspace", () => {
       refresh: async () => { throw new Error("not used during server render") },
       credential: async () => { throw new Error("not used during server render") },
       revoke: async () => ({ revoked: true })
+    },
+    bilibiliLiveV2: {
+      list: async () => ({ items: [], total: 0, snapshotAt: "2026-08-29T12:00:00.000Z" }),
+      add: async () => { throw new Error("not used during server render") },
+      updateStatus: async () => { throw new Error("not used during server render") },
+      updateSettings: async () => { throw new Error("not used during server render") },
+      refresh: async () => { throw new Error("not used during server render") },
+      remove: async () => ({ deleted: true }),
+      summary: async () => ({
+        totalRooms: 0,
+        activeRooms: 0,
+        liveRooms: 0,
+        roundRooms: 0,
+        offlineRooms: 0,
+        errorRooms: 0,
+        totalOnlineCount: "0",
+        todayLiveStarts: 0
+      }),
+      trend: async () => { throw new Error("not used during server render") },
+      trends: async () => [],
+      events: async () => [],
     },
     bilibiliLive: {
       list: async () => ({ items: [], total: 0, snapshotAt: "2026-08-29T12:00:00.000Z" }),
@@ -117,15 +156,15 @@ describe("DesktopWorkspace", () => {
     }
   }
 
-  it("renders the pale light theme and exposes a dark-theme switch", () => {
-    const html = renderToStaticMarkup(<DesktopWorkspace initialPageId="bilibili-followers" />)
+  it("renders the pale light theme and exposes a dark-theme switch", async () => {
+    const html = await renderWorkspace(<DesktopWorkspace initialPageId="bilibili-followers" />)
 
     expect(html).toContain("desktop-shell theme-light")
     expect(html).toContain('aria-label="切换至深色主题"')
   })
 
-  it("shows only the real follower workspace and removes the explanatory side rail", () => {
-    const html = renderToStaticMarkup(
+  it("shows only the real follower workspace and removes the explanatory side rail", async () => {
+    const html = await renderWorkspace(
       <DesktopWorkspace initialPageId="bilibili-followers" bridge={bridge} />
     )
 
@@ -143,8 +182,8 @@ describe("DesktopWorkspace", () => {
     expect(html).toContain("workspace-layout is-single-pane")
   })
 
-  it("renders the real local Core and SQLite bootstrap state in the sidebar", () => {
-    const html = renderToStaticMarkup(
+  it("renders the real local Core and SQLite bootstrap state in the sidebar", async () => {
+    const html = await renderWorkspace(
       <DesktopWorkspace
         initialPageId="bilibili-followers"
         runtime={{
@@ -160,8 +199,8 @@ describe("DesktopWorkspace", () => {
     expect(html).not.toContain("18 / 18 服务在线")
   })
 
-  it("routes the B/S follower business to the real local follower workspace", () => {
-    const html = renderToStaticMarkup(
+  it("routes the B/S follower business to the real local follower workspace", async () => {
+    const html = await renderWorkspace(
       <DesktopWorkspace initialPageId="bilibili-followers" bridge={bridge} />
     )
 
@@ -174,8 +213,8 @@ describe("DesktopWorkspace", () => {
     expect(html).not.toContain("UI DRAFT")
   })
 
-  it("routes the B/S live REST business to the real local live workspace", () => {
-    const html = renderToStaticMarkup(
+  it("routes the B/S live REST business to the real local live workspace", async () => {
+    const html = await renderWorkspace(
       <DesktopWorkspace initialPageId="bilibili-live" bridge={bridge} />
     )
 
@@ -191,8 +230,8 @@ describe("DesktopWorkspace", () => {
     expect(html).not.toContain("UI DRAFT")
   })
 
-  it("routes the original Douyin self-auth business to the real local auth workspace", () => {
-    const html = renderToStaticMarkup(
+  it("routes the original Douyin self-auth business to the real local auth workspace", async () => {
+    const html = await renderWorkspace(
       <DesktopWorkspace initialPageId="douyin-auth" bridge={bridge} />
     )
 
@@ -201,6 +240,20 @@ describe("DesktopWorkspace", () => {
     expect(html).toContain("官方 OAuth")
     expect(html).toContain("正在读取抖音登录态")
     expect(html).toContain("SQLite v11")
+    expect(html).not.toContain("UI DRAFT")
+  })
+
+  it.each([
+    { pageId: "live-data", title: "数据中心", content: "数据中心暂无来源" },
+    { pageId: "live-analytics", title: "分析看板", content: 'aria-label="分析看板"' }
+  ] as const)("opens $title as a standalone real business workspace", async ({ pageId, title, content }) => {
+    const html = await renderWorkspace(<DesktopWorkspace initialPageId={pageId} bridge={bridge} />)
+
+    expect(html).toContain(`<h1>${title}</h1>`)
+    expect(html).toContain(content)
+    expect(html).toMatch(new RegExp(`aria-current="page"[^>]*>.*?<span>${title}</span>`, "s"))
+    expect(html).toContain("workspace-layout is-single-pane")
+    expect(html).not.toContain('role="tablist"')
     expect(html).not.toContain("UI DRAFT")
   })
 })

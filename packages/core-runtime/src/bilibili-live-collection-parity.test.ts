@@ -12,7 +12,7 @@ describe("original live snapshot and collection business on actual SQLite", () =
     f.advance(); f.state.data = { liveStatus: 0 }
     const result = mode === "manual" ? await f.service.refreshNow(room.id) : (await f.service.collectDueRooms())[0]!
     expect(f.database.findBilibiliLiveRoomById(room.id)).toMatchObject({ liveStatus: 0, liveTime: null,
-      onlineCount: null, attentionCount: 200, title: "原直播标题", faceUrl: "https://example.test/face.png", areaName: "游戏" })
+      onlineCount: null, attentionCount: 200n, title: "原直播标题", faceUrl: "https://example.test/face.png", areaName: "游戏" })
     expect(result.onlineCount).toBeUndefined()
     expect(f.service.trend({ roomMonitorId: room.id }).points.at(-1)?.onlineCount).toBeUndefined()
   })
@@ -234,7 +234,7 @@ describe("original live snapshot and collection business on actual SQLite", () =
       f.state.failure = { code: "BILIBILI_RISK_CONTROL", retryable: false }
     }
     await expect(f.service.refreshNow(room.id)).rejects.toMatchObject({ code: "BILIBILI_RISK_CONTROL" })
-    expect(f.database.findBilibiliLiveRoomById(room.id)).toMatchObject({ liveStatus: 1, title: "并发新标题", onlineCount: 300 })
+    expect(f.database.findBilibiliLiveRoomById(room.id)).toMatchObject({ liveStatus: 1, title: "并发新标题", onlineCount: 300n })
     expect(f.service.events()[0]).toMatchObject({ eventType: "ERROR_OCCURRED", fromLiveStatus: 0, toLiveStatus: 0,
       titleBefore: "原直播标题", titleAfter: "原直播标题", onlineCount: 100 })
   })

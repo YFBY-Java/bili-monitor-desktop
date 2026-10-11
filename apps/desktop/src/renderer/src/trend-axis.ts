@@ -1,4 +1,9 @@
 export interface TrendBounds { min: number; max: number; span: number }
+// Conservative glyph budget for the existing small axis font. Content-based,
+// deterministic in SSR/tests; no canvas or missing SVG measurement APIs.
+export function exactTrendLabelGutter(labels: readonly string[], ordinary: number): number {
+  return Math.max(ordinary, ...labels.map(label => label.length * 8 + 20))
+}
 // Original TrendChart.vue bounds: preserve scale for tiny changes and constant values.
 export function trendValueBounds(values: readonly number[]): TrendBounds {
   const finite = values.filter(Number.isFinite)

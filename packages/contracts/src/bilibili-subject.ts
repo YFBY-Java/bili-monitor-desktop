@@ -11,11 +11,24 @@ import {
 const OptionalUrlSchema = z.url().optional()
 const OptionalDateTimeSchema = z.iso.datetime().optional()
 const MonitorIdSchema = z.uuid()
-const SubjectTagSchema = z.string().trim().min(1).max(48)
+// SubjectService cleans/deduplicates input tags before taking the first 12.
+// Response text is already normalized with Java trim, not Unicode JS trim.
+const SubjectTagSchema = z.string().min(1)
+const SubjectTagsInputSchema = z.array(z.string().nullable())
+const SubjectNameInputSchema = z.string().max(160).nullish().transform(value => value ?? undefined)
+const SubjectTextInputSchema = z.string().nullish().transform(value => value ?? undefined)
 const JsonObjectSchema = z.record(z.string(), z.unknown())
+// @NotBlank validates Java whitespace without changing the original key text.
+// PostgreSQL VARCHAR(80) counts characters, including supplementary code points.
+const SubjectWidgetKeySchema = z.string().regex(
+  /[^\u0009-\u000d\u001c-\u0020\u1680\u2000-\u2006\u2008-\u200a\u2028\u2029\u205f\u3000]/,
+  "组件 key 必须包含非 Java 空白字符。"
+).refine(value => Array.from(value).length <= 80, "组件 key 不能超过 80 个字符。")
 
 export const BilibiliSubjectStatusSchema = z.enum(["ACTIVE", "PAUSED"])
-export const BilibiliSubjectCapabilitySchema = z.enum(["follower", "live_heat"])
+// The original binding stores List<String> verbatim, including null entries.
+// A persisted extension name does not imply that its capability is implemented.
+export const BilibiliSubjectCapabilitySchema = z.string().nullable()
 
 export const BilibiliSubjectBindingSchema = z.object({
   id: z.uuid(),
@@ -33,7 +46,7 @@ export const BilibiliSubjectBindingSchema = z.object({
 export const BilibiliSubjectSchema = z.object({
   id: z.uuid(),
   // Imported follower profiles are raw text; the database bound is characters,
-  // not UTF-16 units. Keep manual input URL/name validation separate below.
+  // not UTF-16 units. Manual names retain the DTO's raw UTF-16 bound below.
   displayName: z.string().min(1).refine(value => Array.from(value).length <= 160),
   avatarUrl: z.string().optional(),
   remark: z.string().optional(),
@@ -50,15 +63,15 @@ export const BilibiliSubjectListSchema = z.array(BilibiliSubjectSchema)
 export const DeleteBilibiliSubjectResultSchema = z.object({ deleted: z.literal(true) }).strict()
 
 export const CreateBilibiliSubjectInputSchema = z.object({
-  displayName: z.string().trim().min(1).max(160).optional(),
-  avatarUrl: OptionalUrlSchema,
-  remark: z.string().trim().max(2_000).optional(),
-  tags: z.array(SubjectTagSchema).max(12).default([]),
-  bilibiliUserMonitorId: MonitorIdSchema.optional(),
-  bilibiliLiveRoomMonitorId: MonitorIdSchema.optional(),
-  mid: BilibiliUidSchema.optional(),
-  roomId: BilibiliLiveNumericIdSchema.optional(),
-  danmuEnabled: z.boolean().default(true)
+  displayName: SubjectNameInputSchema,
+  avatarUrl: SubjectTextInputSchema,
+  remark: SubjectTextInputSchema,
+  tags: SubjectTagsInputSchema.nullish().transform(value => value ?? []),
+  bilibiliUserMonitorId: MonitorIdSchema.nullish().transform(value => value ?? undefined),
+  bilibiliLiveRoomMonitorId: MonitorIdSchema.nullish().transform(value => value ?? undefined),
+  mid: BilibiliUidSchema.nullish().transform(value => value ?? undefined),
+  roomId: BilibiliLiveNumericIdSchema.nullish().transform(value => value ?? undefined),
+  danmuEnabled: z.boolean().nullish().transform(value => value ?? undefined)
 }).strict().superRefine((value, context) => {
   if (
     value.displayName === undefined
@@ -76,42 +89,43 @@ export const CreateBilibiliSubjectInputSchema = z.object({
 
 export const BilibiliSubjectIdInputSchema = z.object({ subjectId: z.uuid() }).strict()
 export const ListBilibiliSubjectsInputSchema = z.object({
-  limit: z.number().int().min(1).max(500).default(100)
+  limit: z.number().int().min(1).optional()
 }).strict()
 
 export const UpdateBilibiliSubjectInputSchema = BilibiliSubjectIdInputSchema.extend({
-  displayName: z.string().trim().min(1).max(160).optional(),
-  avatarUrl: z.union([z.url(), z.literal("")]).optional(),
-  remark: z.string().max(2_000).optional(),
-  tags: z.array(SubjectTagSchema).max(12).optional(),
-  enabled: z.boolean().optional()
+  displayName: SubjectNameInputSchema,
+  avatarUrl: SubjectTextInputSchema,
+  remark: SubjectTextInputSchema,
+  tags: SubjectTagsInputSchema.nullish().transform(value => value ?? undefined),
+  enabled: z.boolean().nullish().transform(value => value ?? undefined)
 }).strict()
 
 export const UpdateBilibiliSubjectBindingInputSchema = BilibiliSubjectIdInputSchema.extend({
-  bilibiliUserMonitorId: MonitorIdSchema.optional(),
-  bilibiliLiveRoomMonitorId: MonitorIdSchema.optional(),
-  mid: BilibiliUidSchema.optional(),
-  roomId: BilibiliLiveNumericIdSchema.optional(),
-  enabledCapabilities: z.array(BilibiliSubjectCapabilitySchema).optional(),
-  danmuEnabled: z.boolean().optional()
+  bilibiliUserMonitorId: MonitorIdSchema.nullish().transform(value => value ?? undefined),
+  bilibiliLiveRoomMonitorId: MonitorIdSchema.nullish().transform(value => value ?? undefined),
+  mid: BilibiliUidSchema.nullish().transform(value => value ?? undefined),
+  roomId: BilibiliLiveNumericIdSchema.nullish().transform(value => value ?? undefined),
+  enabledCapabilities: z.array(BilibiliSubjectCapabilitySchema).nullish()
+    .transform(value => value ?? undefined),
+  danmuEnabled: z.boolean().nullish().transform(value => value ?? undefined)
 }).strict()
 
 export const BilibiliSubjectWidgetLayoutSchema = z.object({
-  widgetKey: z.string().trim().min(1).max(80),
+  widgetKey: SubjectWidgetKeySchema,
   enabled: z.boolean(),
   position: JsonObjectSchema,
   settings: JsonObjectSchema
 }).strict()
 
 export const BilibiliSubjectLayoutItemInputSchema = z.object({
-  widgetKey: z.string().trim().min(1).max(80),
-  enabled: z.boolean().default(true),
-  position: JsonObjectSchema.default({}),
-  settings: JsonObjectSchema.default({})
+  widgetKey: SubjectWidgetKeySchema,
+  enabled: z.boolean().nullish().transform(value => value ?? true),
+  position: JsonObjectSchema.nullish().transform(value => value ?? {}),
+  settings: JsonObjectSchema.nullish().transform(value => value ?? {})
 }).strict()
 
 export const UpdateBilibiliSubjectLayoutInputSchema = BilibiliSubjectIdInputSchema.extend({
-  items: z.array(BilibiliSubjectLayoutItemInputSchema).max(50)
+  items: z.array(BilibiliSubjectLayoutItemInputSchema)
 }).strict()
 
 export const BilibiliSubjectUserSchema = z.object({
@@ -135,10 +149,10 @@ export const BilibiliSubjectLiveRoomSchema = z.object({
   uid: BilibiliUidSchema,
   roomId: BilibiliLiveNumericIdSchema,
   uname: z.string(),
-  faceUrl: OptionalUrlSchema,
+  faceUrl: z.string().optional(),
   title: z.string().optional(),
-  coverUrl: OptionalUrlSchema,
-  keyframeUrl: OptionalUrlSchema,
+  coverUrl: z.string().optional(),
+  keyframeUrl: z.string().optional(),
   areaName: z.string().optional(),
   parentAreaName: z.string().optional(),
   liveStatus: BilibiliLiveStatusSchema,

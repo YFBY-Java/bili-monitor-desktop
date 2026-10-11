@@ -1,5 +1,12 @@
 import {
-  BilibiliLiveRankFetchedSnapshotSchema,
+  BilibiliLiveRankFetchedSnapshotV2Schema,
+  BilibiliLiveRankRefreshResultV2Schema,
+  BilibiliLiveRankSnapshotV2Schema,
+  BilibiliLiveRankSummaryV2Schema,
+  type BilibiliLiveRankFetchedSnapshotV2,
+  type BilibiliLiveRankRefreshResultV2,
+  type BilibiliLiveRankSnapshotV2,
+  type BilibiliLiveRankSummaryV2,
   BilibiliLiveRankLatestInputSchema,
   BilibiliLiveRankRefreshInputSchema,
   BilibiliLiveRankRefreshResultSchema,
@@ -15,6 +22,7 @@ import {
 } from "@bmd/contracts"
 import {
   ControlDatabase,
+  type BilibiliApiRequestMeta,
   type StoredBilibiliLiveRankEntry,
   type StoredBilibiliLiveRankSnapshot,
   type StoredBilibiliLiveRoomMonitor
@@ -22,6 +30,7 @@ import {
 
 import { CoreApplicationError } from "./account-subject-service"
 import { LocalRequestRateLimiter } from "./local-request-rate-limiter"
+import { exactRankFromLegacy, safeRankLegacyProjection } from "./rank-long64-projection"
 
 const AUDIENCE_ENDPOINT = "xlive/general-interface/v1/rank/queryContributionRank" as const
 const AUDIENCE_FALLBACK_ENDPOINT = "xlive/general-interface/v1/rank/getOnlineGoldRank" as const
@@ -49,7 +58,7 @@ const DEFAULT_KINDS: RankKind[] = [
 ]
 
 export interface BilibiliLiveRankSource {
-  fetch: (request: BilibiliLiveRankWorkerRequest) => Promise<BilibiliLiveRankFetchedSnapshot>
+  fetch: (request: BilibiliLiveRankWorkerRequest) => Promise<BilibiliLiveRankFetchedSnapshot | BilibiliLiveRankFetchedSnapshotV2>
   stop?: () => Promise<void>
 }
 
@@ -61,6 +70,10 @@ export interface BilibiliLiveRankServiceOptions {
   sleep?: (milliseconds: number) => Promise<void>
   rateLimiter?: LocalRequestRateLimiter
   requestMinIntervalMs?: number
+  pageSize?: number
+  guardPageSize?: number
+  maxPages?: number
+  webLocation?: string
 }
 
 class RankFetchFailure extends Error {
@@ -76,13 +89,27 @@ export class BilibiliLiveRankService {
   }
 
   summary(roomMonitorId: string): BilibiliLiveRankSummary {
+    return this.toSummary(this.requireRoom(roomMonitorId), true)
+  }
+
+  summaryV2(roomMonitorId: string): BilibiliLiveRankSummaryV2 {
     return this.toSummary(this.requireRoom(roomMonitorId))
   }
 
   latest(input: BilibiliLiveRankLatestInput): BilibiliLiveRankSnapshot {
+    const { snapshot, limit } = this.latestSnapshot(input)
+    return this.toSnapshot([snapshot], limit, true)
+  }
+
+  latestV2(input: BilibiliLiveRankLatestInput): BilibiliLiveRankSnapshotV2 {
+    const { snapshot, limit } = this.latestSnapshot(input)
+    return this.toSnapshot([snapshot], limit)
+  }
+
+  private latestSnapshot(input: BilibiliLiveRankLatestInput): { snapshot: StoredBilibiliLiveRankSnapshot, limit: number } {
     const query = BilibiliLiveRankLatestInputSchema.parse(input)
     this.requireRoom(query.roomMonitorId)
-    const snapshots = this.options.database.findLatestBilibiliLiveRankSnapshots(
+    const snapshot = this.options.database.findLatestBilibiliLiveRankSnapshot(
       query.roomMonitorId,
       {
         ...(query.family ? { family: query.family } : {}),
@@ -90,17 +117,27 @@ export class BilibiliLiveRankService {
         ...(query.rankSwitch ? { rankSwitch: query.rankSwitch } : {})
       }
     )
-    const groups = groupSnapshots(snapshots)
-    const selected = [...groups.values()].sort((left, right) =>
-      newestCapturedAt(right).localeCompare(newestCapturedAt(left))
-    )[0]
-    if (!selected) {
+    if (!snapshot) {
       throw new CoreApplicationError("BILIBILI_LIVE_RANK_NOT_FOUND", "暂无直播间榜单数据，请先刷新榜单。")
     }
-    return this.toSnapshot(selected, query.limit)
+    return { snapshot, limit: query.limit }
   }
 
   async refresh(input: BilibiliLiveRankRefreshInput): Promise<BilibiliLiveRankRefreshResult> {
+    const { room, successCount, errors } = await this.collectRanks(input)
+    return BilibiliLiveRankRefreshResultSchema.parse({ roomMonitorId: room.monitorId,
+      successCount, errors, summary: this.toSummary(room, true) })
+  }
+
+  async refreshV2(input: BilibiliLiveRankRefreshInput): Promise<BilibiliLiveRankRefreshResultV2> {
+    const { room, successCount, errors } = await this.collectRanks(input)
+    return BilibiliLiveRankRefreshResultV2Schema.parse({ roomMonitorId: room.monitorId,
+      successCount, errors, summary: this.toSummary(room) })
+  }
+
+  private async collectRanks(input: BilibiliLiveRankRefreshInput): Promise<{
+    room: StoredBilibiliLiveRoomMonitor, successCount: number, errors: string[]
+  }> {
     this.ensureRunning()
     const command = BilibiliLiveRankRefreshInputSchema.parse(input)
     const room = this.requireRoom(command.roomMonitorId)
@@ -111,8 +148,9 @@ export class BilibiliLiveRankService {
     let successCount = 0
     const errors: string[] = []
     const taskId = this.options.idFactory()
+    const maxPages = command.maxPages ?? Math.min(Math.max(this.options.maxPages ?? 1, 1), 5)
     for (const kind of kinds) {
-      for (let page = 1; page <= command.maxPages; page += 1) {
+      for (let page = 1; page <= maxPages; page += 1) {
         try {
           this.ensureRunning()
           const fetched = await this.fetchKind(room, kind, page, command.force, taskId)
@@ -121,17 +159,13 @@ export class BilibiliLiveRankService {
           successCount += 1
         } catch (error) {
           this.ensureRunning()
+          if (!(error instanceof RankFetchFailure)) throw error
           errors.push(`${kind.label}：${errorMessage(error)}`)
           break
         }
       }
     }
-    return BilibiliLiveRankRefreshResultSchema.parse({
-      roomMonitorId: room.monitorId,
-      successCount,
-      errors,
-      summary: this.toSummary(room)
-    })
+    return { room, successCount, errors }
   }
 
   async stop(): Promise<void> {
@@ -146,8 +180,10 @@ export class BilibiliLiveRankService {
     page: number,
     force: boolean,
     taskId: string
-  ): Promise<BilibiliLiveRankFetchedSnapshot> {
-    const pageSize = kind.family === "GUARD" ? 30 : 50
+  ): Promise<BilibiliLiveRankFetchedSnapshotV2> {
+    const pageSize = kind.family === "GUARD"
+      ? Math.max(1, Math.min(this.options.guardPageSize ?? 30, 30))
+      : Math.max(1, Math.min(this.options.pageSize ?? 50, 100))
     const base = {
       taskId,
       roomId: room.roomId,
@@ -158,7 +194,8 @@ export class BilibiliLiveRankService {
       periodScope: kind.periodScope,
       ...(kind.guardTyp ? { guardTyp: kind.guardTyp } : {}),
       page,
-      pageSize
+      pageSize,
+      webLocation: this.options.webLocation ?? "444.8"
     }
     if (kind.family === "GUARD") {
       return this.fetchWithLog({
@@ -205,30 +242,54 @@ export class BilibiliLiveRankService {
 
   private async fetchWithLog(
     request: BilibiliLiveRankWorkerRequest
-  ): Promise<BilibiliLiveRankFetchedSnapshot> {
+  ): Promise<BilibiliLiveRankFetchedSnapshotV2> {
     this.ensureRunning()
     const started = performance.now()
+    // Match the original logging shapes, without serializing signing keys or
+    // any other transport-only material from the Worker request.
+    const requestMeta: BilibiliApiRequestMeta = request.endpoint === AUDIENCE_FALLBACK_ENDPOINT
+      ? { roomId: request.roomId, ruid: request.ruid, page: request.page, fallback: true }
+      : request.family === "GUARD"
+        ? { roomId: request.roomId, ruid: request.ruid, type: request.type,
+            page: request.page, pageSize: request.pageSize }
+        : request.attempt > 1 && request.forceRefreshWbi
+          ? { roomId: request.roomId, ruid: request.ruid, type: request.type,
+              switch: request.rankSwitch!, page: request.page, forceWbi: true }
+          : { roomId: request.roomId, ruid: request.ruid, type: request.type,
+              switch: request.rankSwitch!, page: request.page, pageSize: request.pageSize }
     await this.acquireRateLimit()
     this.ensureRunning()
-    let result: BilibiliLiveRankFetchedSnapshot
+    let result: BilibiliLiveRankFetchedSnapshotV2
     try {
-      result = BilibiliLiveRankFetchedSnapshotSchema.parse(
-        await this.options.source.fetch(request)
+      result = BilibiliLiveRankFetchedSnapshotV2Schema.parse(
+        exactRankFromLegacy(await this.options.source.fetch(request))
       )
       this.ensureRunning()
     } catch (error) {
       this.ensureRunning()
+      // Original conversion exceptions bypass BilibiliFetchException-only
+      // API logging, forced WBI refresh and online-rank fallback.
+      if (errorCode(error) === "BILIBILI_RESPONSE_CONVERSION_ERROR") {
+        throw new CoreApplicationError("INTERNAL_ERROR", errorMessage(error), false)
+      }
+      const biliCode = errorNumber(error, "biliCode")
       this.options.database.insertBilibiliApiCall({
         callId: this.options.idFactory(),
         taskId: request.taskId,
         attempt: request.attempt,
-        endpointKey: request.endpoint ?? (request.family === "GUARD" ? GUARD_ENDPOINT : AUDIENCE_ENDPOINT),
+        endpointKey: error && typeof error === "object" && "endpoint" in error
+          && error.endpoint === "x/web-interface/nav"
+          ? error.endpoint
+          : request.endpoint ?? (request.family === "GUARD" ? GUARD_ENDPOINT : AUDIENCE_ENDPOINT),
         mid: request.ruid,
         statusCode: errorNumber(error, "statusCode"),
         durationMs: Math.max(0, Math.floor(performance.now() - started)),
         errorType: errorCode(error),
         retryable: errorBoolean(error, "retryable"),
         evidenceObjectId: null,
+        requestMeta,
+        responseMeta: { success: false, message: errorMessage(error),
+          ...(biliCode === null ? {} : { biliCode }) },
         createdAt: this.options.now().toISOString()
       })
       throw new RankFetchFailure(errorCode(error), errorMessage(error))
@@ -238,6 +299,7 @@ export class BilibiliLiveRankService {
       endpointKey: result.sourceEndpoint, mid: request.ruid, statusCode: result.statusCode,
       durationMs: Math.max(0, Math.floor(performance.now() - started)),
       errorType: null, retryable: false, evidenceObjectId: result.evidenceObject.objectId,
+      requestMeta, responseMeta: { success: true },
       createdAt: result.capturedAt
     }, { ...result.evidenceObject, createdAt: result.capturedAt })
     return result
@@ -245,9 +307,10 @@ export class BilibiliLiveRankService {
 
   private persist(
     room: StoredBilibiliLiveRoomMonitor,
-    fetched: BilibiliLiveRankFetchedSnapshot
+    fetched: BilibiliLiveRankFetchedSnapshotV2
   ): void {
     this.options.database.upsertBilibiliLiveRankSnapshot({
+      ...(fetched.rawPayloadStorageStatus !== undefined ? { rawPayloadStorageStatus: fetched.rawPayloadStorageStatus } : {}),
       snapshot: {
         snapshotId: this.options.idFactory(),
         monitorId: room.monitorId,
@@ -280,6 +343,10 @@ export class BilibiliLiveRankService {
         wealthLevel: entry.wealthLevel ?? null,
         medalName: entry.medalName ?? null,
         medalLevel: entry.medalLevel ?? null,
+        medalRuid: entry.medalRuid ?? null,
+        medalIsLight: entry.medalIsLight ?? null,
+        rawEntryJson: entry.rawEntryJson ?? null,
+        ...(entry.rawEntryStorageStatus !== undefined ? { rawEntryStorageStatus: entry.rawEntryStorageStatus } : {}),
         guardExpiredText: entry.guardExpiredText ?? null,
         accompanyDays: entry.accompanyDays ?? null
       })),
@@ -287,12 +354,14 @@ export class BilibiliLiveRankService {
     })
   }
 
-  private toSummary(room: StoredBilibiliLiveRoomMonitor): BilibiliLiveRankSummary {
+  private toSummary(room: StoredBilibiliLiveRoomMonitor): BilibiliLiveRankSummaryV2
+  private toSummary(room: StoredBilibiliLiveRoomMonitor, legacy: true): BilibiliLiveRankSummary
+  private toSummary(room: StoredBilibiliLiveRoomMonitor, legacy = false): BilibiliLiveRankSummaryV2 | BilibiliLiveRankSummary {
     const groups = groupSnapshots(
       this.options.database.findLatestBilibiliLiveRankSnapshots(room.monitorId)
     )
     const snapshots = [...groups.values()].map((pages) =>
-      this.toSnapshot(pages, SUMMARY_ENTRY_LIMIT)
+      legacy ? this.toSnapshot(pages, SUMMARY_ENTRY_LIMIT, true) : this.toSnapshot(pages, SUMMARY_ENTRY_LIMIT)
     )
     const audience = snapshots.find((snapshot) =>
       snapshot.rankFamily === "AUDIENCE"
@@ -301,7 +370,7 @@ export class BilibiliLiveRankService {
     ) ?? snapshots.find((snapshot) => snapshot.rankFamily === "AUDIENCE")
     const guard = snapshots.find((snapshot) => snapshot.rankFamily === "GUARD")
     const updatedAt = snapshots.map((snapshot) => snapshot.capturedAt).sort().at(-1)
-    return BilibiliLiveRankSummarySchema.parse({
+    const result = {
       roomMonitorId: room.monitorId,
       roomId: room.roomId,
       ruid: room.uid,
@@ -311,19 +380,24 @@ export class BilibiliLiveRankService {
       ...(guard?.countText ? { guardCountText: guard.countText } : {}),
       ...(updatedAt ? { updatedAt } : {}),
       snapshots
-    })
+    }
+    return legacy ? BilibiliLiveRankSummarySchema.parse(safeRankLegacyProjection(result))
+      : BilibiliLiveRankSummaryV2Schema.parse(result)
   }
 
+  private toSnapshot(pages: StoredBilibiliLiveRankSnapshot[], entryLimit: number): BilibiliLiveRankSnapshotV2
+  private toSnapshot(pages: StoredBilibiliLiveRankSnapshot[], entryLimit: number, legacy: true): BilibiliLiveRankSnapshot
   private toSnapshot(
     pages: StoredBilibiliLiveRankSnapshot[],
-    entryLimit: number
-  ): BilibiliLiveRankSnapshot {
+    entryLimit: number,
+    legacy = false
+  ): BilibiliLiveRankSnapshotV2 | BilibiliLiveRankSnapshot {
     const ordered = [...pages].sort((left, right) => left.pageNo - right.pageNo)
     const snapshot = ordered[0]
     if (!snapshot) throw new Error("Rank snapshot group cannot be empty.")
     const byKey = new Map<string, StoredBilibiliLiveRankEntry>()
     for (const page of ordered) {
-      for (const entry of this.options.database.findBilibiliLiveRankEntries(page.snapshotId, entryLimit)) {
+      for (const entry of this.options.database.findBilibiliLiveRankEntries(page.snapshotId, entryLimit, !legacy)) {
         const key = entry.userUid
           ? `uid:${entry.userUid}`
           : entry.rankNo !== null
@@ -341,7 +415,7 @@ export class BilibiliLiveRankService {
         entryKind: entry.entryKind,
         ...(entry.displayName ? { displayName: entry.displayName } : {}),
         ...(entry.faceUrl ? { faceUrl: entry.faceUrl } : {}),
-        ...(entry.score !== null ? { score: entry.score } : {}),
+        ...(entry.score !== null ? { score: String(entry.score) } : {}),
         ...(entry.guardLevel !== null ? { guardLevel: entry.guardLevel } : {}),
         ...(entry.wealthLevel !== null ? { wealthLevel: entry.wealthLevel } : {}),
         ...(entry.medalName ? { medalName: entry.medalName } : {}),
@@ -349,7 +423,7 @@ export class BilibiliLiveRankService {
         ...(entry.guardExpiredText ? { guardExpiredText: entry.guardExpiredText } : {}),
         ...(entry.accompanyDays !== null ? { accompanyDays: entry.accompanyDays } : {})
       }))
-    return BilibiliLiveRankSnapshotSchema.parse({
+    const result = {
       id: snapshot.snapshotId,
       roomMonitorId: snapshot.monitorId,
       roomId: snapshot.roomId,
@@ -360,7 +434,7 @@ export class BilibiliLiveRankService {
       ...(snapshot.periodScope ? { periodScope: snapshot.periodScope } : {}),
       pageNo: snapshot.pageNo,
       pageSize: snapshot.pageSize,
-      ...(snapshot.totalCount !== null ? { totalCount: snapshot.totalCount } : {}),
+      ...(snapshot.totalCount !== null ? { totalCount: String(snapshot.totalCount) } : {}),
       ...(snapshot.countText ? { countText: snapshot.countText } : {}),
       ...(snapshot.valueText ? { valueText: snapshot.valueText } : {}),
       ...(snapshot.remindMsg ? { remindMsg: snapshot.remindMsg } : {}),
@@ -368,7 +442,9 @@ export class BilibiliLiveRankService {
       signedRequired: snapshot.signedRequired,
       capturedAt: newestCapturedAt(ordered),
       entries
-    })
+    }
+    return legacy ? BilibiliLiveRankSnapshotSchema.parse(safeRankLegacyProjection(result))
+      : BilibiliLiveRankSnapshotV2Schema.parse(result)
   }
 
   private selectedKinds(families: string[], types: string[]): RankKind[] {
@@ -424,7 +500,7 @@ function newestCapturedAt(snapshots: StoredBilibiliLiveRankSnapshot[]): string {
 
 function capturedBucket(value: string): string {
   const timestamp = new Date(value)
-  timestamp.setUTCMilliseconds(0)
+  timestamp.setUTCSeconds(0, 0)
   return timestamp.toISOString()
 }
 

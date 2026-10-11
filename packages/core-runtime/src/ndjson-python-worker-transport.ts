@@ -4,6 +4,7 @@ import { parse, resolve } from "node:path"
 
 import {
   RuntimeEnvelopeSchema,
+  BilibiliFollowerFetchFailureV2Schema,
   RequestKeepAliveSchema,
   HTTP_WORKER_REQUESTS,
   createRuntimeEnvelope,
@@ -47,7 +48,8 @@ export class BilibiliWorkerError extends Error {
     readonly retryable: boolean,
     readonly endpoint?: string,
     readonly statusCode?: number,
-    readonly biliCode?: number
+    readonly biliCode?: number,
+    readonly evidenceObject?: import("@bmd/contracts").ObjectRef
   ) {
     super(message)
     this.name = "BilibiliWorkerError"
@@ -202,6 +204,10 @@ export class NdjsonPythonWorkerTransport implements WorkerRequestTransport {
       }
       return
     }
+    if (envelope.traceId !== request.envelope.traceId
+      || envelope.correlationId !== request.envelope.correlationId
+      || (envelope.type !== `${request.envelope.type}.result` && envelope.type !== "worker.error")
+      || (envelope.causationId !== undefined && envelope.causationId !== request.envelope.id)) return
     clearTimeout(request.timeout)
     this.pending.delete(envelope.id)
     if (envelope.type === "worker.error") {
@@ -215,6 +221,15 @@ export class NdjsonPythonWorkerTransport implements WorkerRequestTransport {
     const value = typeof payload === "object" && payload !== null
       ? payload as Record<string, unknown>
       : {}
+    // Only opted-in follower failures carry evidence. Validate the shared
+    // contract before exposing a reference; never pass an untyped raw body.
+    if (value.evidenceObject !== undefined) {
+      const failure = BilibiliFollowerFetchFailureV2Schema.safeParse(value)
+      if (!failure.success) return new BilibiliWorkerError("WORKER_CONTRACT_INVALID",
+        "Python worker failure evidence does not match its contract.", false)
+      return new BilibiliWorkerError(failure.data.code, failure.data.message, failure.data.retryable,
+        failure.data.endpoint, failure.data.statusCode, failure.data.biliCode, failure.data.evidenceObject)
+    }
     return new BilibiliWorkerError(
       typeof value.code === "string" ? value.code : "WORKER_ERROR",
       typeof value.message === "string" ? value.message : "Python worker request failed.",

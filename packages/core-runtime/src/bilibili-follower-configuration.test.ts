@@ -223,15 +223,19 @@ describe("original follower startup configuration through the real Core", () => 
     expect(followerStoredRows(f.directory)).toEqual(before)
   })
 
-  it("does not create or stop the profile source when both stores are disabled", async () => {
+  it("disables monitor collection but keeps and disposes the account source when both stores are disabled", async () => {
     const f = await setup({ storageEnabled: false }, { enabled: false })
     await writeFile(resolve(f.directory, "config/bilibili-live-collection.json"), '{"storageEnabled":false}', "utf8")
     vi.useFakeTimers()
-    await f.start(true)
+    const runtime = await f.start(true)
     await vi.advanceTimersByTimeAsync(10_000)
-    await f.stop()
     expect(f.calls).toEqual([])
-    expect(f.state.stops).toBe(0)
+    // Original CollectTaskExecutor / BilibiliPlatformAdapter do not depend on monitor storage flags.
+    expect(await runtime.runPlatformCollection({ platformCode: "bilibili", dataType: "account", externalId: "2" }))
+      .toMatchObject({ status: "SUCCESS", fetchResult: { data: { externalAccountId: "2", followerCount: "100" } } })
+    expect(f.calls).toHaveLength(1)
+    await f.stop()
+    expect(f.state.stops).toBe(1)
     expect(f.live.state.stops).toBe(0)
     expect(f.realtime.starts).toEqual([])
     expect(vi.getTimerCount()).toBe(0)

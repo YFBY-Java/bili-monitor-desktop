@@ -1,17 +1,17 @@
-import type { BilibiliLiveRoom, BilibiliLiveTrendPoint } from "@bmd/contracts"
+import type { BilibiliLiveRoomV2, BilibiliLiveTrendPointV2 } from "@bmd/contracts"
 import { describe, expect, it } from "vitest"
 import { formatLiveTrendTime, liveChartHeight, liveChartSamples, liveTrendHelp } from "./live-trend-presentation"
 import { formatTrendAxisNumber, trendTimeBounds, trendValueBounds } from "./trend-axis"
 
 const time = Date.parse("2026-09-13T04:00:00Z")
-const point: BilibiliLiveTrendPoint = { roomId: "100", uid: "20", capturedAt: new Date(time).toISOString(),
-  liveStatus: 1, onlineCount: 100, sourceEndpoint: "room/v1/Room/get_info" }
-const room: BilibiliLiveRoom = { id: "018f0f39-7b5e-4cc1-862d-000000000000", uid: "20", roomId: "100",
-  uname: "合成主播", monitorStatus: "ACTIVE", liveStatus: 1, intervalSeconds: 300, recentTrend: [point], onlineCount: 300, version: 1 }
+const point: BilibiliLiveTrendPointV2 = { roomId: "100", uid: "20", capturedAt: new Date(time).toISOString(),
+  liveStatus: 1, onlineCount: "100", sourceEndpoint: "room/v1/Room/get_info" }
+const room: BilibiliLiveRoomV2 = { id: "018f0f39-7b5e-4cc1-862d-000000000000", uid: "20", roomId: "100",
+  uname: "合成主播", monitorStatus: "ACTIVE", liveStatus: 1, intervalSeconds: 300, recentTrend: [point], onlineCount: "300", version: 1 }
 
 describe("original live trend presentation rules", () => {
   it("prefers nonempty queried points over embedded recent points and preserves their source values", () => {
-    const history = [{ ...point, onlineCount: 200 }]
+    const history = [{ ...point, onlineCount: "200" }]
     const before = JSON.stringify({ room, history })
     expect(liveChartSamples(room, history, time).points).toBe(history)
     expect(liveChartSamples(room, history, time).source).toBe("history")
@@ -21,9 +21,9 @@ describe("original live trend presentation rules", () => {
   })
 
   it("distinguishes current zero and missing value and never adds a synthetic source endpoint", () => {
-    const current = { ...room, recentTrend: [], onlineCount: 0 }
+    const current = { ...room, recentTrend: [], onlineCount: "0" }
     const samples = liveChartSamples(current, [], time)
-    expect(samples).toEqual({ points: [{ capturedAt: new Date(time).toISOString(), onlineCount: 0 }], source: "current", provisionalTime: true })
+    expect(samples).toEqual({ points: [{ capturedAt: new Date(time).toISOString(), onlineCount: "0" }], source: "current", provisionalTime: true })
     expect(current.recentTrend).toEqual([])
     expect(liveChartSamples({ ...current, onlineCount: undefined }, [], time).source).toBe("empty")
     expect(liveChartSamples({ ...current, lastSnapshotAt: point.capturedAt }, [], time + 1000).provisionalTime).toBe(false)

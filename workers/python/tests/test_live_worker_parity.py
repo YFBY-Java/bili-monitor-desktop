@@ -10,7 +10,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import ValidationError
 
 from bmd_workers import bilibili_live as live
-from bmd_workers.bilibili_live_contract import LiveSnapshot, validate_live_result
+from bmd_workers.bilibili_live_contract import LiveSnapshot, LiveSnapshotV2, validate_live_result
 from bmd_workers.protocol import RuntimeEnvelope
 from bmd_workers.runtime import WorkerRuntime
 
@@ -26,6 +26,83 @@ ENDPOINTS = {
     "info": live.ROOM_INFO_ENDPOINT,
     "old": live.ROOM_INFO_OLD_ENDPOINT,
 }
+
+
+def test_live_numeric_profile_uses_jdk20_text():
+    value = live.parse_status_by_uids_response(
+        '{"code":0,"data":{"101":{"uid":101,"room_id":201,"live_status":1,'
+        '"uname":1e7,"title":-0.0,"area_name":0.0001,"face":"https://example.invalid/face.jpg"}}}',
+        NOW,
+    )[0]
+    assert (value["uname"], value["title"], value["areaName"]) == ("1.0E7", "-0.0", "1.0E-4")
+    LiveSnapshot.model_validate(value)
+
+
+def test_live_independent_message_uses_jdk20_text():
+    with pytest.raises(live.BilibiliCrawlerError) as raised:
+        live.parse_status_by_uids_response('{"code":-101,"message":0.0001}', NOW)
+    error = raised.value
+    assert (str(error), error.code, error.bili_code, error.retryable) == (
+        "1.0E-4",
+        "BILIBILI_AUTH_EXPIRED",
+        -101,
+        False,
+    )
+
+
+def test_live_long64_shared_canonical_fixture_and_portable_subject():
+    cases = json.loads((CONTRACTS / "fixtures/live-long64-canonical.json").read_text("utf-8"))
+    schema = json.loads(
+        (CONTRACTS / "schemas/bilibili-live-worker.v2.schema.json").read_text("utf-8")
+    )
+    subject = json.loads((CONTRACTS / "schemas/bilibili-subject.v3.schema.json").read_text("utf-8"))
+    validator = Draft202012Validator(schema["$defs"]["BilibiliLiveSnapshotDataV2"])
+    subject_validator = Draft202012Validator(subject["$defs"]["BilibiliSubjectTrendPointV3"])
+    for case in cases:
+        value = {
+            "uid": "1",
+            "roomId": "2",
+            "liveStatus": 1,
+            "onlineCount": case["value"],
+            "attentionCount": case["value"],
+        }
+        assert validator.is_valid(value) is case["valid"]
+        assert (
+            subject_validator.is_valid({"bucketAt": NOW, "liveOnlineCount": case["value"]})
+            is case["valid"]
+        )
+        if case["valid"]:
+            assert (
+                LiveSnapshotV2.model_validate(value).model_dump(by_alias=True, exclude_none=True)
+                == value
+            )
+        else:
+            with pytest.raises(ValidationError):
+                LiveSnapshotV2.model_validate(value)
+
+
+def test_live_counter_parsing_uses_java_long_only_for_counters():
+    status = live.parse_status_by_uids_response(
+        '{"code":0,"data":{"1":{"uid":1,"room_id":2,"live_status":1,"online":0,'
+        '"watched_show":{"num":9007199254740993},"attention":9223372036854775808}}}',
+        NOW,
+    )[0]
+    assert status["onlineCount"] == 0
+    assert status["attentionCount"] == -9223372036854775808
+    fallback = live.parse_status_by_uids_response(
+        '{"code":0,"data":{"1":{"uid":1,"room_id":2,"watched_show":{"num":9007199254740993}}}}', NOW
+    )[0]
+    assert fallback["onlineCount"] == 9007199254740993
+    info = live.parse_room_info_response(
+        '{"code":0,"data":{"uid":1,"room_id":2,"online":"-1","attention":9223372036854775808}}', NOW
+    )
+    assert (info["onlineCount"], info["attentionCount"]) == (-1, -9223372036854775808)
+    assert (
+        live.parse_room_info_old_response(
+            '{"code":0,"data":{"roomid":2,"online":9007199254740993}}', "1", NOW
+        )["onlineCount"]
+        == 9007199254740993
+    )
 
 
 def parse_fixture(fixture):
@@ -71,13 +148,63 @@ def install_http(monkeypatch, handler):
 
 
 def test_old_empty_http_result_omits_snapshot_key(monkeypatch, tmp_path):
-    install_http(
-        monkeypatch, lambda _: httpx.Response(200, json={"code": 0, "data": {"roomStatus": 0}})
+    response = httpx.Response(200, json={"code": -400, "message": "Synthetic invalid request"})
+    install_http(monkeypatch, lambda _: response)
+    with pytest.raises(live.BilibiliCrawlerError) as raised:
+        asyncio.run(live.fetch_live_endpoint(live.ROOM_INFO_OLD_ENDPOINT, {"uid": "109"}, tmp_path))
+    assert raised.value.bili_code == -400
+    assert not (tmp_path / "cas").exists()
+
+    response = httpx.Response(
+        200,
+        json={
+            "code": 0,
+            "data": {"109": {"uid": 109, "face": "invalid-url"}},
+        },
     )
+    with pytest.raises(live.BilibiliCrawlerError) as raised:
+        result = asyncio.run(
+            live.fetch_live_endpoint(live.STATUS_BY_UIDS_ENDPOINT, {"uids": ["109"]}, tmp_path)
+        )
+        validate_live_result(live.STATUS_BY_UIDS_ENDPOINT, result)
+    assert raised.value.code == "BILIBILI_PARSE_ERROR"
+    assert "invalid-url" not in str(raised.value)
+    assert not (tmp_path / "cas").exists()
+
+    response = httpx.Response(200, json={"code": 0, "data": {"roomStatus": 0}})
     result = asyncio.run(
         live.fetch_live_endpoint(live.ROOM_INFO_OLD_ENDPOINT, {"uid": "109"}, tmp_path)
     )
     assert "snapshot" not in result
+    assert (tmp_path / result["evidenceObject"]["relativePath"]).read_bytes() == response.content
+    cases = json.loads(
+        (CONTRACTS / "fixtures/follower-raw-payload-storage.json").read_text("utf-8")
+    )
+    validator = Draft202012Validator(
+        {"$ref": "#/$defs/FetchedOptionalSnapshot", "$defs": SCHEMA["$defs"]}
+    )
+    exact_schema = json.loads(
+        (CONTRACTS / "schemas/bilibili-live-worker.v2.schema.json").read_text("utf-8")
+    )
+    exact_validator = Draft202012Validator(
+        exact_schema["$defs"]["BilibiliLiveFetchedOptionalSnapshotV2"]
+    )
+    for case in cases:
+        raw = '{"code":0,"data":{"roomStatus":0},"unused":' + case["extra"] + "}" + case["trailing"]
+        response = httpx.Response(200, content=raw.encode("utf-8"))
+        result = validate_live_result(
+            live.ROOM_INFO_OLD_ENDPOINT,
+            asyncio.run(
+                live.fetch_live_endpoint(live.ROOM_INFO_OLD_ENDPOINT, {"uid": "109"}, tmp_path)
+            ),
+        )
+        assert result["rawPayloadStorageStatus"] == case["status"]
+        assert "snapshot" not in result
+        validator.validate(result)
+        exact_validator.validate(validate_live_result(live.ROOM_INFO_OLD_ENDPOINT, result, True))
+        assert (tmp_path / result["evidenceObject"]["relativePath"]).read_bytes() == raw.encode(
+            "utf-8"
+        )
 
 
 @pytest.mark.parametrize(
@@ -141,6 +268,80 @@ def test_http_error_category(monkeypatch, tmp_path, status, code, retryable):
         live.ROOM_INFO_ENDPOINT,
     )
     assert "private raw body" not in str(error)
+    assert str(error) == f"Bilibili live HTTP {status} from {live.ROOM_INFO_ENDPOINT}"
+
+
+def test_live_http_string_conversion_preserves_source_charset_and_original_bytes(
+    monkeypatch, tmp_path
+):
+    cases = [
+        ({}, "iso-8859-1", " café ", " café "),
+        ({"Content-Type": "application/json;charset=ISO-8859-1"}, "iso-8859-1", " café ", " café "),
+        ({"Content-Type": "application/problem+json"}, "utf-8", " 中文标题 ", " 中文标题 "),
+        ({"Content-Type": "application/json"}, "utf-8", "A_BAD_BYTE_B", "A\ufffdB"),
+    ]
+    response = None
+    install_http(monkeypatch, lambda _: response)
+    for headers, encoding, title, expected in cases:
+        body = json.dumps(
+            {"code": 0, "data": {"uid": 121, "room_id": 221, "title": title}}, ensure_ascii=False
+        ).encode(encoding)
+        body = body.replace(b"A_BAD_BYTE_B", b"A\xffB")
+        response = httpx.Response(200, content=body, headers=headers)
+        result = asyncio.run(
+            live.fetch_live_endpoint(live.ROOM_INFO_ENDPOINT, {"roomId": "221"}, tmp_path)
+        )
+        assert result["title"] == expected
+        assert (tmp_path / result["evidenceObject"]["relativePath"]).read_bytes() == body
+
+
+def test_live_runtime_keeps_header_conversion_internal_and_empty_body_in_parse_domain(
+    monkeypatch, tmp_path
+):
+    response = None
+    install_http(monkeypatch, lambda _: response)
+    runtime = WorkerRuntime(role="crawler", data_directory=tmp_path)
+    request = RuntimeEnvelope.create(
+        message_id="synthetic-live-http-text",
+        message_type="bilibili.live.fetch-room-info.v2",
+        payload={
+            "taskId": "synthetic-task",
+            "attempt": 1,
+            "leaseId": "synthetic-lease",
+            "roomId": "221",
+        },
+        correlation_id="synthetic-correlation",
+        trace_id="synthetic-trace",
+    )
+    response = httpx.Response(
+        503,
+        content=b"private raw body",
+        headers={"Content-Type": "application/json;charset=not-a-real-charset"},
+    )
+    result = asyncio.run(runtime.handle(request))
+    assert result.type == "worker.error"
+    assert result.payload == {
+        "code": "BILIBILI_RESPONSE_CONVERSION_ERROR",
+        "message": "Unable to convert Bilibili response content type or charset.",
+        "retryable": False,
+    }
+    response = httpx.Response(503, content=b"\xff", headers={"Content-Type": "application/json"})
+    result = asyncio.run(runtime.handle(request))
+    assert result.payload == {
+        "code": "BILIBILI_SERVER_ERROR",
+        "retryable": True,
+        "endpoint": live.ROOM_INFO_ENDPOINT,
+        "message": f"Bilibili live HTTP 503 from {live.ROOM_INFO_ENDPOINT}",
+        "statusCode": 503,
+    }
+    response = httpx.Response(200, content=b"", headers={"Content-Type": "application/json"})
+    result = asyncio.run(runtime.handle(request))
+    assert (result.type, result.payload["code"], result.payload["statusCode"]) == (
+        "worker.error",
+        "BILIBILI_PARSE_ERROR",
+        200,
+    )
+    assert not (tmp_path / "cas").exists()
 
 
 @pytest.mark.parametrize("raw", [b'{"code":0,"data":"\xff"}', b"<html>private raw body</html>"])
@@ -330,3 +531,11 @@ def test_worker_request_accepts_configured_batches_above_thirty():
     payload = {**base, "uids": [str(i + 1) for i in range(75)]}
     assert len(live.BilibiliLiveStatusRequest.model_validate(payload).uids) == 75
     Draft202012Validator({**SCHEMA, "$ref": "#/$defs/StatusRequest"}).validate(payload)
+
+
+def test_legacy_live_counter_precision_is_not_a_platform_parse_error():
+    value = {"uid": "101", "roomId": "201", "liveStatus": 1, "onlineCount": 9007199254740992}
+    with pytest.raises(live.BilibiliCrawlerError) as raised:
+        live.validate_live_snapshot_data(live.ROOM_INFO_ENDPOINT, value)
+    assert raised.value.code == "LONG64_LEGACY_PRECISION_UNSUPPORTED"
+    assert raised.value.retryable is False

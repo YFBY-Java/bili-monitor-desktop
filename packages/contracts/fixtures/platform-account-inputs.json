@@ -1,0 +1,18 @@
+{
+  "inputs": [
+    { "externalId": "+００７", "mid": "7" },
+    { "externalId": "-0001", "mid": "-1" },
+    { "externalId": "-9223372036854775808", "mid": "-9223372036854775808" },
+    { "externalId": "-0", "mid": "0" },
+    { "externalId": " 7", "mid": null },
+    { "externalId": "7.1", "mid": null },
+    { "externalId": "9223372036854775808", "mid": null },
+    { "externalId": "𝟟", "mid": null }
+  ],
+  "workerRequests": [
+    { "mid": "0", "valid": true },
+    { "mid": "-9223372036854775808", "valid": true },
+    { "mid": "9223372036854775808", "valid": false },
+    { "mid": "+01", "valid": false }
+  ]
+}

@@ -1,14 +1,14 @@
 import {
   AddBilibiliLiveRoomInputSchema,
-  BilibiliLiveCollectResultSchema,
+  BilibiliLiveCollectResultV2Schema as BilibiliLiveCollectResultSchema,
   BilibiliLiveEndpointSchema,
-  BilibiliLiveFetchedOptionalSnapshotSchema,
-  BilibiliLiveFetchedSnapshotSchema,
-  BilibiliLiveFetchedStatusBatchSchema,
-  BilibiliLiveRoomListSchema,
-  BilibiliLiveRoomSchema,
-  BilibiliLiveStatusEventSchema,
-  BilibiliLiveSummarySchema,
+  BilibiliLiveFetchedOptionalSnapshotV2Schema as BilibiliLiveFetchedOptionalSnapshotSchema,
+  BilibiliLiveFetchedSnapshotV2Schema as BilibiliLiveFetchedSnapshotSchema,
+  BilibiliLiveFetchedStatusBatchV2Schema as BilibiliLiveFetchedStatusBatchSchema,
+  BilibiliLiveRoomListV2Schema as BilibiliLiveRoomListSchema,
+  BilibiliLiveRoomV2Schema as BilibiliLiveRoomSchema,
+  BilibiliLiveStatusEventV2Schema as BilibiliLiveStatusEventSchema,
+  BilibiliLiveSummaryV2Schema as BilibiliLiveSummarySchema,
   ListBilibiliLiveRoomsInputSchema,
   QueryBilibiliLiveEventsInputSchema,
   QueryBilibiliLiveTrendInputSchema,
@@ -17,18 +17,18 @@ import {
   UpdateBilibiliLiveRoomStatusInputSchema,
   createRuntimeEnvelope,
   type AddBilibiliLiveRoomInput,
-  type BilibiliLiveCollectResult,
-  type BilibiliLiveFetchedOptionalSnapshot,
-  type BilibiliLiveFetchedSnapshot,
-  type BilibiliLiveFetchedStatusBatch,
-  type BilibiliLiveRoom,
-  type BilibiliLiveRoomList,
+  type BilibiliLiveCollectResultV2 as BilibiliLiveCollectResult,
+  type BilibiliLiveFetchedOptionalSnapshotV2 as BilibiliLiveFetchedOptionalSnapshot,
+  type BilibiliLiveFetchedSnapshotV2 as BilibiliLiveFetchedSnapshot,
+  type BilibiliLiveFetchedStatusBatchV2 as BilibiliLiveFetchedStatusBatch,
+  type BilibiliLiveRoomV2 as BilibiliLiveRoom,
+  type BilibiliLiveRoomListV2 as BilibiliLiveRoomList,
   type BilibiliLiveRoomRequest,
-  type BilibiliLiveRoomTrend,
-  type BilibiliLiveSnapshotData,
+  type BilibiliLiveRoomTrendV2 as BilibiliLiveRoomTrend,
+  type BilibiliLiveSnapshotDataV2 as BilibiliLiveSnapshotData,
   type BilibiliLiveStatusByUidsRequest,
-  type BilibiliLiveStatusEvent,
-  type BilibiliLiveSummary,
+  type BilibiliLiveStatusEventV2 as BilibiliLiveStatusEvent,
+  type BilibiliLiveSummaryV2 as BilibiliLiveSummary,
   type BilibiliLiveUidRequest,
   type ObjectRef
 } from "@bmd/contracts"
@@ -36,10 +36,16 @@ import {
   ControlDatabase,
   compareLiveSnapshotTime,
   hasLiveSnapshotText,
+  type BilibiliApiRequestMeta,
   type NewStoredOutboxMessage,
   type StoredBilibiliLiveRoomMonitor,
   type StoredBilibiliLiveRoomSnapshot
 } from "@bmd/storage"
+
+import * as legacyLive from "@bmd/contracts"
+import { javaLongDelta, javaLongToBigInt } from "@bmd/contracts"
+import { exactLiveFromLegacy, safeLiveLegacyProjection } from "./live-long64-projection"
+import type { BilibiliLiveWorkerSource } from "./bilibili-live-worker-source"
 
 import { CoreApplicationError } from "./account-subject-service"
 import { LocalRequestRateLimiter } from "./local-request-rate-limiter"
@@ -50,16 +56,16 @@ const INFO_ENDPOINT = "room/v1/Room/get_info" as const
 const OLD_INFO_ENDPOINT = "room/v1/Room/getRoomInfoOld" as const
 
 export interface BilibiliLiveSource {
-  fetchRoomInit: (request: BilibiliLiveRoomRequest) => Promise<BilibiliLiveFetchedSnapshot>
-  fetchRoomInfo: (request: BilibiliLiveRoomRequest) => Promise<BilibiliLiveFetchedSnapshot>
-  fetchRoomInfoOld: (request: BilibiliLiveUidRequest) => Promise<BilibiliLiveFetchedOptionalSnapshot>
-  fetchStatusByUids: (request: BilibiliLiveStatusByUidsRequest) => Promise<BilibiliLiveFetchedStatusBatch>
+  fetchRoomInit: (request: BilibiliLiveRoomRequest) => Promise<legacyLive.BilibiliLiveFetchedSnapshot>
+  fetchRoomInfo: (request: BilibiliLiveRoomRequest) => Promise<legacyLive.BilibiliLiveFetchedSnapshot>
+  fetchRoomInfoOld: (request: BilibiliLiveUidRequest) => Promise<legacyLive.BilibiliLiveFetchedOptionalSnapshot>
+  fetchStatusByUids: (request: BilibiliLiveStatusByUidsRequest) => Promise<legacyLive.BilibiliLiveFetchedStatusBatch>
   stop?: () => Promise<void>
 }
 
 export interface BilibiliLiveMonitorServiceOptions {
   database: ControlDatabase
-  source: BilibiliLiveSource
+  source: BilibiliLiveSource | Pick<BilibiliLiveWorkerSource, "fetchRoomInitV2" | "fetchRoomInfoV2" | "fetchRoomInfoOldV2" | "fetchStatusByUidsV2" | "stop">
   enabled?: boolean
   now: () => Date
   idFactory: () => string
@@ -93,6 +99,13 @@ interface ResolvedLiveSnapshot extends BilibiliLiveSnapshotData {
   fetchedAt: string
   sourceEndpoint: BilibiliLiveFetchedSnapshot["sourceEndpoint"]
   evidenceObject: ObjectRef
+  rawPayloadStorageStatus?: BilibiliLiveFetchedSnapshot["rawPayloadStorageStatus"]
+}
+
+export interface PreparedBilibiliLiveMonitor {
+  uid: string
+  roomId: string
+  commit: () => BilibiliLiveRoom
 }
 
 interface SourceErrorDetails {
@@ -121,7 +134,42 @@ export class BilibiliLiveMonitorService {
     this.rateLimiter = options.rateLimiter ?? new LocalRequestRateLimiter(options.now)
   }
 
-  async addRoom(input: AddBilibiliLiveRoomInput): Promise<BilibiliLiveRoom> {
+
+  async addRoom(input: AddBilibiliLiveRoomInput) {
+    return legacyLive.BilibiliLiveRoomSchema.parse(safeLiveLegacyProjection(await this.addRoomV2(input)))
+  }
+  listRooms(input?: { limit?: number }) {
+    return legacyLive.BilibiliLiveRoomListSchema.parse(safeLiveLegacyProjection(this.listRoomsV2(input)))
+  }
+  updateStatus(roomMonitorId: string, enabled: boolean) {
+    return legacyLive.BilibiliLiveRoomSchema.parse(safeLiveLegacyProjection(this.updateStatusV2(roomMonitorId, enabled)))
+  }
+  updateInterval(roomMonitorId: string, intervalSeconds: number) {
+    return legacyLive.BilibiliLiveRoomSchema.parse(safeLiveLegacyProjection(this.updateIntervalV2(roomMonitorId, intervalSeconds)))
+  }
+  async refreshNow(roomMonitorId: string) {
+    return legacyLive.BilibiliLiveCollectResultSchema.parse(safeLiveLegacyProjection(await this.refreshNowV2(roomMonitorId)))
+  }
+  async collectDueRooms() {
+    return legacyLive.BilibiliLiveCollectResultSchema.array().parse(safeLiveLegacyProjection(await this.collectDueRoomsV2()))
+  }
+  summary() { return legacyLive.BilibiliLiveSummarySchema.parse(safeLiveLegacyProjection(this.summaryV2())) }
+  events(input: { limit?: number } = {}) {
+    return legacyLive.BilibiliLiveStatusEventListSchema.parse(safeLiveLegacyProjection(this.eventsV2(input)))
+  }
+  trend(input: { roomMonitorId: string; from?: string; to?: string; limit?: number }) {
+    return legacyLive.BilibiliLiveRoomTrendSchema.parse(safeLiveLegacyProjection(this.trendV2(input)))
+  }
+  trends(input: { roomMonitorIds?: string[]; from?: string; to?: string; limitPerRoom?: number } = {}) {
+    return legacyLive.BilibiliLiveRoomTrendListSchema.parse(safeLiveLegacyProjection(this.trendsV2(input)))
+  }
+
+  async addRoomV2(input: AddBilibiliLiveRoomInput): Promise<BilibiliLiveRoom> {
+    return (await this.prepareAddRoomV2(input)).commit()
+  }
+
+  /** Preserve normal resolution/retries, but postpone monitor/session writes. */
+  async prepareAddRoomV2(input: AddBilibiliLiveRoomInput): Promise<PreparedBilibiliLiveMonitor> {
     this.ensureRunning()
     const parsed = AddBilibiliLiveRoomInputSchema.parse(input)
     const intervalSeconds = this.resolveInterval(parsed.intervalSeconds)
@@ -137,6 +185,19 @@ export class BilibiliLiveMonitorService {
       throw error
     }
     this.ensureRunning()
+    return {
+      uid: snapshot.uid,
+      roomId: snapshot.roomId,
+      commit: () => this.addFetchedRoom(snapshot, intervalSeconds, taskId)
+    }
+  }
+
+  private addFetchedRoom(
+    snapshot: ResolvedLiveSnapshot,
+    intervalSeconds: number,
+    taskId: string
+  ): BilibiliLiveRoom {
+    this.ensureRunning()
     const existing = this.options.database.findBilibiliLiveRoomByUid(snapshot.uid)
       ?? this.options.database.findBilibiliLiveRoomByRoomId(snapshot.roomId)
     const monitorId = existing?.monitorId ?? this.options.idFactory()
@@ -151,7 +212,7 @@ export class BilibiliLiveMonitorService {
     return this.requireRoom(existing?.monitorId ?? monitorId)
   }
 
-  listRooms(input?: { limit?: number }): BilibiliLiveRoomList {
+  listRoomsV2(input?: { limit?: number }): BilibiliLiveRoomList {
     const query = ListBilibiliLiveRoomsInputSchema.parse(input ?? {})
     const items = this.options.database.listBilibiliLiveRooms(query.limit)
       .map((room) => this.toRoomView(
@@ -165,7 +226,7 @@ export class BilibiliLiveMonitorService {
     })
   }
 
-  updateStatus(roomMonitorId: string, enabled: boolean): BilibiliLiveRoom {
+  updateStatusV2(roomMonitorId: string, enabled: boolean): BilibiliLiveRoom {
     this.ensureRunning()
     const input = UpdateBilibiliLiveRoomStatusInputSchema.parse({ roomMonitorId, enabled })
     this.requireStoredRoom(input.roomMonitorId)
@@ -179,7 +240,7 @@ export class BilibiliLiveMonitorService {
     return this.requireRoom(input.roomMonitorId)
   }
 
-  updateInterval(roomMonitorId: string, intervalSeconds: number): BilibiliLiveRoom {
+  updateIntervalV2(roomMonitorId: string, intervalSeconds: number): BilibiliLiveRoom {
     this.ensureRunning()
     const input = UpdateBilibiliLiveRoomSettingsInputSchema.parse({ roomMonitorId, intervalSeconds })
     this.requireStoredRoom(input.roomMonitorId)
@@ -197,7 +258,7 @@ export class BilibiliLiveMonitorService {
     return this.requireRoom(input.roomMonitorId)
   }
 
-  async refreshNow(roomMonitorId: string): Promise<BilibiliLiveCollectResult> {
+  async refreshNowV2(roomMonitorId: string): Promise<BilibiliLiveCollectResult> {
     this.ensureRunning()
     const room = this.requireStoredRoom(roomMonitorId)
     const taskId = this.options.idFactory()
@@ -220,7 +281,7 @@ export class BilibiliLiveMonitorService {
     }
   }
 
-  async collectDueRooms(): Promise<BilibiliLiveCollectResult[]> {
+  async collectDueRoomsV2(): Promise<BilibiliLiveCollectResult[]> {
     if (this.lifetime.signal.aborted || this.options.enabled === false) return []
     const rooms = this.options.database.findDueBilibiliLiveRooms(
       this.options.now().toISOString(),
@@ -264,7 +325,7 @@ export class BilibiliLiveMonitorService {
     return results
   }
 
-  summary(): BilibiliLiveSummary {
+  summaryV2(): BilibiliLiveSummary {
     const rooms = this.options.database.listBilibiliLiveRooms()
     const events = this.options.database.listBilibiliLiveStatusEvents(1)
     const liveRooms = rooms.filter((room) => room.liveStatus === 1)
@@ -277,13 +338,13 @@ export class BilibiliLiveMonitorService {
       roundRooms: roundRooms.length,
       offlineRooms: Math.max(0, rooms.length - liveRooms.length - roundRooms.length),
       errorRooms: rooms.filter((room) => room.lastErrorType !== null).length,
-      totalOnlineCount: liveRooms.reduce((sum, room) => sum + (room.onlineCount ?? 0), 0),
+      totalOnlineCount: BigInt.asIntN(64, liveRooms.reduce((sum, room) => sum + (room.onlineCount ?? 0n), 0n)).toString(),
       todayLiveStarts: this.options.database.countTodayBilibiliLiveStarts(startOfDay),
       ...(events[0] ? { latestEvent: this.toEventView(events[0]) } : {})
     })
   }
 
-  events(input: { limit?: number } = {}): BilibiliLiveStatusEvent[] {
+  eventsV2(input: { limit?: number } = {}): BilibiliLiveStatusEvent[] {
     const query = QueryBilibiliLiveEventsInputSchema.parse(input)
     return this.options.database.listBilibiliLiveStatusEvents(query.limit).map((event) =>
       BilibiliLiveStatusEventSchema.parse({
@@ -296,13 +357,13 @@ export class BilibiliLiveMonitorService {
         ...(event.toLiveStatus !== null ? { toLiveStatus: event.toLiveStatus } : {}),
         ...(event.titleBefore ? { titleBefore: event.titleBefore } : {}),
         ...(event.titleAfter ? { titleAfter: event.titleAfter } : {}),
-        ...(event.onlineCount !== null ? { onlineCount: event.onlineCount } : {}),
+        ...(event.onlineCount !== null ? { onlineCount: event.onlineCount.toString() } : {}),
         occurredAt: event.occurredAt
       })
     )
   }
 
-  trend(input: {
+  trendV2(input: {
     roomMonitorId: string
     from?: string
     to?: string
@@ -321,7 +382,7 @@ export class BilibiliLiveMonitorService {
     }
   }
 
-  trends(input: {
+  trendsV2(input: {
     roomMonitorIds?: string[]
     from?: string
     to?: string
@@ -331,7 +392,7 @@ export class BilibiliLiveMonitorService {
     const rooms = query.roomMonitorIds.length === 0
       ? this.options.database.listBilibiliLiveRooms()
       : query.roomMonitorIds.map((id) => this.requireStoredRoom(id))
-    return rooms.map((room) => this.trend({
+    return rooms.map((room) => this.trendV2({
       roomMonitorId: room.monitorId,
       ...(query.from ? { from: query.from } : {}),
       ...(query.to ? { to: query.to } : {}),
@@ -393,7 +454,8 @@ export class BilibiliLiveMonitorService {
       ...old.snapshot,
       fetchedAt: old.fetchedAt,
       sourceEndpoint: old.sourceEndpoint,
-      evidenceObject: old.evidenceObject
+      evidenceObject: old.evidenceObject,
+      ...(old.rawPayloadStorageStatus !== undefined ? { rawPayloadStorageStatus: old.rawPayloadStorageStatus } : {})
     }
     const init = await this.fetchRoomInit(old.snapshot.roomId, taskId)
     const info = await this.fetchRoomInfo(init.roomId, taskId)
@@ -405,8 +467,11 @@ export class BilibiliLiveMonitorService {
       INIT_ENDPOINT,
       roomId,
       taskId,
-      (request) => this.options.source.fetchRoomInit({ ...request, roomId }),
-      BilibiliLiveFetchedSnapshotSchema.parse
+      (request) => "fetchRoomInitV2" in this.options.source
+        ? this.options.source.fetchRoomInitV2({ ...request, roomId })
+        : this.options.source.fetchRoomInit({ ...request, roomId }).then(exactLiveFromLegacy).then(BilibiliLiveFetchedSnapshotSchema.parse),
+      BilibiliLiveFetchedSnapshotSchema.parse,
+      { roomId }
     )
   }
 
@@ -415,8 +480,11 @@ export class BilibiliLiveMonitorService {
       INFO_ENDPOINT,
       roomId,
       taskId,
-      (request) => this.options.source.fetchRoomInfo({ ...request, roomId }),
-      BilibiliLiveFetchedSnapshotSchema.parse
+      (request) => "fetchRoomInfoV2" in this.options.source
+        ? this.options.source.fetchRoomInfoV2({ ...request, roomId })
+        : this.options.source.fetchRoomInfo({ ...request, roomId }).then(exactLiveFromLegacy).then(BilibiliLiveFetchedSnapshotSchema.parse),
+      BilibiliLiveFetchedSnapshotSchema.parse,
+      { roomId }
     )
   }
 
@@ -425,8 +493,11 @@ export class BilibiliLiveMonitorService {
       OLD_INFO_ENDPOINT,
       uid,
       taskId,
-      (request) => this.options.source.fetchRoomInfoOld({ ...request, uid }),
-      BilibiliLiveFetchedOptionalSnapshotSchema.parse
+      (request) => "fetchRoomInfoOldV2" in this.options.source
+        ? this.options.source.fetchRoomInfoOldV2({ ...request, uid })
+        : this.options.source.fetchRoomInfoOld({ ...request, uid }).then(exactLiveFromLegacy).then(BilibiliLiveFetchedOptionalSnapshotSchema.parse),
+      BilibiliLiveFetchedOptionalSnapshotSchema.parse,
+      { uid }
     )
   }
 
@@ -435,8 +506,11 @@ export class BilibiliLiveMonitorService {
       STATUS_ENDPOINT,
       uids.join(","),
       taskId,
-      (request) => this.options.source.fetchStatusByUids({ ...request, uids }),
-      BilibiliLiveFetchedStatusBatchSchema.parse
+      (request) => "fetchStatusByUidsV2" in this.options.source
+        ? this.options.source.fetchStatusByUidsV2({ ...request, uids })
+        : this.options.source.fetchStatusByUids({ ...request, uids }).then(exactLiveFromLegacy).then(BilibiliLiveFetchedStatusBatchSchema.parse),
+      BilibiliLiveFetchedStatusBatchSchema.parse,
+      { uids }
     )
   }
 
@@ -445,7 +519,8 @@ export class BilibiliLiveMonitorService {
     identifier: string,
     taskId: string,
     operation: (request: { taskId: string; attempt: number; leaseId: string }) => Promise<T>,
-    validate: (value: unknown) => T
+    validate: (value: unknown) => T,
+    requestMeta: BilibiliApiRequestMeta
   ): Promise<T> {
     const maxAttempts = Math.max(1, this.options.maxAttempts ?? 3)
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -465,11 +540,17 @@ export class BilibiliLiveMonitorService {
       } catch (error) {
         this.ensureRunning()
         const details = this.sourceError(error)
+        // Original MediaType/charset conversion failures bypass fetch handlers:
+        // no platform failure log, retry, backoff or monitor mutation.
+        if (details.code === "BILIBILI_RESPONSE_CONVERSION_ERROR") {
+          throw new CoreApplicationError("INTERNAL_ERROR", details.message, false)
+        }
         const sourceEndpoint = BilibiliLiveEndpointSchema.safeParse(
           typeof error === "object" && error !== null && "endpoint" in error ? error.endpoint : undefined
         )
         const failure = new LiveFetchFailure(details.code, details.message, details.retryable,
           sourceEndpoint.success ? sourceEndpoint.data : endpoint)
+        const biliCode = this.errorNumber(error, "biliCode")
         this.options.database.insertBilibiliApiCall({
           callId: this.options.idFactory(),
           taskId,
@@ -481,6 +562,9 @@ export class BilibiliLiveMonitorService {
           errorType: details.code,
           retryable: details.retryable,
           evidenceObjectId: null,
+          requestMeta,
+          responseMeta: { success: false, message: details.message,
+            ...(biliCode === null ? {} : { biliCode }) },
           createdAt: this.options.now().toISOString()
         })
         const canRetry = ["BILIBILI_RATE_LIMITED", "BILIBILI_NETWORK_ERROR", "BILIBILI_SERVER_ERROR"].includes(details.code)
@@ -494,7 +578,8 @@ export class BilibiliLiveMonitorService {
       this.options.database.insertBilibiliApiCall({
         callId: this.options.idFactory(), taskId, attempt, endpointKey: endpoint, mid: identifier,
         statusCode: result.statusCode, durationMs: Math.max(0, Math.floor(performance.now() - startedAt)), errorType: null, retryable: false,
-        evidenceObjectId: result.evidenceObject.objectId, createdAt: result.fetchedAt
+        evidenceObjectId: result.evidenceObject.objectId, createdAt: result.fetchedAt,
+        requestMeta, responseMeta: { success: true }
       }, { ...result.evidenceObject, createdAt: result.fetchedAt })
       return result
     }
@@ -547,7 +632,8 @@ export class BilibiliLiveMonitorService {
       ...snapshot,
       fetchedAt: batch.fetchedAt,
       sourceEndpoint: batch.sourceEndpoint,
-      evidenceObject: batch.evidenceObject
+      evidenceObject: batch.evidenceObject,
+      ...(batch.rawPayloadStorageStatus !== undefined ? { rawPayloadStorageStatus: batch.rawPayloadStorageStatus } : {})
     }
   }
 
@@ -569,7 +655,7 @@ export class BilibiliLiveMonitorService {
       ...(room.parentAreaId ? { parentAreaId: room.parentAreaId } : {}),
       ...(room.parentAreaName ? { parentAreaName: room.parentAreaName } : {}),
       liveStatus: room.liveStatus as 0 | 1 | 2,
-      ...(room.attentionCount !== null ? { attentionCount: room.attentionCount } : {}),
+      ...(room.attentionCount !== null ? { attentionCount: room.attentionCount.toString() } : {}),
       fetchedAt: snapshot.fetchedAt,
       sourceEndpoint: snapshot.sourceEndpoint,
       evidenceObject: snapshot.evidenceObject
@@ -605,7 +691,7 @@ export class BilibiliLiveMonitorService {
               roomMonitorId: current.monitorId, intervalSeconds
             })
           )
-          this.updateStatus(current.monitorId, true)
+          this.updateStatusV2(current.monitorId, true)
         }
         return false
       }
@@ -648,8 +734,8 @@ export class BilibiliLiveMonitorService {
         parentAreaName: resolved.parentAreaName ?? null,
         liveStatus: resolved.liveStatus,
         liveTime: resolved.liveTime ?? null,
-        onlineCount: resolved.onlineCount ?? null,
-        attentionCount: resolved.attentionCount ?? null,
+        onlineCount: resolved.onlineCount === undefined ? null : javaLongToBigInt(resolved.onlineCount),
+        attentionCount: resolved.attentionCount === undefined ? null : javaLongToBigInt(resolved.attentionCount),
         intervalSeconds,
         nextCollectAt,
         capturedAt: resolved.fetchedAt,
@@ -657,13 +743,14 @@ export class BilibiliLiveMonitorService {
       },
       snapshot: {
         snapshotId: this.options.idFactory(),
-        capturedBucket: capturedBucket(resolved.fetchedAt)
+        capturedBucket: capturedBucket(resolved.fetchedAt),
+        ...(resolved.rawPayloadStorageStatus !== undefined ? { rawPayloadStorageStatus: resolved.rawPayloadStorageStatus } : {})
       },
       artifact: {
         ...resolved.evidenceObject,
         createdAt: resolved.fetchedAt
       },
-      outbox: this.outbox(eventId, topic, resolved.fetchedAt, {
+      outbox: this.outbox(eventId, `${topic}.v2`, resolved.fetchedAt, {
         roomMonitorId: previous?.monitorId ?? monitorId,
         taskId,
         uid: resolved.uid,
@@ -748,7 +835,7 @@ export class BilibiliLiveMonitorService {
     const previous = snapshots.length < 2 ? undefined : snapshots.at(-2)?.onlineCount
     const delta = previous === undefined || previous === null || room.onlineCount === null
       ? undefined
-      : room.onlineCount - previous
+      : javaLongDelta(room.onlineCount, previous).toString()
     return BilibiliLiveRoomSchema.parse({
       id: room.monitorId,
       uid: room.uid,
@@ -765,8 +852,8 @@ export class BilibiliLiveMonitorService {
       ...(room.parentAreaName ? { parentAreaName: room.parentAreaName } : {}),
       liveStatus: room.liveStatus,
       ...(room.liveTime ? { liveTime: room.liveTime } : {}),
-      ...(room.onlineCount !== null ? { onlineCount: room.onlineCount } : {}),
-      ...(room.attentionCount !== null ? { attentionCount: room.attentionCount } : {}),
+      ...(room.onlineCount !== null ? { onlineCount: room.onlineCount.toString() } : {}),
+      ...(room.attentionCount !== null ? { attentionCount: room.attentionCount.toString() } : {}),
       ...(delta !== undefined ? { onlineDelta: delta } : {}),
       monitorStatus: room.monitorStatus,
       intervalSeconds: room.intervalSeconds,
@@ -794,7 +881,7 @@ export class BilibiliLiveMonitorService {
       ...(event.toLiveStatus !== null ? { toLiveStatus: event.toLiveStatus } : {}),
       ...(event.titleBefore ? { titleBefore: event.titleBefore } : {}),
       ...(event.titleAfter ? { titleAfter: event.titleAfter } : {}),
-      ...(event.onlineCount !== null ? { onlineCount: event.onlineCount } : {}),
+      ...(event.onlineCount !== null ? { onlineCount: event.onlineCount.toString() } : {}),
       occurredAt: event.occurredAt
     })
   }
@@ -811,7 +898,7 @@ export class BilibiliLiveMonitorService {
       roomId: snapshot.roomId,
       success,
       liveStatus: snapshot.liveStatus,
-      ...(snapshot.onlineCount !== undefined ? { onlineCount: snapshot.onlineCount } : {}),
+      ...(snapshot.onlineCount !== undefined ? { onlineCount: snapshot.onlineCount.toString() } : {}),
       capturedAt: snapshot.fetchedAt,
       sourceEndpoint: snapshot.sourceEndpoint,
       message
@@ -828,7 +915,7 @@ export class BilibiliLiveMonitorService {
       roomId: room.roomId,
       success: false,
       liveStatus: room.liveStatus,
-      ...(room.onlineCount !== null ? { onlineCount: room.onlineCount } : {}),
+      ...(room.onlineCount !== null ? { onlineCount: room.onlineCount.toString() } : {}),
       capturedAt: this.options.now().toISOString(),
       sourceEndpoint: error.endpoint,
       message: error.message
@@ -916,7 +1003,8 @@ function mergeSnapshot(primary: ResolvedLiveSnapshot, fallback: ResolvedLiveSnap
       : {},
     fetchedAt: primary.fetchedAt,
     sourceEndpoint: primary.sourceEndpoint,
-    evidenceObject: primary.evidenceObject
+    evidenceObject: primary.evidenceObject,
+    ...(primary.rawPayloadStorageStatus !== undefined ? { rawPayloadStorageStatus: primary.rawPayloadStorageStatus } : {})
   } as ResolvedLiveSnapshot
 }
 
@@ -926,8 +1014,8 @@ function toTrendPoint(snapshot: StoredBilibiliLiveRoomSnapshot) {
     uid: snapshot.uid,
     capturedAt: snapshot.capturedAt,
     liveStatus: snapshot.liveStatus as 0 | 1 | 2,
-    ...(snapshot.onlineCount !== null ? { onlineCount: snapshot.onlineCount } : {}),
-    ...(snapshot.attentionCount !== null ? { attentionCount: snapshot.attentionCount } : {}),
+    ...(snapshot.onlineCount !== null ? { onlineCount: snapshot.onlineCount.toString() } : {}),
+    ...(snapshot.attentionCount !== null ? { attentionCount: snapshot.attentionCount.toString() } : {}),
     sourceEndpoint: snapshot.sourceEndpoint as BilibiliLiveFetchedSnapshot["sourceEndpoint"]
   }
 }

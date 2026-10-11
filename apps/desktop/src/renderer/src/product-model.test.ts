@@ -9,14 +9,18 @@ import {
 
 describe("product information architecture", () => {
   it("exposes only business workspaces that are backed by a real local implementation", () => {
-    const expectedPageIds = ["bilibili-subjects", "bilibili-followers", "bilibili-live", "douyin-auth"]
+    const expectedPageIds = [
+      "bilibili-subjects", "bilibili-followers", "bilibili-live", "live-data", "live-analytics", "douyin-auth", "platform-collection"
+    ]
     const navigationPageIds = navigationGroups.flatMap((group) =>
       group.items.map((item) => item.pageId)
     )
 
     expect(navigationPageIds).toEqual(expectedPageIds)
     expect(new Set(navigationPageIds).size).toBe(expectedPageIds.length)
-    expect(productPages.map((page) => page.id)).toEqual(expectedPageIds)
+    expect(productPages.map((page) => page.id)).toEqual([
+      "platform-collection", "bilibili-subjects", "bilibili-followers", "bilibili-live", "live-data", "live-analytics", "douyin-auth"
+    ])
   })
 
   it("does not label pending original-project migrations as implemented capabilities", () => {

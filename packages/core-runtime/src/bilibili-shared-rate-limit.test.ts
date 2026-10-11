@@ -138,8 +138,8 @@ describe("original shared RateLimitService through real Core and SQLite", () => 
     expect(busy).toMatchObject({ code: "LOCAL_RATE_LIMIT_BUSY", retryable: true })
     const liveBusy = await f.core.refreshBilibiliLiveRoom(f.room.id).catch(error => error)
     expect(liveBusy).toMatchObject({ code: "LOCAL_RATE_LIMIT_BUSY" })
-    const rankBusy = await f.core.refreshBilibiliLiveRanks({ roomMonitorId: f.room.id, types: ["contribution_rank"] })
-    expect(rankBusy).toMatchObject({ successCount: 0, errors: [expect.stringContaining("LOCAL_RATE_LIMIT_BUSY")] })
+    await expect(f.core.refreshBilibiliLiveRanks({ roomMonitorId: f.room.id, types: ["contribution_rank"] }))
+      .rejects.toMatchObject({ code: "LOCAL_RATE_LIMIT_BUSY", retryable: true })
     expect(f.core.listBilibiliFollowerMonitors().items).toEqual([user])
     expect(f.calls).toHaveLength(1); expect(f.live.calls).toHaveLength(0); expect(f.rankCalls).toHaveLength(0)
     expect(read()).toEqual(before)
@@ -204,9 +204,11 @@ describe("original shared RateLimitService through real Core and SQLite", () => 
     const insert = vi.spyOn(ControlDatabase.prototype, "insertBilibiliApiCall").mockImplementation(() => {
       throw new Error("Synthetic log storage failure")
     })
-    const pending = f.core.refreshBilibiliLiveRanks({ roomMonitorId: f.room.id, types: ["contribution_rank"] })
+    // Observe the rejection before advancing timers; original refresh only aggregates platform failures.
+    const pending = expect(f.core.refreshBilibiliLiveRanks({ roomMonitorId: f.room.id, types: ["contribution_rank"] }))
+      .rejects.toThrow("Synthetic log storage failure")
     await vi.advanceTimersByTimeAsync(1500)
-    expect(await pending).toMatchObject({ successCount: 0 })
+    await pending
     expect(f.rankCalls).toHaveLength(1)
     expect(insert).toHaveBeenCalledOnce()
   })

@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { BilibiliLiveHttpConfigurationSchema } from "./bilibili-live-http"
 
-import { ObjectRefSchema } from "./bilibili-follower"
+import { BilibiliRawPayloadStorageStatusSchema, ObjectRefSchema } from "./bilibili-follower"
 
 export const BilibiliLiveNumericIdSchema = z.string().trim()
   .regex(/^[1-9]\d*$/, "B站 UID/房间号必须是大于 0 的数字。")
@@ -34,10 +34,10 @@ export const BilibiliLiveRoomSchema = z.object({
   roomId: BilibiliLiveNumericIdSchema,
   shortId: BilibiliLiveAuxiliaryIdSchema.optional(),
   uname: z.string().min(1).max(160),
-  faceUrl: z.url().optional(),
+  faceUrl: z.string().optional(),
   title: z.string().optional(),
-  coverUrl: z.url().optional(),
-  keyframeUrl: z.url().optional(),
+  coverUrl: z.string().optional(),
+  keyframeUrl: z.string().optional(),
   areaId: BilibiliLiveAuxiliaryIdSchema.optional(),
   areaName: z.string().max(120).optional(),
   parentAreaId: BilibiliLiveAuxiliaryIdSchema.optional(),
@@ -188,10 +188,10 @@ export const BilibiliLiveSnapshotDataSchema = z.object({
   roomId: BilibiliLiveNumericIdSchema,
   shortId: BilibiliLiveAuxiliaryIdSchema.optional(),
   uname: z.string().min(1).max(160).optional(),
-  faceUrl: z.url().optional(),
+  faceUrl: z.string().optional(),
   title: z.string().optional(),
-  coverUrl: z.url().optional(),
-  keyframeUrl: z.url().optional(),
+  coverUrl: z.string().optional(),
+  keyframeUrl: z.string().optional(),
   areaId: BilibiliLiveAuxiliaryIdSchema.optional(),
   areaName: z.string().max(120).optional(),
   parentAreaId: BilibiliLiveAuxiliaryIdSchema.optional(),
@@ -207,7 +207,8 @@ export const BilibiliLiveFetchedSnapshotSchema = BilibiliLiveSnapshotDataSchema.
   sourceEndpoint: BilibiliLiveEndpointSchema,
   evidenceObject: ObjectRefSchema,
   statusCode: z.number().int().positive(),
-  durationMs: z.number().int().nonnegative()
+  durationMs: z.number().int().nonnegative(),
+  rawPayloadStorageStatus: BilibiliRawPayloadStorageStatusSchema.optional()
 }).strict()
 
 export const BilibiliLiveFetchedOptionalSnapshotSchema = z.object({
@@ -216,7 +217,8 @@ export const BilibiliLiveFetchedOptionalSnapshotSchema = z.object({
   sourceEndpoint: BilibiliLiveEndpointSchema,
   evidenceObject: ObjectRefSchema,
   statusCode: z.number().int().positive(),
-  durationMs: z.number().int().nonnegative()
+  durationMs: z.number().int().nonnegative(),
+  rawPayloadStorageStatus: BilibiliRawPayloadStorageStatusSchema.optional()
 }).strict()
 
 export const BilibiliLiveFetchedStatusBatchSchema = z.object({
@@ -225,7 +227,8 @@ export const BilibiliLiveFetchedStatusBatchSchema = z.object({
   sourceEndpoint: z.literal("room/v1/Room/get_status_info_by_uids"),
   evidenceObject: ObjectRefSchema,
   statusCode: z.number().int().positive(),
-  durationMs: z.number().int().nonnegative()
+  durationMs: z.number().int().nonnegative(),
+  rawPayloadStorageStatus: BilibiliRawPayloadStorageStatusSchema.optional()
 }).strict()
 
 export const DeleteBilibiliLiveRoomResultSchema = z.object({ deleted: z.literal(true) }).strict()

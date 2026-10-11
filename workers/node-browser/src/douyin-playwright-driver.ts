@@ -34,20 +34,61 @@ export interface DouyinBrowserConfig {
   locale: string
   timezoneId: string
   viewport: { width: number; height: number }
+  userAgent?: string
   cookieHeaderOrigins: string[]
+}
+
+function configurationInteger(name: string, fallback: number, min = 1, max = Number.MAX_SAFE_INTEGER): number {
+  const raw = process.env[name]
+  if (raw === undefined || raw === "") return fallback
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new DouyinWorkerError("INVALID_BROWSER_CONFIG", `${name} must be an integer between ${min} and ${max}`)
+  }
+  return value
+}
+
+function configurationBoolean(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]
+  if (raw === undefined || raw === "") return fallback
+  if (/^(true|1|yes|on)$/i.test(raw)) return true
+  if (/^(false|0|no|off)$/i.test(raw)) return false
+  throw new DouyinWorkerError("INVALID_BROWSER_CONFIG", `${name} must be true or false`)
+}
+
+function configurationUrl(name: string, fallback: string): string {
+  try {
+    return new URL(process.env[name] || fallback).toString()
+  } catch {
+    throw new DouyinWorkerError("INVALID_BROWSER_CONFIG", `${name} must be an absolute URL`)
+  }
+}
+
+function configurationOrigins(name: string, fallback: string[]): string[] {
+  const raw = process.env[name]
+  const values = raw ? raw.split(",").map((value) => value.trim()).filter(Boolean) : fallback
+  try {
+    return values.map((value) => new URL(value).origin)
+  } catch {
+    throw new DouyinWorkerError("INVALID_BROWSER_CONFIG", `${name} must contain valid origins`)
+  }
 }
 
 export function douyinBrowserConfigFromEnvironment(): DouyinBrowserConfig {
   return {
-    headless: process.env.BMD_DOUYIN_HEADLESS === "1",
-    loginUrl: process.env.BMD_DOUYIN_LOGIN_URL ?? "https://www.douyin.com/",
-    validationUrl: process.env.BMD_DOUYIN_VALIDATION_URL ?? "https://www.douyin.com/user/self?from_tab_name=main",
-    navigationTimeoutMs: 30_000,
-    qrWaitMs: 15_000,
-    locale: "zh-CN",
-    timezoneId: "Asia/Shanghai",
-    viewport: { width: 1440, height: 900 },
-    cookieHeaderOrigins: ["https://www.douyin.com", "https://open.douyin.com"]
+    headless: configurationBoolean("BMD_DOUYIN_HEADLESS", false),
+    loginUrl: configurationUrl("BMD_DOUYIN_LOGIN_URL", "https://www.douyin.com/"),
+    validationUrl: configurationUrl("BMD_DOUYIN_VALIDATION_URL", "https://www.douyin.com/user/self?from_tab_name=main"),
+    navigationTimeoutMs: configurationInteger("BMD_DOUYIN_NAVIGATION_TIMEOUT_MS", 30_000, 1_000),
+    qrWaitMs: configurationInteger("BMD_DOUYIN_QR_WAIT_MS", 15_000, 0),
+    locale: process.env.BMD_DOUYIN_LOCALE || "zh-CN",
+    timezoneId: process.env.BMD_DOUYIN_TIMEZONE_ID || "Asia/Shanghai",
+    viewport: {
+      width: configurationInteger("BMD_DOUYIN_VIEWPORT_WIDTH", 1440, 320, 7680),
+      height: configurationInteger("BMD_DOUYIN_VIEWPORT_HEIGHT", 900, 240, 4320)
+    },
+    ...(process.env.BMD_DOUYIN_USER_AGENT ? { userAgent: process.env.BMD_DOUYIN_USER_AGENT } : {}),
+    cookieHeaderOrigins: configurationOrigins("BMD_DOUYIN_COOKIE_HEADER_ORIGINS", ["https://www.douyin.com", "https://open.douyin.com"])
   }
 }
 
@@ -141,10 +182,16 @@ async function captureCurrentBundle(
   const origins = completeOrigins.map((item) => item.origin)
   const account = await accountHints(page)
   const headerOrigins = [...new Set([...config.cookieHeaderOrigins, ...origins, new URL(current.url).origin])]
-  const browserContext = await page.evaluate(() => ({
-    userAgent: navigator.userAgent,
-    platform: navigator.platform
-  })).catch(() => ({ userAgent: "", platform: "" }))
+  const browserContext = await page.evaluate(() => {
+    const userAgentData = (navigator as Navigator & {
+      userAgentData?: { brands?: Array<{ brand: string; version: string }>; platform?: string }
+    }).userAgentData
+    return {
+      userAgent: navigator.userAgent,
+      secChUa: userAgentData?.brands?.map((brand) => `"${brand.brand}";v="${brand.version}"`).join(", ") ?? "",
+      platform: userAgentData?.platform ?? navigator.platform
+    }
+  }).catch(() => ({ userAgent: "", secChUa: "", platform: "" }))
   return {
     version: 1,
     authType: "DOUYIN_WEB_SESSION",
@@ -264,7 +311,8 @@ export class PlaywrightDouyinDriver implements DouyinDriver {
     const context = await browser.newContext({
       locale: this.config.locale,
       timezoneId: this.config.timezoneId,
-      viewport: this.config.viewport
+      viewport: this.config.viewport,
+      ...(this.config.userAgent ? { userAgent: this.config.userAgent } : {})
     })
     try {
       const page = await context.newPage()
@@ -292,8 +340,10 @@ export class PlaywrightDouyinDriver implements DouyinDriver {
       locale: this.config.locale,
       timezoneId: this.config.timezoneId,
       viewport: this.config.viewport,
+      ...(this.config.userAgent ? { userAgent: this.config.userAgent } : {}),
       ...(storageState ? { storageState } : {})
     })
+    const validatedAt = new Date().toISOString()
     try {
       await context.addInitScript((entriesByOrigin: Record<string, Record<string, string>>) => {
         const entries = entriesByOrigin[location.origin]
@@ -302,7 +352,7 @@ export class PlaywrightDouyinDriver implements DouyinDriver {
       }, sessionState)
       const page = await context.newPage()
       await page.goto(this.config.validationUrl, { waitUntil: "domcontentloaded", timeout: this.config.navigationTimeoutMs })
-      await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => undefined)
+      await page.waitForLoadState("networkidle", { timeout: Math.min(this.config.navigationTimeoutMs, 5_000) }).catch(() => undefined)
       const [current, identityMarker, loginMarker] = await Promise.all([
         observation(page, context),
         firstVisibleSelector(page, IDENTITY_MARKERS),
@@ -310,7 +360,6 @@ export class PlaywrightDouyinDriver implements DouyinDriver {
       ])
       const loggedOut = page.url().includes("passport.douyin.com") || page.url().includes("/login") || /登录后/u.test(current.text) || Boolean(loginMarker) || Boolean(current.qr)
       const valid = current.status === "SUCCESS" && Boolean(identityMarker) && !loggedOut
-      const validatedAt = new Date().toISOString()
       const details = {
         status: valid ? "SUCCESS" : loggedOut ? "LOGGED_OUT" : "IDENTITY_NOT_CONFIRMED",
         url: page.url(),
@@ -334,6 +383,18 @@ export class PlaywrightDouyinDriver implements DouyinDriver {
         message: valid ? "保存的抖音浏览器登录态可复用" : "保存的抖音浏览器登录态不可复用",
         details,
         bundle: mergeValidatedDouyinBundle(bundle, recaptured, details, validatedAt)
+      }
+    } catch {
+      return {
+        valid: false,
+        message: "保存的抖音浏览器登录态验证失败",
+        details: {
+          status: "FAILED",
+          code: "DOUYIN_WEB_VALIDATION_FAILED",
+          retryable: true,
+          validatedAt
+        },
+        ...(bundle.authType === "DOUYIN_WEB_SESSION" ? { bundle: bundle as DouyinBrowserBundle } : {})
       }
     } finally {
       await context.close()

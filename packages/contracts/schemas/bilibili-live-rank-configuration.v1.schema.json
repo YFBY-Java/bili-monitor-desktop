@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bmd:bilibili-live-rank-configuration:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": { "type": "boolean", "default": true },
+    "pageSize": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 50 },
+    "guardPageSize": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 30 },
+    "maxPages": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 1 },
+    "requestMinIntervalMs": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "default": 1500 },
+    "webLocation": { "type": "string", "default": "444.8" }
+  }
+}

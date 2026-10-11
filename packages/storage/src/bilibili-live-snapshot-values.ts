@@ -1,11 +1,25 @@
 // Original OffsetDateTime compares instants, not their ISO spelling or rounded milliseconds.
 export function compareLiveSnapshotTime(left: string, right: string): number {
-  const key = (value: string): string => {
-    const fraction = value.match(/\.(\d+)/)?.[1] ?? ""
-    return `${new Date(value).toISOString().slice(0, 19)}.${fraction.padEnd(9, "0").slice(0, 9)}`
-  }
-  const first = key(left), second = key(right)
+  const first = instantKey(left), second = instantKey(right)
   return first < second ? -1 : first > second ? 1 : 0
+}
+
+// Matches Instant.toString(): UTC, and fractional digits in groups of 3/6/9.
+export function liveSnapshotInstantText(value: string): string {
+  const key = instantKey(value)
+  const separator = key.lastIndexOf(".")
+  const fraction = key.slice(separator + 1).replace(/0+$/u, "")
+  return `${key.slice(0, separator)}${fraction ? `.${fraction.padEnd(Math.ceil(fraction.length / 3) * 3, "0")}` : ""}Z`
+}
+
+// Fixed-width boundaries keep the existing SQLite TEXT interval constraint chronological.
+export function liveSnapshotStorageTime(value: string): string {
+  return `${instantKey(value)}Z`
+}
+
+function instantKey(value: string): string {
+  const fraction = value.match(/\.(\d+)/)?.[1] ?? ""
+  return `${new Date(value).toISOString().slice(0, 19)}.${fraction.padEnd(9, "0").slice(0, 9)}`
 }
 
 // Character.isWhitespace/String.isBlank excludes NBSP, figure/narrow no-break spaces and BOM.

@@ -131,6 +131,10 @@ export const BilibiliFollowerFetchRequestSchema = z.object({
   mid: BilibiliUidSchema
 }).strict()
 
+export const BilibiliRawPayloadStorageStatusSchema = z.enum([
+  "ACCEPTED", "INVALID_JSON", "NUL", "INVALID_UNICODE", "NUMBER_OUT_OF_RANGE"
+])
+
 export const BilibiliFollowerFetchedSnapshotSchema = z.object({
   mid: BilibiliUidSchema,
   nickname: FollowerProfileTextSchema.optional(),
@@ -142,7 +146,9 @@ export const BilibiliFollowerFetchedSnapshotSchema = z.object({
   sourceEndpoint: z.enum(["x/web-interface/card", "x/relation/stat"]),
   evidenceObject: ObjectRefSchema,
   statusCode: z.number().int().positive(),
-  durationMs: z.number().int().nonnegative()
+  durationMs: z.number().int().nonnegative(),
+  // Additive private Worker result; omitted by older/custom sources.
+  rawPayloadStorageStatus: BilibiliRawPayloadStorageStatusSchema.optional()
 }).strict()
 
 export type BilibiliFollowerMonitor = z.infer<typeof BilibiliFollowerMonitorSchema>

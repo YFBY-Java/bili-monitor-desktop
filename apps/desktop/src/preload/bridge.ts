@@ -1,4 +1,16 @@
 import {
+  BilibiliLiveRankSummaryV2Schema,
+  BilibiliLiveRankSnapshotV2Schema,
+  BilibiliLiveRankRefreshResultV2Schema,
+  BilibiliLiveRoomListV2Schema,
+  BilibiliLiveRoomV2Schema,
+  BilibiliLiveCollectResultV2Schema,
+  BilibiliLiveSummaryV2Schema,
+  BilibiliLiveRoomTrendListV2Schema,
+  BilibiliLiveRoomTrendV2Schema,
+  BilibiliLiveStatusEventListV2Schema,
+  BilibiliSubjectTrendV3Schema,
+  BilibiliSubjectWorkbenchV3Schema,
   AddBilibiliFollowerMonitorInputSchema,
   AddBilibiliFollowerMonitorInputV2Schema,
   BilibiliFollowerCollectResultV2Schema,
@@ -25,6 +37,9 @@ import {
   ListBilibiliFollowerMonitorsInputSchema,
   PlatformAccountListSchema,
   PlatformAccountSchema,
+  PlatformAdapterListSchema,
+  PlatformCollectionExecutionSchema,
+  RunPlatformCollectionInputSchema,
   QueryBilibiliFollowerTrendInputSchema,
   QueryBilibiliFollowerTrendsInputSchema,
   RevokeBilibiliAuthResultSchema,
@@ -144,6 +159,12 @@ export function createDesktopBridge(
         await invoke("douyin-auth:revoke", DouyinCredentialKindInputSchema.parse(input))
       )
     },
+    platformCollection: {
+      listAdapters: async () => PlatformAdapterListSchema.parse(await invoke("platform-collection:adapters-list")),
+      runOnce: async (input) => PlatformCollectionExecutionSchema.parse(
+        await invoke("platform-collection:run-once", RunPlatformCollectionInputSchema.parse(input))
+      )
+    },
     platformAccounts: {
       list: async (input) => PlatformAccountListSchema.parse(
         await invoke("platform-accounts:list", input ?? {})
@@ -201,6 +222,12 @@ export function createDesktopBridge(
           "bilibili-subjects:trends",
           QueryBilibiliSubjectTrendsInputSchema.parse(input)
         )
+      ),
+      workbenchV3: async (input) => BilibiliSubjectWorkbenchV3Schema.parse(
+        await invoke("bilibili-subjects:workbench.v3", BilibiliSubjectIdInputSchema.parse(input))
+      ),
+      trendsV3: async (input) => BilibiliSubjectTrendV3Schema.parse(
+        await invoke("bilibili-subjects:trends.v3", QueryBilibiliSubjectTrendsInputSchema.parse(input))
       ),
       workbenchV2: async (input) => BilibiliSubjectWorkbenchV2Schema.parse(
         await invoke("bilibili-subjects:workbench.v2", BilibiliSubjectIdInputSchema.parse(input))
@@ -292,6 +319,55 @@ export function createDesktopBridge(
       revoke: async () => RevokeBilibiliAuthResultSchema.parse(
         await invoke("bilibili-auth:revoke")
       )
+    },
+    bilibiliLiveRankV2: {
+      summary: async input => BilibiliLiveRankSummaryV2Schema.parse(
+        await invoke("bilibili-live:ranks-summary.v2", BilibiliLiveRoomIdInputSchema.parse(input))
+      ),
+      latest: async input => BilibiliLiveRankSnapshotV2Schema.parse(
+        await invoke("bilibili-live:ranks-latest.v2", BilibiliLiveRankLatestInputSchema.parse(input))
+      ),
+      refresh: async input => BilibiliLiveRankRefreshResultV2Schema.parse(
+        await invoke("bilibili-live:ranks-refresh.v2", BilibiliLiveRankRefreshInputSchema.parse(input))
+      )
+    },
+    bilibiliLiveV2: {
+      list: async (input) => BilibiliLiveRoomListV2Schema.parse(
+        await invoke("bilibili-live:rooms-list.v2", ListBilibiliLiveRoomsInputSchema.parse(input ?? {}))
+      ),
+      add: async (input) => BilibiliLiveRoomV2Schema.parse(
+        await invoke("bilibili-live:rooms-add.v2", AddBilibiliLiveRoomInputSchema.parse(input))
+      ),
+      updateStatus: async (input) => BilibiliLiveRoomV2Schema.parse(
+        await invoke(
+          "bilibili-live:rooms-update-status.v2",
+          UpdateBilibiliLiveRoomStatusInputSchema.parse(input)
+        )
+      ),
+      updateSettings: async (input) => BilibiliLiveRoomV2Schema.parse(
+        await invoke(
+          "bilibili-live:rooms-update-settings.v2",
+          UpdateBilibiliLiveRoomSettingsInputSchema.parse(input)
+        )
+      ),
+      refresh: async (input) => BilibiliLiveCollectResultV2Schema.parse(
+        await invoke("bilibili-live:rooms-refresh.v2", BilibiliLiveRoomIdInputSchema.parse(input))
+      ),
+      remove: async (input) => DeleteBilibiliLiveRoomResultSchema.parse(
+        await invoke("bilibili-live:rooms-delete", BilibiliLiveRoomIdInputSchema.parse(input))
+      ),
+      summary: async () => BilibiliLiveSummaryV2Schema.parse(
+        await invoke("bilibili-live:summary.v2")
+      ),
+      trend: async (input) => BilibiliLiveRoomTrendV2Schema.parse(
+        await invoke("bilibili-live:trend.v2", QueryBilibiliLiveTrendInputSchema.parse(input))
+      ),
+      trends: async (input) => BilibiliLiveRoomTrendListV2Schema.parse(
+        await invoke("bilibili-live:trends.v2", QueryBilibiliLiveTrendsInputSchema.parse(input))
+      ),
+      events: async (input) => BilibiliLiveStatusEventListV2Schema.parse(
+        await invoke("bilibili-live:events.v2", QueryBilibiliLiveEventsInputSchema.parse(input ?? {}))
+      ),
     },
     bilibiliLive: {
       list: async (input) => BilibiliLiveRoomListSchema.parse(

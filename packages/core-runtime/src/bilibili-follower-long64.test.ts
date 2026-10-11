@@ -78,7 +78,10 @@ describe("precise follower v2 business service", () => {
       recentTrend: [{ followerCount: maximum, followingCount: minimum }] })
     expect(database.findBilibiliFollowerMonitorById(user.id))
       .toMatchObject({ currentFollowerCount: BigInt(maximum), followingCount: BigInt(minimum) })
-    const event = database.listPendingOutbox().at(-1)!
+    const pending = database.listPendingOutbox()
+    expect(pending).toHaveLength(2)
+    expect(pending.find(item => item.topic === "bilibili.follower.monitor-refreshed.v2")).toBeDefined()
+    const event = pending.find(item => item.topic === "bilibili.follower.snapshot-collected.v2")!
     expect(event.topic).toBe("bilibili.follower.snapshot-collected.v2")
     expect(JSON.parse(event.envelopeJson)).toMatchObject({ type: event.topic,
       payload: { mid: "22", followerCount: maximum, followingCount: minimum } })
@@ -110,6 +113,10 @@ describe("precise follower v2 business service", () => {
     expect(await service.refreshNowV2(user.id)).toMatchObject({ mid: "22", followerCount: maximum, success: true })
     const first = database.findBilibiliFollowerSnapshots(user.id, { limit: 30 }).at(-1)!
     expect(first.mid).toBe("-1")
+    const firstEvents = database.listPendingOutbox().filter(event => event.createdAt === state.fetchedAt)
+    expect(firstEvents).toHaveLength(2)
+    expect(JSON.parse(firstEvents.find(event => event.topic === "bilibili.follower.monitor-refreshed.v2")!.envelopeJson).payload.mid).toBe("22")
+    expect(JSON.parse(firstEvents.find(event => event.topic === "bilibili.follower.snapshot-collected.v2")!.envelopeJson).payload.mid).toBe("-1")
     expect(service.trendV2(user.id).user).toMatchObject({ currentFollowerCount: maximum,
       deltaSincePrevious: "-1", growthRateSincePrevious: Number(-1n) / Number(BigInt(minimum)) })
     state.responseMid = "0"
@@ -118,7 +125,10 @@ describe("precise follower v2 business service", () => {
     expect(database.findBilibiliFollowerSnapshots(user.id, { limit: 30 }).at(-1))
       .toMatchObject({ snapshotId: first.snapshotId, mid: "-1", followerCount: BigInt(maximum) })
     expect(database.findBilibiliFollowerMonitorById(user.id)?.mid).toBe("22")
-    expect(JSON.parse(database.listPendingOutbox().at(-1)!.envelopeJson).payload.mid).toBe("0")
+    const secondEvents = database.listPendingOutbox().filter(event => event.createdAt === state.fetchedAt)
+    expect(secondEvents).toHaveLength(2)
+    expect(JSON.parse(secondEvents.find(event => event.topic === "bilibili.follower.monitor-refreshed.v2")!.envelopeJson).payload.mid).toBe("22")
+    expect(JSON.parse(secondEvents.find(event => event.topic === "bilibili.follower.snapshot-collected.v2")!.envelopeJson).payload.mid).toBe("0")
     expect(service.trendsV2({ userIds: [user.id] })[0]?.points.map(point => point.followerCount))
       .toEqual([minimum, maximum])
   })
