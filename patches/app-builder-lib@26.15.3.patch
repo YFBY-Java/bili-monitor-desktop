@@ -1,0 +1,52 @@
+diff --git a/templates/nsis/include/installer.nsh b/templates/nsis/include/installer.nsh
+index 300ef3dd699d0f5a081b1934fcc22dbe12025bdb..751a81bca34f8606146cf2ec5368f94e1375ca48 100644
+--- a/templates/nsis/include/installer.nsh
++++ b/templates/nsis/include/installer.nsh
+@@ -90,7 +90,11 @@
+       ${if} $installMode == "all"
+         SetShellVarContext current
+       ${endif}
+-      !insertmacro copyFile "$EXEPATH" "$LOCALAPPDATA\${APP_INSTALLER_STORE_FILE}"
++      !ifmacrodef customCacheInstaller
++        !insertmacro customCacheInstaller
++      !else
++        !insertmacro copyFile "$EXEPATH" "$LOCALAPPDATA\${APP_INSTALLER_STORE_FILE}"
++      !endif
+       ${if} $installMode == "all"
+         SetShellVarContext all
+       ${endif}
+diff --git a/templates/nsis/installer.nsi b/templates/nsis/installer.nsi
+index 4b1f42e4e96ba2b3e7d6d8d2f9ee19b46779a422..d3ce14f565a71273a29ed2f27065b6e07147aa5b 100644
+--- a/templates/nsis/installer.nsi
++++ b/templates/nsis/installer.nsi
+@@ -49,13 +49,13 @@ Var oldMenuDirectory
+ Function .onInit
+   Call setInstallSectionSpaceRequired
+ 
+-  SetOutPath $INSTDIR
+-  ${LogSet} on
+-
+   !ifmacrodef preInit
+     !insertmacro preInit
+   !endif
+ 
++  SetOutPath $INSTDIR
++  ${LogSet} on
++
+   !ifdef DISPLAY_LANG_SELECTOR
+     !insertmacro MUI_LANGDLL_DISPLAY
+   !endif
+diff --git a/templates/nsis/uninstaller.nsh b/templates/nsis/uninstaller.nsh
+index c3f4f11982689baa220de5051bbf144adbd9accc..6a3c02057c173bfe72e2b128034893f693deb371 100644
+--- a/templates/nsis/uninstaller.nsh
++++ b/templates/nsis/uninstaller.nsh
+@@ -3,6 +3,9 @@ Function un.checkAppRunning
+ FunctionEnd
+ 
+ Function un.onInit
++  !ifmacrodef customUnPreInit
++    !insertmacro customUnPreInit
++  !endif
+   SetOutPath $INSTDIR
+   ${LogSet} on
+   

@@ -5,11 +5,13 @@ $ErrorActionPreference = "Stop"
 
 Push-Location $env:BMD_REPOSITORY_ROOT
 try {
-    & $env:BMD_PNPM_CMD build
-    if ($LASTEXITCODE -ne 0) { throw "Electron build failed" }
     if ($Package) {
         & $env:BMD_PNPM_CMD package:win
         if ($LASTEXITCODE -ne 0) { throw "Windows packaging failed" }
+    }
+    else {
+        & $env:BMD_PNPM_CMD build
+        if ($LASTEXITCODE -ne 0) { throw "Electron build failed" }
     }
 }
 finally { Pop-Location }

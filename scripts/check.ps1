@@ -12,6 +12,9 @@ try {
     Invoke-Checked -FilePath "pwsh" -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/tests/toolchain-location.tests.ps1"
     ) -Name "Environment location test"
+    Invoke-Checked -FilePath $env:BMD_NODE_EXE -ArgumentList @(
+        "--test", "scripts/tests/installer-configuration.test.mjs"
+    ) -Name "Offline installer configuration"
     Invoke-Checked -FilePath $env:BMD_PNPM_CMD -ArgumentList @("test") -Name "Node tests"
     Invoke-Checked -FilePath $env:BMD_PNPM_CMD -ArgumentList @("typecheck") -Name "TypeScript typecheck"
     Invoke-Checked -FilePath $env:BMD_PYTHON_EXE -ArgumentList @(

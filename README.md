@@ -1,5 +1,9 @@
 # BiliMonitor Desktop
 
+本项目采用 [MIT 协议](LICENSE)。原 BiliMonitor 和安装器补丁涉及的第三方声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；各运行时和依赖仍遵循各自的许可证。
+
+2026-10-11：新增[Windows 独立安装包构建和使用说明](docs/implementation/2026-10-11-windows-installer.md)。程序仍处于原 B/S 业务迁移阶段，**并非全部业务已验收的正式版**；最新验证和已知失败以[交接文档](docs/implementation/2026-09-13-migration-handoff.md)为准。以下保留历次进度记录。
+
 最新续迁（2026-10-07）：[工作台标签/绑定/布局 JSON 保存](docs/implementation/2026-10-07-subject-json-storage-audit.md)已补齐新写入文本编码、空字节拒绝和实际落库返回。一个新增代表流程RED→GREEN、相关12项/类型/当前生产构建和真实Electron IPC/重启保留通过；最终四源限定复核无遗留问题，最后测试定向通过。一次阶段check仍exit1（Core1038通过/1个Subject501对象5秒超时），桌面及后续未执行；原布局逐条提交与客户端原子保存差异已向用户询问，未擅自修改。下方目录版是本片之前的版本，不含此次JSON修复，本轮未重打包。全量目标继续，不把定向结果称为全部验收。
 
 当前进度（2026-10-07）：**全量迁移继续推进，尚未全部验收完成。** 本批已对齐[普通材料API、共享错误传递与直播媒体文本](docs/implementation/2026-10-07-material-api-and-live-media-audit.md)：原错误分类/返回码、空消息、nav解析日志归属、弹幕材料错误回退，以及头像/封面/关键帧原文。原业务范围不缩减，不重做已完成切片。

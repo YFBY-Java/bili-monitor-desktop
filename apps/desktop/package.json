@@ -1,6 +1,7 @@
 {
   "name": "@bmd/desktop",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
@@ -51,9 +52,17 @@
     ],
     "extraResources": [
       {
+        "from": "../../LICENSE",
+        "to": "licenses/bili-monitor-desktop/LICENSE"
+      },
+      {
+        "from": "../../THIRD_PARTY_NOTICES.md",
+        "to": "licenses/bili-monitor-desktop/THIRD_PARTY_NOTICES.md"
+      },
+      {
         "from": "../../.tools/playwright-browsers",
         "to": "playwright-browsers",
-        "filter": ["**/*"]
+        "filter": ["**/*", "!.links/**"]
       },
       {
         "from": "../../.tools/python-worker-dist/bmd-python-worker",
@@ -70,6 +79,10 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": false,
+      "installerLanguages": ["zh_CN"],
+      "selectPerMachineByDefault": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
       "include": "build/installer.nsh",
       "deleteAppDataOnUninstall": false
     }

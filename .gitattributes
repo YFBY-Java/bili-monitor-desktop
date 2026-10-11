@@ -1,0 +1,2 @@
+# Patch context must retain its whitespace and stable bytes for pnpm hashes.
+patches/*.patch text eol=lf -whitespace
